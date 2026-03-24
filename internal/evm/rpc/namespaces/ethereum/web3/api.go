@@ -1,0 +1,29 @@
+package web3
+
+import (
+	"runtime/debug"
+
+	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/crypto"
+)
+
+// PublicAPI is the web3_ prefixed set of APIs in the Web3 JSON-RPC spec.
+type PublicAPI struct{}
+
+// NewPublicAPI creates an instance of the Web3 API.
+func NewPublicAPI() *PublicAPI {
+	return &PublicAPI{}
+}
+
+// ClientVersion returns the client version in the Web3 user agent format.
+func (a *PublicAPI) ClientVersion() string {
+	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" {
+		return "web3-gateway/" + info.Main.Version
+	}
+	return "web3-gateway/devel"
+}
+
+// Sha3 returns the keccak-256 hash of the passed-in input.
+func (a *PublicAPI) Sha3(input string) hexutil.Bytes {
+	return crypto.Keccak256(hexutil.Bytes(input))
+}

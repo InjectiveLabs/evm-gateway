@@ -1,0 +1,229 @@
+package app
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net"
+	"net/http"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"strings"
+	"sync"
+	"syscall"
+
+	rpchttp "github.com/cometbft/cometbft/rpc/client/http"
+	dbm "github.com/cosmos/cosmos-db"
+	"github.com/cosmos/cosmos-sdk/client"
+	"github.com/cosmos/cosmos-sdk/client/flags"
+	"github.com/cosmos/cosmos-sdk/codec"
+	codectypes "github.com/cosmos/cosmos-sdk/codec/types"
+	"golang.org/x/sync/errgroup"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+
+	chainclient "github.com/InjectiveLabs/sdk-go/client/chain"
+
+	"github.com/InjectiveLabs/web3-gateway/internal/config"
+	txindexer "github.com/InjectiveLabs/web3-gateway/internal/indexer"
+	"github.com/InjectiveLabs/web3-gateway/internal/jsonrpc"
+	"github.com/InjectiveLabs/web3-gateway/internal/syncstatus"
+)
+
+type StatsdCloser interface {
+	Close()
+}
+
+// Run starts the web3-gateway services and blocks until shutdown.
+func Run(cfg config.Config, logger *slog.Logger, statsd StatsdCloser) error {
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	if statsd != nil {
+		defer func() {
+			statsd.Close()
+		}()
+	}
+
+	dataDir, err := expandHome(cfg.DataDir)
+	if err != nil {
+		return err
+	}
+
+	clientCtx, rpcClient, grpcConn, err := buildClientContext(ctx, &cfg, dataDir, logger)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if rpcClient != nil {
+			_ = rpcClient.Stop()
+		}
+		if grpcConn != nil {
+			_ = grpcConn.Close()
+		}
+	}()
+
+	var idxDB dbm.DB
+	var txIndexer txindexer.TxIndexer
+	var statusTracker *syncstatus.Tracker
+	if cfg.JSONRPC.Enable || cfg.EnableSync {
+		idxDB, err = openIndexerDB(dataDir, cfg.DBBackend)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			if idxDB != nil {
+				_ = idxDB.Close()
+			}
+		}()
+		idxLogger := logger.With("indexer", "evm")
+		txIndexer = txindexer.NewKVIndexer(idxDB, idxLogger, clientCtx)
+		statusTracker = syncstatus.NewTracker(cfg.FetchJobs, cfg.Earliest)
+	}
+
+	g, gctx := errgroup.WithContext(ctx)
+
+	if txIndexer != nil && cfg.EnableSync {
+		syncer := txindexer.NewSyncer(cfg, logger, rpcClient, idxDB, txIndexer, statusTracker)
+		g.Go(func() error {
+			return syncer.Run(gctx)
+		})
+	}
+
+	var httpSrv *http.Server
+	var httpSrvDone chan struct{}
+	if cfg.JSONRPC.Enable {
+		var err error
+		httpSrv, httpSrvDone, err = jsonrpc.Start(logger, cfg, clientCtx, g, cfg.JSONRPC, txIndexer, statusTracker)
+		if err != nil {
+			return err
+		}
+	}
+
+	shutdownCh := make(chan struct{})
+	var shutdownOnce sync.Once
+	shutdown := func() {
+		shutdownOnce.Do(func() {
+			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), cfg.Shutdown.Timeout)
+			defer shutdownCancel()
+
+			if httpSrv != nil {
+				_ = httpSrv.Shutdown(shutdownCtx)
+				if httpSrvDone != nil {
+					select {
+					case <-httpSrvDone:
+					case <-shutdownCtx.Done():
+					}
+				}
+			}
+
+			close(shutdownCh)
+		})
+	}
+
+	go func() {
+		<-gctx.Done()
+		shutdown()
+	}()
+
+	err = g.Wait()
+	shutdown()
+
+	if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+
+	logger.Info("shutdown complete", "after", cfg.Shutdown.Timeout)
+	return nil
+}
+
+func buildClientContext(ctx context.Context, cfg *config.Config, dataDir string, logger *slog.Logger) (client.Context, *rpchttp.HTTP, *grpc.ClientConn, error) {
+	clientCtx, err := chainclient.NewClientContext("", "", nil)
+	if err != nil {
+		return client.Context{}, nil, nil, fmt.Errorf("init injective client context: %w", err)
+	}
+	clientCtx = clientCtx.
+		WithCmdContext(ctx).
+		WithBroadcastMode(flags.BroadcastSync).
+		WithHomeDir(dataDir).
+		WithNodeURI(cfg.CometRPC)
+
+	rpcClient, err := rpchttp.NewWithTimeout(cfg.CometRPC, 10)
+	if err != nil {
+		return client.Context{}, nil, nil, fmt.Errorf("init comet rpc client: %w", err)
+	}
+	if err := rpcClient.Start(); err != nil {
+		return client.Context{}, nil, nil, fmt.Errorf("start comet rpc client: %w", err)
+	}
+	clientCtx = clientCtx.WithClient(rpcClient)
+
+	status, err := rpcClient.Status(ctx)
+	if err != nil {
+		return client.Context{}, nil, nil, fmt.Errorf("fetch node status: %w", err)
+	}
+	chainID := status.NodeInfo.Network
+	if cfg.ChainID != "" && cfg.ChainID != chainID {
+		return client.Context{}, nil, nil, fmt.Errorf("chain id mismatch: expected %s, got %s", cfg.ChainID, chainID)
+	}
+	if cfg.ChainID == "" {
+		cfg.ChainID = chainID
+	}
+	clientCtx = clientCtx.WithChainID(cfg.ChainID)
+
+	grpcConn, err := dialGRPC(ctx, cfg.GRPCAddr, clientCtx.InterfaceRegistry)
+	if err != nil {
+		return client.Context{}, nil, nil, err
+	}
+	clientCtx = clientCtx.WithGRPCClient(grpcConn)
+	logger.Info("grpc client ready", "address", cfg.GRPCAddr)
+
+	return clientCtx, rpcClient, grpcConn, nil
+}
+
+func dialGRPC(ctx context.Context, addr string, registry codectypes.InterfaceRegistry) (*grpc.ClientConn, error) {
+	return grpc.DialContext(
+		ctx,
+		addr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithContextDialer(dialer),
+		grpc.WithDefaultCallOptions(grpc.ForceCodec(codec.NewProtoCodec(registry).GRPCCodec())),
+	)
+}
+
+func dialer(_ context.Context, addr string) (net.Conn, error) {
+	proto, address := protocolAndAddress(addr)
+	return net.Dial(proto, address)
+}
+
+func protocolAndAddress(listenAddr string) (string, string) {
+	protocol, address := "tcp", listenAddr
+	parts := strings.SplitN(address, "://", 2)
+	if len(parts) == 2 {
+		protocol, address = parts[0], parts[1]
+	}
+	return protocol, address
+}
+
+func openIndexerDB(rootDir string, backend string) (dbm.DB, error) {
+	dataDir := filepath.Join(rootDir, "data")
+	return dbm.NewDB("evmindexer", dbm.BackendType(backend), dataDir)
+}
+
+func expandHome(path string) (string, error) {
+	if path == "" || path[0] != '~' {
+		return path, nil
+	}
+	if path == "~" {
+		return os.UserHomeDir()
+	}
+	if strings.HasPrefix(path, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		return filepath.Join(home, path[2:]), nil
+	}
+	return path, nil
+}
