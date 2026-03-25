@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 
 	"github.com/spf13/pflag"
@@ -12,10 +13,12 @@ import (
 	"github.com/InjectiveLabs/web3-gateway/internal/config"
 	"github.com/InjectiveLabs/web3-gateway/internal/logging"
 	"github.com/InjectiveLabs/web3-gateway/internal/telemetry"
+	"github.com/InjectiveLabs/web3-gateway/version"
 )
 
 type flagOverrides struct {
 	envFile           string
+	printVersion      bool
 	chainID           string
 	cometRPC          string
 	grpcAddr          string
@@ -40,6 +43,10 @@ type flagOverrides struct {
 
 func main() {
 	flags := parseFlags()
+	if flags.printVersion {
+		fmt.Println(version.Version())
+		return
+	}
 
 	cfg, err := config.Load(flags.envFile)
 	if err != nil {
@@ -74,6 +81,7 @@ func main() {
 func parseFlags() flagOverrides {
 	var flags flagOverrides
 	pflag.StringVar(&flags.envFile, "env-file", "", "Path to .env file with WEB3INJ_ variables")
+	pflag.BoolVar(&flags.printVersion, "version", false, "Print build version information and exit")
 	pflag.StringVar(&flags.chainID, "chain-id", "", "Expected chain ID")
 	pflag.StringVar(&flags.cometRPC, "comet-rpc", "", "CometBFT RPC endpoint")
 	pflag.StringVar(&flags.grpcAddr, "grpc-addr", "", "gRPC endpoint")
