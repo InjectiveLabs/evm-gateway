@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -438,6 +439,12 @@ func startGateway(t *testing.T, cfg gatewayStartConfig) *gatewayProcess {
 	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
 		t.Fatalf("create data dir: %v", err)
 	}
+	if err := requireTCPPortFree(cfg.RPCPort); err != nil {
+		t.Fatalf("rpc port preflight failed: %v", err)
+	}
+	if err := requireTCPPortFree(cfg.WSPort); err != nil {
+		t.Fatalf("ws port preflight failed: %v", err)
+	}
 
 	logPath := filepath.Join(cfg.DataDir, "gateway.log")
 	logFile, err := os.Create(logPath)
@@ -495,6 +502,14 @@ func startGateway(t *testing.T, cfg gatewayStartConfig) *gatewayProcess {
 	}, "gateway status endpoint did not become ready")
 
 	return proc
+}
+
+func requireTCPPortFree(port int) error {
+	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		return err
+	}
+	return ln.Close()
 }
 
 func (p *gatewayProcess) Stop(t *testing.T) {

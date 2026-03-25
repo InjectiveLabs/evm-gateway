@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>web3-gateway benchmark charts</title>
+    <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+    <style>
+      :root {
+        --bg: #f4f5f8;
+        --panel: #ffffff;
+        --panel-border: #d9dde7;
+        --panel-header: #f7f8fb;
+        --ink: #1f2937;
+        --muted: #6b7280;
+        --grid: #e6e9f0;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font-family: Arial, Helvetica, sans-serif;
+      }
+
+      main {
+        width: min(1800px, calc(100vw - 20px));
+        margin: 10px auto;
+      }
+
+      .dashboard {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .panel {
+        border: 1px solid var(--panel-border);
+        background: var(--panel);
+        border-radius: 4px;
+        overflow: hidden;
+      }
+
+      .panel-header {
+        padding: 10px 14px;
+        border-bottom: 1px solid var(--panel-border);
+        background: var(--panel-header);
+      }
+
+      .panel-title {
+        margin: 0;
+        font-size: 14px;
+        line-height: 1.35;
+        font-weight: 600;
+        word-break: break-word;
+      }
+
+      .plot {
+        width: 100%;
+        height: 320px;
+      }
+
+      .notice {
+        display: none;
+        margin: 12px 0;
+        padding: 12px 14px;
+        border: 1px solid var(--panel-border);
+        background: var(--panel);
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      @media (max-width: 1200px) {
+        .dashboard {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div id="notice" class="notice"></div>
+      <section id="charts" class="dashboard"></section>
+    </main>
+
+    <script>
+      const csvPath = "{{ .CSVPath }}";
+      const chartsRoot = document.getElementById("charts");
+      const notice = document.getElementById("notice");
+
+      function showNotice(message) {
+        notice.style.display = "block";
+        notice.textContent = message;
+      }
+
+      function parseCSV(text) {
+        const rows = [];
+        let row = [];
+        let cell = "";
+        let inQuotes = false;
+
+        for (let i = 0; i < text.length; i += 1) {
+          const char = text[i];
+          const next = text[i + 1];
+
+          if (inQuotes) {
+            if (char === "\"") {
+              if (next === "\"") {
+                cell += "\"";
+                i += 1;
+              } else {
+                inQuotes = false;
+              }
+            } else {
+              cell += char;
+            }
+            continue;
+          }
+
+          if (char === "\"") {
+            inQuotes = true;
+            continue;
+          }
+          if (char === ",") {
+            row.push(cell);
+            cell = "";
+            continue;
+          }
+          if (char === "\n") {
+            row.push(cell);
+            rows.push(row);
+            row = [];
+            cell = "";
+            continue;
+          }
+          if (char !== "\r") {
+            cell += char;
+          }
+        }
+
+        if (cell.length > 0 || row.length > 0) {
+          row.push(cell);
+          rows.push(row);
+        }
+
+        if (rows.length === 0) {
+          return [];
+        }
+
+        const headers = rows[0];
+        return rows.slice(1).filter((values) => values.length > 1).map((values) => {
+          const entry = {};
+          for (let i = 0; i < headers.length; i += 1) {
+            entry[headers[i]] = values[i] ?? "";
+          }
+          return entry;
+        });
+      }
+
+      function toNumber(value) {
+        if (value === "" || value == null) {
+          return null;
+        }
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? parsed : null;
+      }
+
+      function buildPanel(signature) {
+        const panel = document.createElement("article");
+        panel.className = "panel";
+
+        const header = document.createElement("div");
+        header.className = "panel-header";
+        const title = document.createElement("h2");
+        title.className = "panel-title";
+        title.textContent = signature;
+        header.appendChild(title);
+
+        const plot = document.createElement("div");
+        plot.className = "plot";
+
+        panel.appendChild(header);
+        panel.appendChild(plot);
+        chartsRoot.appendChild(panel);
+        return plot;
+      }
+
+      function renderCharts(rows) {
+        const grouped = new Map();
+        const timestamps = [];
+
+        for (const row of rows) {
+          if (!grouped.has(row.scenario_key)) {
+            grouped.set(row.scenario_key, {
+              signature: row.signature,
+              rows: [],
+            });
+          }
+          grouped.get(row.scenario_key).rows.push(row);
+          timestamps.push(new Date(row.timestamp).getTime());
+        }
+
+        if (grouped.size === 0) {
+          showNotice("No benchmark CSV rows were loaded.");
+          return;
+        }
+
+        const minTime = new Date(Math.min(...timestamps));
+        const maxTime = new Date(Math.max(...timestamps));
+
+        const sortedGroups = Array.from(grouped.values()).sort((a, b) => a.signature.localeCompare(b.signature));
+        for (const group of sortedGroups) {
+          group.rows.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+          const plotNode = buildPanel(group.signature);
+
+          const x = group.rows.map((row) => row.timestamp);
+          const traces = [
+            {
+              name: "p50",
+              mode: "lines",
+              x,
+              y: group.rows.map((row) => toNumber(row.p50_ms)),
+              line: { color: "#5794F2", width: 2 },
+            },
+            {
+              name: "p99.95",
+              mode: "lines",
+              x,
+              y: group.rows.map((row) => toNumber(row.p99_95_ms)),
+              line: { color: "#EAB839", width: 2 },
+            },
+            {
+              name: "p99.99",
+              mode: "lines",
+              x,
+              y: group.rows.map((row) => toNumber(row.p99_99_ms)),
+              line: { color: "#73BF69", width: 2 },
+            },
+          ];
+
+          Plotly.newPlot(
+            plotNode,
+            traces,
+            {
+              margin: { l: 64, r: 18, t: 14, b: 44 },
+              paper_bgcolor: "#ffffff",
+              plot_bgcolor: "#ffffff",
+              showlegend: true,
+              legend: {
+                orientation: "h",
+                x: 0,
+                y: -0.16,
+                bgcolor: "rgba(255,255,255,0)",
+              },
+              xaxis: {
+                type: "date",
+                range: [minTime.toISOString(), maxTime.toISOString()],
+                title: { text: "time" },
+                tickformat: "%H:%M:%S",
+                showgrid: true,
+                gridcolor: "#e6e9f0",
+                zeroline: false,
+              },
+              yaxis: {
+                title: { text: "value" },
+                showgrid: true,
+                gridcolor: "#e6e9f0",
+                zeroline: false,
+                rangemode: "tozero",
+              },
+              hovermode: "x unified",
+            },
+            {
+              displayModeBar: false,
+              responsive: true,
+            }
+          );
+        }
+      }
+
+      fetch(csvPath, { cache: "no-store" })
+        .then((response) => {
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+          }
+          return response.text();
+        })
+        .then((text) => renderCharts(parseCSV(text)))
+        .catch((error) => {
+          showNotice(`Unable to load ${csvPath}. Serve this directory over HTTP before opening the report. (${error.message})`);
+        });
+    </script>
+  </body>
+</html>

@@ -7,6 +7,12 @@ This repository has two main end-to-end test flows:
 
 Both are gated behind `WEB3INJ_E2E=1`.
 
+There is also a heavier benchmark flow:
+
+- `TestHistoricalRPCBenchmarkSuite`
+
+It is gated separately behind `WEB3INJ_E2E_BENCH=1`.
+
 ## Local Environment
 
 The current local testing workflow assumes:
@@ -63,6 +69,122 @@ WEB3INJ_E2E_SOURCE_RPC=http://localhost:8545 \
 WEB3INJ_GRPC_ADDR=127.0.0.1:9900 \
 go test -vet=off ./e2e -run TestSyncOrchestration -count=1 -v
 ```
+
+## Run Historical RPC Benchmark
+
+This benchmark is intentionally heavier than parity checks. It:
+
+1. seeds deterministic EVM traffic with `chain-stresser`
+2. starts a fresh standalone `web3-gateway`
+3. waits for the gateway to fully sync the generated historical range
+4. warms caches
+5. runs a sustained mixed historical workload for a measured window
+6. writes JSON and HTML artifacts
+
+Default measured duration is `4m`, with a `15s` warmup and `20s` per seed workload.
+
+```bash
+WEB3INJ_E2E_BENCH=1 \
+WEB3INJ_COMET_RPC=http://localhost:26657 \
+WEB3INJ_E2E_SOURCE_RPC=http://localhost:8545 \
+WEB3INJ_GRPC_ADDR=127.0.0.1:9900 \
+go test -vet=off ./e2e -run TestHistoricalRPCBenchmarkSuite -count=1 -v -timeout 30m
+```
+
+Artifacts default to:
+
+- `docs/benchmarks/<timestamp>/report.json`
+- `docs/benchmarks/<timestamp>/report.html`
+- `docs/benchmarks/<timestamp>/timeseries.csv`
+- `docs/benchmarks/<timestamp>/gateway/gateway.log`
+
+If you want a fixed output directory:
+
+```bash
+WEB3INJ_BENCH_OUTPUT_DIR=/tmp/web3-gateway-bench \
+WEB3INJ_E2E_BENCH=1 \
+WEB3INJ_COMET_RPC=http://localhost:26657 \
+WEB3INJ_E2E_SOURCE_RPC=http://localhost:8545 \
+WEB3INJ_GRPC_ADDR=127.0.0.1:9900 \
+go test -vet=off ./e2e -run TestHistoricalRPCBenchmarkSuite -count=1 -v -timeout 30m
+```
+
+The HTML report uses Plotly from a CDN and loads `timeseries.csv` at runtime.
+
+Each chart is keyed by the raw RPC signature for the measured request shape, including:
+
+- `eth_getBlockByNumber([...])`
+- `eth_getLogs([...])`
+- `eth_getTransactionByHash([...])`
+- `eth_getTransactionReceipt([...])`
+- `eth_getTransactionByBlockNumberAndIndex([...])`
+- `eth_getTransactionByBlockHashAndIndex([...])`
+- `batch([...])`
+- `debug_traceTransaction([...])`
+
+Each chart plots these three aligned time series over the benchmark window:
+
+- `p50`
+- `p99.95`
+- `p99.99`
+
+The measured workload is deterministic: the benchmark precomputes a fixed historical fixture set from the freshly seeded block range, each worker iterates it in round-robin order, and the report writes fixed-duration time buckets into `timeseries.csv`.
+
+## Benchmark Controls
+
+These env vars tune the benchmark runner:
+
+- `WEB3INJ_BENCH_DURATION_SEC`
+- `WEB3INJ_BENCH_WARMUP_SEC`
+- `WEB3INJ_BENCH_SEED_DURATION_SEC`
+- `WEB3INJ_BENCH_SEED_SETTLE_SEC`
+- `WEB3INJ_BENCH_SEED_ACCOUNTS_NUM`
+- `WEB3INJ_BENCH_INTERNAL_CALL_ITERATIONS`
+- `WEB3INJ_BENCH_FETCH_JOBS`
+- `WEB3INJ_BENCH_REQUEST_TIMEOUT_SEC`
+- `WEB3INJ_BENCH_TX_CANDIDATE_LIMIT`
+- `WEB3INJ_BENCH_WORKER_SCALE`
+- `WEB3INJ_BENCH_BUCKET_SEC`
+- `WEB3INJ_BENCH_GATEWAY_RPC_PORT`
+- `WEB3INJ_BENCH_GATEWAY_WS_PORT`
+- `WEB3INJ_BENCH_MIN_NOFILE`
+- `WEB3INJ_BENCH_OUTPUT_DIR`
+
+Useful overrides for a faster smoke run:
+
+```bash
+WEB3INJ_E2E_BENCH=1 \
+WEB3INJ_BENCH_SEED_DURATION_SEC=5 \
+WEB3INJ_BENCH_WARMUP_SEC=5 \
+WEB3INJ_BENCH_DURATION_SEC=20 \
+WEB3INJ_COMET_RPC=http://localhost:26657 \
+WEB3INJ_E2E_SOURCE_RPC=http://localhost:8545 \
+WEB3INJ_GRPC_ADDR=127.0.0.1:9900 \
+go test -vet=off ./e2e -run TestHistoricalRPCBenchmarkSuite -count=1 -v -timeout 20m
+```
+
+## File Limit Handling
+
+The benchmark attempts to raise the process soft `nofile` limit up to `WEB3INJ_BENCH_MIN_NOFILE` so the test process and the spawned gateway inherit a higher descriptor ceiling.
+
+Notes:
+
+- it only raises the current benchmark process; it does not permanently change your shell or host config
+- it cannot raise past the current hard limit without external privileges
+- any cap or failure is recorded in `report.json` and surfaced in the HTML report
+
+## Viewing The Dashboard
+
+`report.html` fetches `timeseries.csv`, so open the benchmark directory through a local HTTP server instead of directly with `file://`.
+
+For example:
+
+```bash
+cd docs/benchmarks/<timestamp>
+python -m http.server 8000
+```
+
+Then open `http://127.0.0.1:8000/report.html`.
 
 ## Parity Test Workflow
 
