@@ -5,7 +5,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common/hexutil"
 
-	"github.com/InjectiveLabs/web3-gateway/internal/evm/rpc/backend"
+	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/backend"
 )
 
 // API is the private miner prefixed set of APIs in the Miner JSON-RPC spec.

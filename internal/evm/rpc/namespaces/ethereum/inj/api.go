@@ -5,7 +5,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 
-	"github.com/InjectiveLabs/web3-gateway/internal/evm/rpc/backend"
+	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/backend"
 )
 
 type InjectiveAPI interface {

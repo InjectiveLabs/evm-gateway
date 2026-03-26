@@ -691,7 +691,7 @@ func compareClientVersionSemantics(t *testing.T, sourceRPC, gatewayRPC string) {
 	if strings.TrimSpace(sourceVersion) == "" {
 		t.Fatal("source web3_clientVersion returned empty string")
 	}
-	if !strings.HasPrefix(gatewayVersion, "web3-gateway/") {
+	if !strings.HasPrefix(gatewayVersion, "evm-gateway/") {
 		t.Fatalf("gateway web3_clientVersion should identify the service, got %q", gatewayVersion)
 	}
 }

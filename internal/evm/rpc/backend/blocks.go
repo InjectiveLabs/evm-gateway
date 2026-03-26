@@ -6,8 +6,8 @@ import (
 	"math/big"
 	"strconv"
 
+	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
 	evmtypes "github.com/InjectiveLabs/sdk-go/chain/evm/types"
-	rpctypes "github.com/InjectiveLabs/web3-gateway/internal/evm/rpc/types"
 	cmrpcclient "github.com/cometbft/cometbft/rpc/client"
 	cmrpctypes "github.com/cometbft/cometbft/rpc/core/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"

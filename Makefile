@@ -1,24 +1,24 @@
 APP_VERSION ?= $(shell git describe --always --dirty --tags 2>/dev/null || echo dev)
 GIT_COMMIT ?= $(shell git rev-parse --short HEAD)
 BUILD_DATE ?= $(shell date -u "+%Y%m%d-%H%M")
-VERSION_PKG := github.com/InjectiveLabs/web3-gateway/version
+VERSION_PKG := github.com/InjectiveLabs/evm-gateway/version
 VERSION_FLAGS := -X $(VERSION_PKG).AppVersion=$(APP_VERSION) -X $(VERSION_PKG).GitCommit=$(GIT_COMMIT) -X $(VERSION_PKG).BuildDate=$(BUILD_DATE)
 
-DOCKERHUB_IMAGE ?= injectivelabs/web3-gateway
+DOCKERHUB_IMAGE ?= injectivelabs/evm-gateway
 TAG ?= $(GIT_COMMIT)
 DOCKER_PLATFORM ?= linux/amd64
 
 install:
 	go install \
 		-ldflags '$(VERSION_FLAGS)' \
-		./cmd/web3-gateway
+		./cmd/evm-gateway
 
 build:
 	mkdir -p build
 	go build \
 		-ldflags '$(VERSION_FLAGS)' \
-		-o build/web3-gateway \
-		./cmd/web3-gateway
+		-o build/evm-gateway \
+		./cmd/evm-gateway
 
 docker:
 	@echo "Building image for $(DOCKERHUB_IMAGE):$(TAG)"
@@ -54,9 +54,9 @@ buildx-push-latest:
 		.
 
 buildx-setup:
-	docker buildx create --name web3-gateway-builder --use --bootstrap || docker buildx use web3-gateway-builder
+	docker buildx create --name evm-gateway-builder --use --bootstrap || docker buildx use evm-gateway-builder
 
 buildx-clean:
-	docker buildx rm web3-gateway-builder || true
+	docker buildx rm evm-gateway-builder || true
 
 .PHONY: install build buildx docker buildx-push buildx-push-latest buildx-setup buildx-clean

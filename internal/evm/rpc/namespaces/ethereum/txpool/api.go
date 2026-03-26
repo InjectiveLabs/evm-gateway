@@ -5,7 +5,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common/hexutil"
 
-	"github.com/InjectiveLabs/web3-gateway/internal/evm/rpc/types"
+	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
 )
 
 // PublicAPI offers and API for the transaction pool. It only operates on data that is non-confidential.

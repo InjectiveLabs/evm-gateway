@@ -6,7 +6,7 @@ import (
 
 	"github.com/alexcesaro/statsd"
 
-	"github.com/InjectiveLabs/web3-gateway/internal/config"
+	"github.com/InjectiveLabs/evm-gateway/internal/config"
 )
 
 type StatsdClient interface {

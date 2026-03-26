@@ -1,10 +1,10 @@
-# Web3 Gateway Architecture
+# EVM Gateway Architecture
 
 ## Overview
-web3-gateway is a standalone JSON-RPC server for Injective EVM that mirrors the in-node RPC implementation but runs as a separate process with its own config, flags, and lifecycle. It connects to a CometBFT RPC endpoint for block data and to gRPC for module queries, builds its own Cosmos client context, and serves Ethereum JSON-RPC over HTTP (8545) and WS (8546).
+evm-gateway is a standalone JSON-RPC server for Injective EVM that mirrors the in-node RPC implementation but runs as a separate process with its own config, flags, and lifecycle. It connects to a CometBFT RPC endpoint for block data and to gRPC for module queries, builds its own Cosmos client context, and serves Ethereum JSON-RPC over HTTP (8545) and WS (8546).
 
 ## Key Components
-- `cmd/web3-gateway/main.go`: CLI entrypoint. Loads `.env`/`WEB3INJ_` config, applies flags, initializes logging/telemetry, and starts the app.
+- `cmd/evm-gateway/main.go`: CLI entrypoint. Loads `.env`/`WEB3INJ_` config, applies flags, initializes logging/telemetry, and starts the app.
 - `internal/config`: Plain env-file loader with `WEB3INJ_` prefix. `Config` is passed through the app without Cosmos `server.Context` or viper.
 - `internal/app`: Orchestrates lifecycle. Builds client context (CometBFT RPC + gRPC), opens the indexer DB, starts the indexer sync loop and JSON-RPC servers, and performs graceful shutdown.
 - `internal/jsonrpc`: HTTP + WS server wiring. Registers EVM namespaces and bridges Ethereum logging to `log/slog`.

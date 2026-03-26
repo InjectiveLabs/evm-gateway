@@ -776,8 +776,8 @@ func rpcCall(ctx context.Context, rpcURL, method string, params interface{}, out
 
 func buildGatewayBinary(t *testing.T) string {
 	t.Helper()
-	binPath := filepath.Join(t.TempDir(), "web3-gateway-e2e")
-	cmd := exec.Command("go", "build", "-o", binPath, "./cmd/web3-gateway")
+	binPath := filepath.Join(t.TempDir(), "evm-gateway-e2e")
+	cmd := exec.Command("go", "build", "-o", binPath, "./cmd/evm-gateway")
 	cmd.Dir = projectRoot(t)
 	output, err := cmd.CombinedOutput()
 	if err != nil {

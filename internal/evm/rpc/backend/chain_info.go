@@ -19,9 +19,9 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/pkg/errors"
 
+	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
 	evmtypes "github.com/InjectiveLabs/sdk-go/chain/evm/types"
 	txfeestypes "github.com/InjectiveLabs/sdk-go/chain/txfees/types"
-	rpctypes "github.com/InjectiveLabs/web3-gateway/internal/evm/rpc/types"
 )
 
 // ChainID is the EIP-155 replay-protection chain id for the current ethereum chain config.

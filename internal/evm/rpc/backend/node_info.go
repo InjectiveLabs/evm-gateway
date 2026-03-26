@@ -40,7 +40,7 @@ func (b *Backend) Syncing() (interface{}, error) {
 
 // SetEtherbase sets the etherbase of the miner
 func (b *Backend) SetEtherbase(etherbase common.Address) bool {
-	b.logger.Warn("miner_setEtherbase is disabled in web3-gateway", "etherbase", etherbase.Hex())
+	b.logger.Warn("miner_setEtherbase is disabled in evm-gateway", "etherbase", etherbase.Hex())
 	return false
 }
 

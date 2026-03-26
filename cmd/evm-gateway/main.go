@@ -9,11 +9,11 @@ import (
 	"github.com/InjectiveLabs/sdk-go/chain/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
-	"github.com/InjectiveLabs/web3-gateway/internal/app"
-	"github.com/InjectiveLabs/web3-gateway/internal/config"
-	"github.com/InjectiveLabs/web3-gateway/internal/logging"
-	"github.com/InjectiveLabs/web3-gateway/internal/telemetry"
-	"github.com/InjectiveLabs/web3-gateway/version"
+	"github.com/InjectiveLabs/evm-gateway/internal/app"
+	"github.com/InjectiveLabs/evm-gateway/internal/config"
+	"github.com/InjectiveLabs/evm-gateway/internal/logging"
+	"github.com/InjectiveLabs/evm-gateway/internal/telemetry"
+	"github.com/InjectiveLabs/evm-gateway/version"
 )
 
 type flagOverrides struct {
@@ -73,7 +73,7 @@ func main() {
 	telemetry.InitTracing(cfg.Tracing, cfg.Env, logger)
 
 	if err := app.Run(cfg, logger, statsdClient); err != nil {
-		logger.Error("web3-gateway failed", "error", err)
+		logger.Error("evm-gateway failed", "error", err)
 		os.Exit(1)
 	}
 }

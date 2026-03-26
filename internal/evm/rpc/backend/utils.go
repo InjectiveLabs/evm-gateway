@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 
+	"log/slog"
+
 	"cosmossdk.io/math"
 	abci "github.com/cometbft/cometbft/abci/types"
 	crypto "github.com/cometbft/cometbft/api/cometbft/crypto/v1"
@@ -17,10 +19,9 @@ import (
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"log/slog"
 
+	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
 	evmtypes "github.com/InjectiveLabs/sdk-go/chain/evm/types"
-	"github.com/InjectiveLabs/web3-gateway/internal/evm/rpc/types"
 )
 
 type txGasAndReward struct {

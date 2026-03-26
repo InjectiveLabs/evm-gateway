@@ -14,8 +14,8 @@ import (
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
 
 	evmtypes "github.com/InjectiveLabs/sdk-go/chain/evm/types"
-	"github.com/InjectiveLabs/web3-gateway/internal/evm/rpc/backend"
-	rpctypes "github.com/InjectiveLabs/web3-gateway/internal/evm/rpc/types"
+	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/backend"
+	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
 )
 
 // The Ethereum API allows applications to connect to an Injective node that is

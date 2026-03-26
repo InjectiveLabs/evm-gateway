@@ -14,9 +14,9 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/pkg/errors"
 
+	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
 	evmtypes "github.com/InjectiveLabs/sdk-go/chain/evm/types"
 	chaintypes "github.com/InjectiveLabs/sdk-go/chain/types"
-	rpctypes "github.com/InjectiveLabs/web3-gateway/internal/evm/rpc/types"
 )
 
 // GetTxHashByEthHash returns BFT tx hash by eth tx hash

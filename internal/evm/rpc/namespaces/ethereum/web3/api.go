@@ -18,9 +18,9 @@ func NewPublicAPI() *PublicAPI {
 // ClientVersion returns the client version in the Web3 user agent format.
 func (a *PublicAPI) ClientVersion() string {
 	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" {
-		return "web3-gateway/" + info.Main.Version
+		return "evm-gateway/" + info.Main.Version
 	}
-	return "web3-gateway/devel"
+	return "evm-gateway/devel"
 }
 
 // Sha3 returns the keccak-256 hash of the passed-in input.

@@ -26,17 +26,17 @@ import (
 
 	chainclient "github.com/InjectiveLabs/sdk-go/client/chain"
 
-	"github.com/InjectiveLabs/web3-gateway/internal/config"
-	txindexer "github.com/InjectiveLabs/web3-gateway/internal/indexer"
-	"github.com/InjectiveLabs/web3-gateway/internal/jsonrpc"
-	"github.com/InjectiveLabs/web3-gateway/internal/syncstatus"
+	"github.com/InjectiveLabs/evm-gateway/internal/config"
+	txindexer "github.com/InjectiveLabs/evm-gateway/internal/indexer"
+	"github.com/InjectiveLabs/evm-gateway/internal/jsonrpc"
+	"github.com/InjectiveLabs/evm-gateway/internal/syncstatus"
 )
 
 type StatsdCloser interface {
 	Close()
 }
 
-// Run starts the web3-gateway services and blocks until shutdown.
+// Run starts the evm-gateway services and blocks until shutdown.
 func Run(cfg config.Config, logger *slog.Logger, statsd StatsdCloser) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()

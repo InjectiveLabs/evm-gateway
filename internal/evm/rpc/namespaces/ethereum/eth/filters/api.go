@@ -17,8 +17,8 @@ import (
 	"github.com/ethereum/go-ethereum/eth/filters"
 	"github.com/ethereum/go-ethereum/rpc"
 
-	streamtypes "github.com/InjectiveLabs/web3-gateway/internal/evm/rpc/stream"
-	"github.com/InjectiveLabs/web3-gateway/internal/evm/rpc/types"
+	streamtypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/stream"
+	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
 )
 
 // FilterAPI gathers

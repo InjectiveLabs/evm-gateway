@@ -6,8 +6,8 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
 
+	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
 	chaintypes "github.com/InjectiveLabs/sdk-go/chain/types"
-	rpctypes "github.com/InjectiveLabs/web3-gateway/internal/evm/rpc/types"
 )
 
 // TxIndexer captures the indexing methods required by the RPC/backend layers.

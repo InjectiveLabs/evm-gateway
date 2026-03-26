@@ -18,12 +18,13 @@ import (
 
 	stderrors "github.com/pkg/errors"
 
-	"github.com/InjectiveLabs/web3-gateway/internal/evm/rpc/backend"
-	rpctypes "github.com/InjectiveLabs/web3-gateway/internal/evm/rpc/types"
+	"log/slog"
+
+	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/backend"
+	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/rlp"
-	"log/slog"
 )
 
 // HandlerT keeps track of the cpu profiler and trace execution

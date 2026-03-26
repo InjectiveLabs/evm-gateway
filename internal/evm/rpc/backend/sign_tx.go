@@ -3,7 +3,7 @@ package backend
 import (
 	"errors"
 
-	rpctypes "github.com/InjectiveLabs/web3-gateway/internal/evm/rpc/types"
+	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"

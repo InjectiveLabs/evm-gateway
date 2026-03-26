@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"math/big"
 
-	"github.com/InjectiveLabs/web3-gateway/internal/evm/rpc/types"
+	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
 
 	"log/slog"
 

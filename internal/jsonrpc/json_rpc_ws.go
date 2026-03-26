@@ -12,8 +12,8 @@ import (
 	"strconv"
 	"sync"
 
-	rpcfilters "github.com/InjectiveLabs/web3-gateway/internal/evm/rpc/namespaces/ethereum/eth/filters"
-	rpcstream "github.com/InjectiveLabs/web3-gateway/internal/evm/rpc/stream"
+	rpcfilters "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/namespaces/ethereum/eth/filters"
+	rpcstream "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/stream"
 	"github.com/cosmos/cosmos-sdk/client"
 	"github.com/ethereum/go-ethereum/common"
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
@@ -24,7 +24,7 @@ import (
 	"github.com/pkg/errors"
 	"log/slog"
 
-	"github.com/InjectiveLabs/web3-gateway/internal/config"
+	"github.com/InjectiveLabs/evm-gateway/internal/config"
 )
 
 const (

@@ -16,7 +16,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN go install -ldflags "${VERSION_FLAGS}" ./cmd/web3-gateway
+RUN go install -ldflags "${VERSION_FLAGS}" ./cmd/evm-gateway
 
 FROM debian:bookworm-slim
 
@@ -25,8 +25,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 ADD https://github.com/CosmWasm/wasmvm/releases/download/v2.1.5/libwasmvm.x86_64.so /lib/libwasmvm.x86_64.so
 ADD https://github.com/CosmWasm/wasmvm/releases/download/v2.1.5/libwasmvm.aarch64.so /lib/libwasmvm.aarch64.so
 
-COPY --from=builder /go/bin/web3-gateway /usr/local/bin/web3-gateway
+COPY --from=builder /go/bin/evm-gateway /usr/local/bin/evm-gateway
 
 WORKDIR /apps/data
 
-CMD ["web3-gateway"]
+CMD ["evm-gateway"]

@@ -21,7 +21,7 @@ import (
 	evmtypes "github.com/InjectiveLabs/sdk-go/chain/evm/types"
 	txfeestypes "github.com/InjectiveLabs/sdk-go/chain/txfees/types"
 	chaintypes "github.com/InjectiveLabs/sdk-go/chain/types"
-	rpctypes "github.com/InjectiveLabs/web3-gateway/internal/evm/rpc/types"
+	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
 )
 
 const (

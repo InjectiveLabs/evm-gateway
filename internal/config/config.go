@@ -15,7 +15,7 @@ import (
 
 const envPrefix = "WEB3INJ_"
 
-// Config is the top-level configuration for web3-gateway.
+// Config is the top-level configuration for evm-gateway.
 type Config struct {
 	Env        string
 	LogFormat  string
@@ -88,7 +88,7 @@ func DefaultConfig() Config {
 		GRPCAddr:     "localhost:9090",
 		Earliest:     1,
 		FetchJobs:    4,
-		DataDir:      "~/.web3-gateway",
+		DataDir:      "~/.evm-gateway",
 		DBBackend:    "goleveldb",
 		AllowGaps:    true,
 		EnableSync:   true,

@@ -6,6 +6,8 @@ import (
 	"math/big"
 	"time"
 
+	"log/slog"
+
 	sdkmath "cosmossdk.io/math"
 	cmrpctypes "github.com/cometbft/cometbft/rpc/core/types"
 	"github.com/cosmos/cosmos-sdk/client"
@@ -17,14 +19,13 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/ethereum/go-ethereum/signer/core/apitypes"
-	"log/slog"
 
+	appconfig "github.com/InjectiveLabs/evm-gateway/internal/config"
+	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
+	txindexer "github.com/InjectiveLabs/evm-gateway/internal/indexer"
+	"github.com/InjectiveLabs/evm-gateway/internal/syncstatus"
 	evmtypes "github.com/InjectiveLabs/sdk-go/chain/evm/types"
 	chaintypes "github.com/InjectiveLabs/sdk-go/chain/types"
-	appconfig "github.com/InjectiveLabs/web3-gateway/internal/config"
-	rpctypes "github.com/InjectiveLabs/web3-gateway/internal/evm/rpc/types"
-	txindexer "github.com/InjectiveLabs/web3-gateway/internal/indexer"
-	"github.com/InjectiveLabs/web3-gateway/internal/syncstatus"
 )
 
 // BackendI implements the Cosmos and EVM backend.

@@ -9,9 +9,9 @@ import (
 	rpcclient "github.com/cometbft/cometbft/rpc/client"
 	dbm "github.com/cosmos/cosmos-db"
 
-	"github.com/InjectiveLabs/web3-gateway/internal/blocksync"
-	"github.com/InjectiveLabs/web3-gateway/internal/config"
-	"github.com/InjectiveLabs/web3-gateway/internal/syncstatus"
+	"github.com/InjectiveLabs/evm-gateway/internal/blocksync"
+	"github.com/InjectiveLabs/evm-gateway/internal/config"
+	"github.com/InjectiveLabs/evm-gateway/internal/syncstatus"
 )
 
 // Syncer manages historical gap sync and forward indexing.

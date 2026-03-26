@@ -22,7 +22,7 @@ The current local testing workflow assumes:
 - `injectived` debug RPC: `http://localhost:8545` or `http://localhost:8547`
 - gRPC: `127.0.0.1:9900` or `127.0.0.1:9090`
 
-The parity test starts a standalone `web3-gateway` instance on:
+The parity test starts a standalone `evm-gateway` instance on:
 
 - HTTP RPC: `:8646`
 - WS: `:8647`
@@ -32,7 +32,7 @@ This avoids collisions with the source `injectived` RPC.
 ## Build
 
 ```bash
-go build ./cmd/web3-gateway
+go build ./cmd/evm-gateway
 ```
 
 ## Run Full E2E Suite
@@ -75,7 +75,7 @@ go test -vet=off ./e2e -run TestSyncOrchestration -count=1 -v
 This benchmark is intentionally heavier than parity checks. It:
 
 1. seeds deterministic EVM traffic with `chain-stresser`
-2. starts a fresh standalone `web3-gateway`
+2. starts a fresh standalone `evm-gateway`
 3. waits for the gateway to fully sync the generated historical range
 4. warms caches
 5. runs a sustained mixed historical workload for a measured window
@@ -101,7 +101,7 @@ Artifacts default to:
 If you want a fixed output directory:
 
 ```bash
-WEB3INJ_BENCH_OUTPUT_DIR=/tmp/web3-gateway-bench \
+WEB3INJ_BENCH_OUTPUT_DIR=/tmp/evm-gateway-bench \
 WEB3INJ_E2E_BENCH=1 \
 WEB3INJ_COMET_RPC=http://localhost:26657 \
 WEB3INJ_E2E_SOURCE_RPC=http://localhost:8545 \
@@ -192,7 +192,7 @@ Then open `http://127.0.0.1:8000/report.html`.
 
 1. Builds `chain-stresser`.
 2. Seeds a small amount of EVM state on the live local chain.
-3. Starts a fresh standalone `web3-gateway` with an empty temp DB.
+3. Starts a fresh standalone `evm-gateway` with an empty temp DB.
 4. Waits until the gateway fully syncs to the source head.
 5. Queries both endpoints and compares normalized JSON-RPC responses.
 6. Verifies cache-hit counters after synced queries.
@@ -233,7 +233,7 @@ Current defaults are intentionally conservative:
 Strict parity means the test compares normalized JSON-RPC responses from:
 
 - source: local `injectived`
-- target: standalone `web3-gateway`
+- target: standalone `evm-gateway`
 
 This includes normal requests and batch requests.
 
@@ -246,7 +246,7 @@ Namespaces covered:
 
 Notes:
 
-- `web3_clientVersion` is checked semantically, not byte-for-byte. The gateway must identify itself as `web3-gateway/...`.
+- `web3_clientVersion` is checked semantically, not byte-for-byte. The gateway must identify itself as `evm-gateway/...`.
 - `debug` tracing parity is checked against `debug_traceTransaction` with `{"tracer":"callTracer"}` and other chain-facing debug methods.
 - process-local runtime debug methods are not meaningful for cross-process parity. Those are smoke-tested on the gateway itself instead.
 

@@ -1,4 +1,4 @@
-module github.com/InjectiveLabs/web3-gateway
+module github.com/InjectiveLabs/evm-gateway
 
 go 1.24.0
 

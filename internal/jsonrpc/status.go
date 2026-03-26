@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/InjectiveLabs/web3-gateway/internal/syncstatus"
+	"github.com/InjectiveLabs/evm-gateway/internal/syncstatus"
 )
 
 func makeSyncStatusHandler(status *syncstatus.Tracker) http.HandlerFunc {

@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"sync"
 
+	"log/slog"
+
+	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
 	evmtypes "github.com/InjectiveLabs/sdk-go/chain/evm/types"
-	"github.com/InjectiveLabs/web3-gateway/internal/evm/rpc/types"
 	cmtquery "github.com/cometbft/cometbft/libs/pubsub/query"
 	rpcclient "github.com/cometbft/cometbft/rpc/client"
 	coretypes "github.com/cometbft/cometbft/rpc/core/types"
@@ -14,7 +16,6 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/ethereum/go-ethereum/common"
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
-	"log/slog"
 )
 
 const (
