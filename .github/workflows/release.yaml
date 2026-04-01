@@ -4,46 +4,126 @@ on:
     tags:
       - v**
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   id-token: write
   contents: read
 
 env:
-  ECR_REPO: public.ecr.aws/l9h3g6c6/evm-gateway
+  AWS_ACCOUNT_ID: "981432137740"
   AWS_REGION: us-east-1
+  DOCKERHUB_REPO: injectivelabs/evm-gateway
+  PRIVATE_ECR_REPO: 981432137740.dkr.ecr.us-east-1.amazonaws.com/evm-gateway
+  RELEASE_TAG: ${{ github.ref_name }}
 
 jobs:
-  amd64-release:
-    runs-on: blacksmith-2vcpu-ubuntu-2404
+  build-image-at-tag:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: blacksmith-2vcpu-ubuntu-2404
+            platform: linux/amd64
+            arch: amd64
+          - os: blacksmith-2vcpu-ubuntu-2404-arm
+            platform: linux/arm64
+            arch: arm64
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 60
+    outputs:
+      digest_amd64: ${{ steps.capture-digest.outputs.digest_amd64 }}
+      digest_arm64: ${{ steps.capture-digest.outputs.digest_arm64 }}
     steps:
       - name: Checkout evm-gateway
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Compute build metadata
+        id: meta
+        run: |
+          VERSION_PKG=github.com/InjectiveLabs/evm-gateway/version
+          VERSION_FLAGS="-X ${VERSION_PKG}.AppVersion=${RELEASE_TAG} -X ${VERSION_PKG}.GitCommit=$(git rev-parse --short HEAD) -X ${VERSION_PKG}.BuildDate=$(date -u +%Y%m%d-%H%M)"
+          {
+            echo "version_flags<<EOF"
+            echo "${VERSION_FLAGS}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
+
+      - name: Login to DockerHub
+        uses: docker/login-action@v3
         with:
-          platforms: linux/amd64
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Configure AWS credentials via OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::981432137740:role/evm-gateway
+          role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/evm-gateway
           aws-region: ${{ env.AWS_REGION }}
           audience: sts.amazonaws.com
 
-      - name: Login to Amazon ECR Public
+      - name: Login to Amazon ECR Private
         uses: aws-actions/amazon-ecr-login@v2
-        with:
-          registry-type: public
 
-      - name: Build
+      - name: Build and push image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          platforms: ${{ matrix.platform }}
+          context: .
+          file: ./Dockerfile
+          build-args: |
+            VERSION_FLAGS=${{ steps.meta.outputs.version_flags }}
+          tags: |
+            ${{ env.DOCKERHUB_REPO }}:${{ env.RELEASE_TAG }}
+            ${{ env.PRIVATE_ECR_REPO }}:${{ env.RELEASE_TAG }}
+          push: true
+          outputs: type=image,name=${{ env.DOCKERHUB_REPO }},digest=true
+
+      - name: Capture image digest
+        id: capture-digest
+        run: echo "digest_${{ matrix.arch }}=${{ steps.build.outputs.digest }}" >> "$GITHUB_OUTPUT"
+
+  merge:
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 30
+    needs: build-image-at-tag
+    steps:
+      - name: Debug output digests
         run: |
-          TAG="${{ github.ref_name }}"
-          VERSION_PKG=github.com/InjectiveLabs/evm-gateway/version
-          VERSION_FLAGS="-X ${VERSION_PKG}.AppVersion=${TAG} -X ${VERSION_PKG}.GitCommit=$(git rev-parse --short HEAD) -X ${VERSION_PKG}.BuildDate=$(date -u +%Y%m%d-%H%M)"
-          docker buildx build \
-            --build-arg VERSION_FLAGS="${VERSION_FLAGS}" \
-            --tag $ECR_REPO:$TAG \
-            --platform linux/amd64 \
-            --push .
+          echo "AMD64 Digest: ${{ needs.build-image-at-tag.outputs.digest_amd64 }}"
+          echo "ARM64 Digest: ${{ needs.build-image-at-tag.outputs.digest_arm64 }}"
+
+      - name: Login to DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/evm-gateway
+          aws-region: ${{ env.AWS_REGION }}
+          audience: sts.amazonaws.com
+
+      - name: Login to Amazon ECR Private
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Create multi-arch manifests
+        run: |
+          docker buildx imagetools create \
+            --tag ${{ env.DOCKERHUB_REPO }}:${{ env.RELEASE_TAG }} \
+            ${{ env.DOCKERHUB_REPO }}@${{ needs.build-image-at-tag.outputs.digest_amd64 }} \
+            ${{ env.DOCKERHUB_REPO }}@${{ needs.build-image-at-tag.outputs.digest_arm64 }}
+          docker buildx imagetools create \
+            --tag ${{ env.PRIVATE_ECR_REPO }}:${{ env.RELEASE_TAG }} \
+            ${{ env.PRIVATE_ECR_REPO }}@${{ needs.build-image-at-tag.outputs.digest_amd64 }} \
+            ${{ env.PRIVATE_ECR_REPO }}@${{ needs.build-image-at-tag.outputs.digest_arm64 }}
