@@ -16,7 +16,7 @@ env:
   AWS_ACCOUNT_ID: "981432137740"
   AWS_REGION: us-east-1
   DOCKERHUB_REPO: injectivelabs/evm-gateway
-  PRIVATE_ECR_REPO: 981432137740.dkr.ecr.us-east-1.amazonaws.com/evm-gateway
+  PUBLIC_ECR_REPO: public.ecr.aws/l9h3g6c6/evm-gateway
   RELEASE_TAG: ${{ github.ref_name }}
 
 jobs:
@@ -69,8 +69,10 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
           audience: sts.amazonaws.com
 
-      - name: Login to Amazon ECR Private
+      - name: Login to Amazon ECR Public
         uses: aws-actions/amazon-ecr-login@v2
+        with:
+          registry-type: public
 
       - name: Build and push image
         id: build
@@ -83,7 +85,7 @@ jobs:
             VERSION_FLAGS=${{ steps.meta.outputs.version_flags }}
           tags: |
             ${{ env.DOCKERHUB_REPO }}:${{ env.RELEASE_TAG }}
-            ${{ env.PRIVATE_ECR_REPO }}:${{ env.RELEASE_TAG }}
+            ${{ env.PUBLIC_ECR_REPO }}:${{ env.RELEASE_TAG }}
           push: true
           outputs: type=image,name=${{ env.DOCKERHUB_REPO }},digest=true
 
@@ -114,8 +116,10 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
           audience: sts.amazonaws.com
 
-      - name: Login to Amazon ECR Private
+      - name: Login to Amazon ECR Public
         uses: aws-actions/amazon-ecr-login@v2
+        with:
+          registry-type: public
 
       - name: Create multi-arch manifests
         run: |
@@ -124,6 +128,6 @@ jobs:
             ${{ env.DOCKERHUB_REPO }}@${{ needs.build-image-at-tag.outputs.digest_amd64 }} \
             ${{ env.DOCKERHUB_REPO }}@${{ needs.build-image-at-tag.outputs.digest_arm64 }}
           docker buildx imagetools create \
-            --tag ${{ env.PRIVATE_ECR_REPO }}:${{ env.RELEASE_TAG }} \
-            ${{ env.PRIVATE_ECR_REPO }}@${{ needs.build-image-at-tag.outputs.digest_amd64 }} \
-            ${{ env.PRIVATE_ECR_REPO }}@${{ needs.build-image-at-tag.outputs.digest_arm64 }}
+            --tag ${{ env.PUBLIC_ECR_REPO }}:${{ env.RELEASE_TAG }} \
+            ${{ env.PUBLIC_ECR_REPO }}@${{ needs.build-image-at-tag.outputs.digest_amd64 }} \
+            ${{ env.PUBLIC_ECR_REPO }}@${{ needs.build-image-at-tag.outputs.digest_arm64 }}
