@@ -141,15 +141,25 @@ func (kv *KVIndexer) IndexBlock(block *cmtypes.Block, txResults []*abci.ExecTxRe
 
 				parsedTx := txs.GetTxByMsgIndex(msgIndex)
 				if parsedTx == nil {
-					kv.logger.Error("msg index not found in results", "msgIndex", msgIndex)
-					continue
+					if result.Code != abci.CodeTypeOK {
+						// No ethereum_tx events and no parseable ABCI log — derive
+						// what we can directly from the decoded message so the tx
+						// is still recorded and findable by hash.
+						txResult.GasUsed = ethMsg.GetGas()
+						txResult.Failed = true
+						txHash = ethMsg.Hash()
+					} else {
+						kv.logger.Error("msg index not found in results for successful tx", "msgIndex", msgIndex)
+						continue
+					}
+				} else {
+					if parsedTx.EthTxIndex >= 0 && parsedTx.EthTxIndex != ethTxIndex {
+						kv.logger.Error("eth tx index don't match", "expect", ethTxIndex, "found", parsedTx.EthTxIndex)
+					}
+					txResult.GasUsed = parsedTx.GasUsed
+					txResult.Failed = parsedTx.Failed
+					txHash = parsedTx.Hash
 				}
-				if parsedTx.EthTxIndex >= 0 && parsedTx.EthTxIndex != ethTxIndex {
-					kv.logger.Error("eth tx index don't match", "expect", ethTxIndex, "found", parsedTx.EthTxIndex)
-				}
-				txResult.GasUsed = parsedTx.GasUsed
-				txResult.Failed = parsedTx.Failed
-				txHash = parsedTx.Hash
 			}
 
 			cumulativeTxEthGasUsed += txResult.GasUsed
