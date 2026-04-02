@@ -175,22 +175,17 @@ func NewBackend(
 	// This is the canonical EVM chain ID (e.g. 1776 for Injective mainnet) and
 	// differs from the Cosmos chain ID string ("injective-1") which ParseChainID
 	// would incorrectly parse as 1.
+	// Fetch the EVM chain ID once from the node's chain config (eip155ChainId).
+	// This is the canonical EVM chain ID (e.g. 1776 for Injective mainnet) and
+	// differs from the Cosmos chain ID string ("injective-1") which ParseChainID
+	// would incorrectly parse as 1. A hard failure here is intentional: starting
+	// with the wrong chain ID silently breaks tx signing and tracing.
 	evmChainConfig := b.ChainConfig()
 	if evmChainConfig == nil || evmChainConfig.ChainID == nil {
-		// ChainConfig unavailable at startup — fall back to parsing the Cosmos
-		// chain ID. This may be wrong for chains where the EVM chain ID doesn't
-		// match the Cosmos chain ID suffix, but it avoids a hard failure.
-		chainID, err := chaintypes.ParseChainID(clientCtx.ChainID)
-		if err != nil {
-			return nil, errors.Wrapf(err, "failed to parse chain ID %q", clientCtx.ChainID)
-		}
-		b.logger.Warn("could not fetch EVM chain ID from node; falling back to parsed Cosmos chain ID",
-			"cosmosChainID", clientCtx.ChainID, "parsedEVMChainID", chainID)
-		b.cachedChainID = chainID
-	} else {
-		b.cachedChainID = evmChainConfig.ChainID
-		b.logger.Info("cached EVM chain ID from node", "chainID", b.cachedChainID)
+		return nil, errors.New("could not fetch EVM chain ID from node at startup; ensure gRPC is reachable and the node is running")
 	}
+	b.cachedChainID = evmChainConfig.ChainID
+	b.logger.Info("cached EVM chain ID from node", "chainID", b.cachedChainID)
 
 	return b, nil
 }

@@ -72,9 +72,15 @@ func clearHeightKeys(db dbm.DB, from, to int64) ([]common.Hash, error) {
 	for height := from; height <= to; height++ {
 		metaKey := BlockMetaKey(height)
 		bz, err := db.Get(metaKey)
-		if err == nil && len(bz) > 0 {
+		if err != nil {
+			return nil, fmt.Errorf("read block meta at height %d: %w", height, err)
+		}
+		if len(bz) > 0 {
 			var meta CachedBlockMeta
-			if jsonErr := json.Unmarshal(bz, &meta); jsonErr == nil && meta.Hash != "" {
+			if jsonErr := json.Unmarshal(bz, &meta); jsonErr != nil {
+				return nil, fmt.Errorf("decode block meta at height %d: %w", height, jsonErr)
+			}
+			if meta.Hash != "" {
 				blockHashes = append(blockHashes, common.HexToHash(meta.Hash))
 			}
 			if err := batch.Delete(metaKey); err != nil {

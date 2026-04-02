@@ -67,12 +67,11 @@ func ParseTxResult(result *abci.ExecTxResult, tx sdk.Tx) (*ParsedTxs, error) {
 			p.Txs[i].Failed = true
 		}
 
-		// parseFromLog only enriches GasUsed from the ABCI log; the tx hash and
-		// indices are already captured from events above. A log parse failure
-		// should not discard the tx — treat it as a non-fatal warning so the
-		// indexer still records the transaction.
+		// parseFromLog enriches Hash and GasUsed from the ABCI log for VM-failed
+		// txs. A log parse failure should not discard the tx — the zero-hash
+		// fallback in the indexer will recover the hash from ethMsg directly.
 		if err := p.parseFromLog(result.Log); err != nil {
-			_ = err // gas used will be 0; acceptable vs. dropping the tx entirely
+			_ = err // hash and gas used will be 0; acceptable vs. dropping the tx entirely
 		}
 
 		return p, nil
@@ -166,6 +165,19 @@ func (p *ParsedTxs) parseFromLog(logText string) error {
 	}
 
 	txHash := common.HexToHash(vmErr.Hash)
+
+	// If the entry already exists (populated from ethereum_tx events), update
+	// it in-place rather than appending a duplicate. This is the common path
+	// for VM-failed txs that emit events but omit the hash/gasUsed attributes.
+	if msgIndex >= 0 && msgIndex < len(p.Txs) {
+		p.Txs[msgIndex].Hash = txHash
+		p.Txs[msgIndex].GasUsed = vmErr.GasUsed
+		p.Txs[msgIndex].Failed = true
+		p.TxHashes[txHash] = msgIndex
+		return nil
+	}
+
+	// No event-based entry exists — append a new one.
 	parsedTx := ParsedTx{
 		MsgIndex:   msgIndex,
 		Hash:       txHash,
@@ -173,9 +185,8 @@ func (p *ParsedTxs) parseFromLog(logText string) error {
 		GasUsed:    vmErr.GasUsed,
 		Failed:     true,
 	}
-
 	p.Txs = append(p.Txs, parsedTx)
-	p.TxHashes[txHash] = msgIndex
+	p.TxHashes[txHash] = len(p.Txs) - 1
 	return nil
 }
 

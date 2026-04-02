@@ -200,7 +200,7 @@ func runReindex(args []string) {
 	fs.StringVar(&logFormat, "log-format", "", "Log format: json or text")
 
 	if err := fs.Parse(args); err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "reindex: %v\n\nUsage:\n")
+		_, _ = fmt.Fprintf(os.Stderr, "reindex: %v\n\nUsage:\n", err)
 		fs.PrintDefaults()
 		os.Exit(1)
 	}
