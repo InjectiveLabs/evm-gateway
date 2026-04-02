@@ -159,6 +159,12 @@ func (kv *KVIndexer) IndexBlock(block *cmtypes.Block, txResults []*abci.ExecTxRe
 					txResult.GasUsed = parsedTx.GasUsed
 					txResult.Failed = parsedTx.Failed
 					txHash = parsedTx.Hash
+					// For VM-failed txs the hash attribute may be absent from the
+					// ethereum_tx event, leaving parsedTx.Hash as zero. Fall back to
+					// the hash embedded in the decoded message.
+					if txHash == (common.Hash{}) {
+						txHash = ethMsg.Hash()
+					}
 				}
 			}
 
