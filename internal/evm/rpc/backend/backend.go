@@ -19,6 +19,7 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/ethereum/go-ethereum/signer/core/apitypes"
+	"github.com/pkg/errors"
 
 	appconfig "github.com/InjectiveLabs/evm-gateway/internal/config"
 	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
@@ -146,6 +147,7 @@ type Backend struct {
 	indexer             txindexer.TxIndexer
 	syncStatus          *syncstatus.Tracker
 	processBlocker      ProcessBlocker
+	cachedChainID       *big.Int // immutable once set; avoids live gRPC calls in ChainID()
 }
 
 // NewBackend creates a new Backend instance for cosmos and ethereum namespaces
@@ -156,7 +158,12 @@ func NewBackend(
 	allowUnprotectedTxs bool,
 	indexer txindexer.TxIndexer,
 	syncStatus *syncstatus.Tracker,
-) *Backend {
+) (*Backend, error) {
+	chainID, err := chaintypes.ParseChainID(clientCtx.ChainID)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to parse chain ID %q", clientCtx.ChainID)
+	}
+
 	b := &Backend{
 		ctx:                 context.Background(),
 		clientCtx:           clientCtx,
@@ -166,7 +173,8 @@ func NewBackend(
 		allowUnprotectedTxs: allowUnprotectedTxs,
 		indexer:             indexer,
 		syncStatus:          syncStatus,
+		cachedChainID:       chainID,
 	}
 	b.processBlocker = b.processBlock
-	return b
+	return b, nil
 }

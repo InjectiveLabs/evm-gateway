@@ -25,9 +25,9 @@ import (
 )
 
 // ChainID is the EIP-155 replay-protection chain id for the current ethereum chain config.
+// It returns the value cached at construction time to avoid live gRPC calls on every request.
 func (b *Backend) ChainID() *hexutil.Big {
-	config := b.ChainConfig()
-	return (*hexutil.Big)(config.ChainID)
+	return (*hexutil.Big)(b.cachedChainID)
 }
 
 // ChainConfig returns the latest ethereum chain configuration

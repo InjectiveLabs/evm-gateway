@@ -65,7 +65,10 @@ func init() {
 			indexer txindexer.TxIndexer,
 			status *syncstatus.Tracker,
 		) []rpc.API {
-			evmBackend := backend.NewBackend(logger, cfg, clientCtx, allowUnprotectedTxs, indexer, status)
+			evmBackend, err := backend.NewBackend(logger, cfg, clientCtx, allowUnprotectedTxs, indexer, status)
+			if err != nil {
+				panic(err)
+			}
 			return []rpc.API{
 				{
 					Namespace: EthNamespace,
@@ -114,7 +117,10 @@ func init() {
 			indexer txindexer.TxIndexer,
 			status *syncstatus.Tracker,
 		) []rpc.API {
-			evmBackend := backend.NewBackend(logger, cfg, clientCtx, allowUnprotectedTxs, indexer, status)
+			evmBackend, err := backend.NewBackend(logger, cfg, clientCtx, allowUnprotectedTxs, indexer, status)
+			if err != nil {
+				panic(err)
+			}
 			return []rpc.API{
 				{
 					Namespace: DebugNamespace,
@@ -131,7 +137,10 @@ func init() {
 			indexer txindexer.TxIndexer,
 			status *syncstatus.Tracker,
 		) []rpc.API {
-			evmBackend := backend.NewBackend(logger, cfg, clientCtx, allowUnprotectedTxs, indexer, status)
+			evmBackend, err := backend.NewBackend(logger, cfg, clientCtx, allowUnprotectedTxs, indexer, status)
+			if err != nil {
+				panic(err)
+			}
 			return []rpc.API{
 				{
 					Namespace: MinerNamespace,
@@ -148,7 +157,10 @@ func init() {
 			indexer txindexer.TxIndexer,
 			status *syncstatus.Tracker,
 		) []rpc.API {
-			evmBackend := backend.NewBackend(logger, cfg, clientCtx, allowUnprotectedTxs, indexer, status)
+			evmBackend, err := backend.NewBackend(logger, cfg, clientCtx, allowUnprotectedTxs, indexer, status)
+			if err != nil {
+				panic(err)
+			}
 			return []rpc.API{
 				{
 					Namespace: InjectiveNamespace,
