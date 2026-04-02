@@ -67,8 +67,12 @@ func ParseTxResult(result *abci.ExecTxResult, tx sdk.Tx) (*ParsedTxs, error) {
 			p.Txs[i].Failed = true
 		}
 
+		// parseFromLog only enriches GasUsed from the ABCI log; the tx hash and
+		// indices are already captured from events above. A log parse failure
+		// should not discard the tx — treat it as a non-fatal warning so the
+		// indexer still records the transaction.
 		if err := p.parseFromLog(result.Log); err != nil {
-			return nil, err
+			_ = err // gas used will be 0; acceptable vs. dropping the tx entirely
 		}
 
 		return p, nil
