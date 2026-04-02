@@ -65,7 +65,7 @@ func (kv *KVIndexer) IndexBlock(block *cmtypes.Block, txResults []*abci.ExecTxRe
 		}
 	}(&err)
 
-	kv.logger.Debug("(KVIndexer) IndexBlock", "height", block.Height, "txns:", len(block.Txs))
+	kv.logger.Info("(KVIndexer) IndexBlock", "height", block.Height, "txns", len(block.Txs))
 
 	batch := kv.db.NewBatch()
 	defer batch.Close()
@@ -136,10 +136,16 @@ func (kv *KVIndexer) IndexBlock(block *cmtypes.Block, txResults []*abci.ExecTxRe
 				txResult.GasUsed = ethMsg.GetGas()
 				txResult.Failed = true
 				txHash = ethMsg.Hash()
+				kv.logger.Info("[diag] tx hash from ethMsg (block-gas-limit path)", "height", block.Height, "txIndex", txIndex, "hash", txHash.Hex())
 			} else {
 				// success or fail due to VM error
 
 				parsedTx := txs.GetTxByMsgIndex(msgIndex)
+				kv.logger.Info("[diag] parsedTx lookup", "height", block.Height, "txIndex", txIndex, "msgIndex", msgIndex,
+					"resultCode", result.Code, "codespace", result.Codespace,
+					"parsedTxNil", parsedTx == nil,
+					"parsedTxsCount", len(txs.Txs),
+				)
 				if parsedTx == nil {
 					if result.Code != abci.CodeTypeOK {
 						// No ethereum_tx events and no parseable ABCI log — derive
@@ -148,6 +154,7 @@ func (kv *KVIndexer) IndexBlock(block *cmtypes.Block, txResults []*abci.ExecTxRe
 						txResult.GasUsed = ethMsg.GetGas()
 						txResult.Failed = true
 						txHash = ethMsg.Hash()
+						kv.logger.Info("[diag] tx hash from ethMsg (nil-parsedTx fallback)", "height", block.Height, "hash", txHash.Hex())
 					} else {
 						kv.logger.Error("msg index not found in results for successful tx", "msgIndex", msgIndex)
 						continue
@@ -164,6 +171,9 @@ func (kv *KVIndexer) IndexBlock(block *cmtypes.Block, txResults []*abci.ExecTxRe
 					// the hash embedded in the decoded message.
 					if txHash == (common.Hash{}) {
 						txHash = ethMsg.Hash()
+						kv.logger.Info("[diag] tx hash from ethMsg (zero-hash fallback)", "height", block.Height, "hash", txHash.Hex())
+					} else {
+						kv.logger.Info("[diag] tx hash from parsedTx (events/log)", "height", block.Height, "hash", txHash.Hex(), "failed", parsedTx.Failed)
 					}
 				}
 			}
@@ -300,6 +310,7 @@ func (kv *KVIndexer) FirstIndexedBlock() (int64, error) {
 // GetByTxHash finds eth tx by eth tx hash
 func (kv *KVIndexer) GetByTxHash(hash common.Hash) (*chaintypes.TxResult, error) {
 	bz, err := kv.db.Get(TxHashKey(hash))
+	kv.logger.Info("[diag] GetByTxHash", "hash", hash.Hex(), "bytesLen", len(bz), "err", err)
 	if err != nil {
 		return nil, errorsmod.Wrapf(err, "GetByTxHash %s", hash.Hex())
 	}
