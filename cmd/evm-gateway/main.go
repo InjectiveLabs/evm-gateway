@@ -3,14 +3,17 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/spf13/pflag"
 
 	"github.com/InjectiveLabs/sdk-go/chain/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	dbm "github.com/cosmos/cosmos-db"
 
 	"github.com/InjectiveLabs/evm-gateway/internal/app"
 	"github.com/InjectiveLabs/evm-gateway/internal/config"
+	txindexer "github.com/InjectiveLabs/evm-gateway/internal/indexer"
 	"github.com/InjectiveLabs/evm-gateway/internal/logging"
 	"github.com/InjectiveLabs/evm-gateway/internal/telemetry"
 	"github.com/InjectiveLabs/evm-gateway/version"
@@ -42,6 +45,13 @@ type flagOverrides struct {
 }
 
 func main() {
+	// Dispatch subcommands before the normal flag parse so that "reindex"
+	// gets its own isolated flag set.
+	if len(os.Args) > 1 && os.Args[1] == "reindex" {
+		runReindex(os.Args[2:])
+		return
+	}
+
 	flags := parseFlags()
 	if flags.printVersion {
 		fmt.Println(version.Version())
@@ -162,4 +172,78 @@ func applyOverrides(cfg *config.Config, flags flagOverrides) {
 func fail(err error) {
 	_, _ = os.Stderr.WriteString(err.Error() + "\n")
 	os.Exit(1)
+}
+
+// runReindex implements the "reindex" subcommand. It deletes all indexed data
+// for the given block range so that the syncer re-processes those blocks on
+// the next startup. The gateway must NOT be running while this command executes.
+//
+// Usage:
+//
+//	evm-gateway reindex --from <height> --to <height> [--data-dir <path>] [--db-backend <backend>]
+func runReindex(args []string) {
+	fs := pflag.NewFlagSet("reindex", pflag.ContinueOnError)
+
+	var (
+		from      int64
+		to        int64
+		envFile   string
+		dataDir   string
+		dbBackend string
+		logFormat string
+	)
+	fs.Int64Var(&from, "from", 0, "First block height to clear (inclusive, required)")
+	fs.Int64Var(&to, "to", 0, "Last block height to clear (inclusive, required)")
+	fs.StringVar(&envFile, "env-file", "", "Path to .env file with WEB3INJ_ variables")
+	fs.StringVar(&dataDir, "data-dir", "", "Data directory for indexer DB (overrides env/config)")
+	fs.StringVar(&dbBackend, "db-backend", "", "DB backend type (overrides env/config)")
+	fs.StringVar(&logFormat, "log-format", "", "Log format: json or text")
+
+	if err := fs.Parse(args); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "reindex: %v\n\nUsage:\n")
+		fs.PrintDefaults()
+		os.Exit(1)
+	}
+
+	if from <= 0 || to <= 0 {
+		_, _ = fmt.Fprintln(os.Stderr, "reindex: --from and --to are required and must be > 0")
+		fs.PrintDefaults()
+		os.Exit(1)
+	}
+	if from > to {
+		_, _ = fmt.Fprintf(os.Stderr, "reindex: --from (%d) must be <= --to (%d)\n", from, to)
+		os.Exit(1)
+	}
+
+	cfg, err := config.Load(envFile)
+	if err != nil {
+		fail(err)
+	}
+	if dataDir != "" {
+		cfg.DataDir = dataDir
+	}
+	if dbBackend != "" {
+		cfg.DBBackend = dbBackend
+	}
+	if logFormat != "" {
+		cfg.LogFormat = logFormat
+	}
+	cfg.Expand()
+
+	logger := logging.New(logging.Config{
+		Format:  cfg.LogFormat,
+		Verbose: cfg.LogVerbose,
+		Output:  os.Stdout,
+	})
+
+	dbPath := filepath.Join(cfg.DataDir, "data")
+	db, err := dbm.NewDB("evmindexer", dbm.BackendType(cfg.DBBackend), dbPath)
+	if err != nil {
+		fail(fmt.Errorf("open indexer DB at %s: %w", dbPath, err))
+	}
+	defer db.Close()
+
+	if err := txindexer.ClearBlockRange(db, logger, from, to); err != nil {
+		fail(err)
+	}
 }
