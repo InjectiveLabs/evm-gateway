@@ -37,26 +37,35 @@ func Start(
 ) (*http.Server, chan struct{}, error) {
 	logger = logger.With("module", "jsonrpc")
 
-	evtClient, ok := clientCtx.Client.(rpcclient.EventsClient)
-	if !ok {
-		return nil, nil, fmt.Errorf("client %T does not implement EventsClient", clientCtx.Client)
-	}
-
-	var rpcStreamOpenAttempts = 6
 	var rpcStream *stream.RPCStream
-	var err error
-	for i := 0; i < rpcStreamOpenAttempts; i++ {
-		rpcStream, err = stream.NewRPCStreams(evtClient, logger, clientCtx.TxConfig.TxDecoder())
-		if err == nil {
-			break
+	if evtClient, ok := clientCtx.Client.(rpcclient.EventsClient); ok {
+		var rpcStreamOpenAttempts = 6
+		var err error
+		for i := 0; i < rpcStreamOpenAttempts; i++ {
+			rpcStream, err = stream.NewRPCStreams(evtClient, logger, clientCtx.TxConfig.TxDecoder())
+			if err == nil {
+				break
+			}
+
+			time.Sleep(time.Second)
 		}
 
-		time.Sleep(time.Second)
-	}
-
-	if err != nil {
-		err = fmt.Errorf("failed to create rpc streams after %d attempts: %w", rpcStreamOpenAttempts, err)
-		return nil, nil, err
+		if err != nil {
+			logger.Warn(
+				"comet event streams unavailable; continuing in polling-only mode",
+				"error", err,
+				"eth_subscribe_available", false,
+				"eth_new_filter_available", false,
+			)
+			rpcStream = nil
+		}
+	} else {
+		logger.Warn(
+			"client does not implement EventsClient; continuing in polling-only mode",
+			"client_type", fmt.Sprintf("%T", clientCtx.Client),
+			"eth_subscribe_available", false,
+			"eth_new_filter_available", false,
+		)
 	}
 
 	handler := NewWrappedSdkLogger(logger)

@@ -91,6 +91,10 @@ func NewPublicAPI(logger *slog.Logger, clientCtx client.Context, stream *streamt
 	return api
 }
 
+func (api *PublicFilterAPI) liveFiltersAvailable() bool {
+	return api.events != nil
+}
+
 // timeoutLoop runs every 5 minutes and deletes filters that have not been recently used.
 // Tt is started when the api is created.
 func (api *PublicFilterAPI) timeoutLoop() {
@@ -120,6 +124,10 @@ func (api *PublicFilterAPI) timeoutLoop() {
 //
 // https://github.com/ethereum/wiki/wiki/JSON-RPC#eth_newPendingTransactionFilter
 func (api *PublicFilterAPI) NewPendingTransactionFilter() rpc.ID {
+	if !api.liveFiltersAvailable() {
+		return rpc.ID("error creating pending tx filter: live filters unavailable in polling-only mode")
+	}
+
 	api.filtersMu.Lock()
 	defer api.filtersMu.Unlock()
 
@@ -143,6 +151,10 @@ func (api *PublicFilterAPI) NewPendingTransactionFilter() rpc.ID {
 //
 // https://github.com/ethereum/wiki/wiki/JSON-RPC#eth_newblockfilter
 func (api *PublicFilterAPI) NewBlockFilter() rpc.ID {
+	if !api.liveFiltersAvailable() {
+		return rpc.ID("error creating block filter: live filters unavailable in polling-only mode")
+	}
+
 	api.filtersMu.Lock()
 	defer api.filtersMu.Unlock()
 
@@ -175,6 +187,10 @@ func (api *PublicFilterAPI) NewBlockFilter() rpc.ID {
 //
 // https://github.com/ethereum/wiki/wiki/JSON-RPC#eth_newfilter
 func (api *PublicFilterAPI) NewFilter(criteria filters.FilterCriteria) (rpc.ID, error) {
+	if !api.liveFiltersAvailable() {
+		return rpc.ID(""), fmt.Errorf("error creating filter: live filters unavailable in polling-only mode")
+	}
+
 	api.filtersMu.Lock()
 	defer api.filtersMu.Unlock()
 
@@ -297,6 +313,10 @@ func (api *PublicFilterAPI) GetFilterLogs(ctx context.Context, id rpc.ID) ([]*et
 //
 // https://github.com/ethereum/wiki/wiki/JSON-RPC#eth_getfilterchanges
 func (api *PublicFilterAPI) GetFilterChanges(id rpc.ID) (interface{}, error) {
+	if !api.liveFiltersAvailable() {
+		return nil, fmt.Errorf("filter changes unavailable in polling-only mode")
+	}
+
 	api.filtersMu.Lock()
 	defer api.filtersMu.Unlock()
 

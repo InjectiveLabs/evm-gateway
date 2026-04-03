@@ -348,6 +348,10 @@ func newPubSubAPI(clientCtx client.Context, logger *slog.Logger, stream *rpcstre
 }
 
 func (api *pubSubAPI) subscribe(wsConn *wsConn, subID rpc.ID, params []interface{}) (context.CancelFunc, error) {
+	if api.events == nil {
+		return nil, errors.New("eth_subscribe is unavailable in polling-only mode")
+	}
+
 	method, ok := params[0].(string)
 	if !ok {
 		return nil, errors.New("invalid parameters")

@@ -159,9 +159,6 @@ func buildClientContext(ctx context.Context, cfg *config.Config, dataDir string,
 	if err != nil {
 		return client.Context{}, nil, nil, fmt.Errorf("init comet rpc client: %w", err)
 	}
-	if err := rpcClient.Start(); err != nil {
-		return client.Context{}, nil, nil, fmt.Errorf("start comet rpc client: %w", err)
-	}
 	clientCtx = clientCtx.WithClient(rpcClient)
 
 	chainID, err := cometChainID(ctx, rpcClient)

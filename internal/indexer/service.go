@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"time"
 
-	rpcclient "github.com/cometbft/cometbft/rpc/client"
+	coretypes "github.com/cometbft/cometbft/rpc/core/types"
 	dbm "github.com/cosmos/cosmos-db"
 
 	"github.com/InjectiveLabs/evm-gateway/internal/blocksync"
@@ -14,17 +14,22 @@ import (
 	"github.com/InjectiveLabs/evm-gateway/internal/syncstatus"
 )
 
+type syncClient interface {
+	Status(context.Context) (*coretypes.ResultStatus, error)
+	blocksync.BlockClient
+}
+
 // Syncer manages historical gap sync and forward indexing.
 type Syncer struct {
 	cfg     config.Config
 	logger  *slog.Logger
-	client  rpcclient.Client
+	client  syncClient
 	db      dbm.DB
 	indexer TxIndexer
 	status  *syncstatus.Tracker
 }
 
-func NewSyncer(cfg config.Config, logger *slog.Logger, client rpcclient.Client, db dbm.DB, indexer TxIndexer, status *syncstatus.Tracker) *Syncer {
+func NewSyncer(cfg config.Config, logger *slog.Logger, client syncClient, db dbm.DB, indexer TxIndexer, status *syncstatus.Tracker) *Syncer {
 	return &Syncer{
 		cfg:     cfg,
 		logger:  logger.With("module", "evm-indexer"),
@@ -58,19 +63,16 @@ func (s *Syncer) Run(ctx context.Context) error {
 	}
 
 	earliest := s.cfg.Earliest
-	chainEarliest := status.SyncInfo.EarliestBlockHeight
 	if earliest <= 0 {
-		earliest = chainEarliest
+		earliest = status.SyncInfo.EarliestBlockHeight
 		if earliest <= 0 {
 			earliest = 1
 		}
-	}
-	if earliest < chainEarliest {
-		if !s.cfg.AllowGaps {
-			return fmt.Errorf("earliest block %d before chain earliest %d", earliest, chainEarliest)
+	} else {
+		earliest, err = s.resolveEarliestBlock(ctx, earliest)
+		if err != nil {
+			return err
 		}
-		s.logger.Warn("earliest block before chain history; using chain earliest", "requested", earliest, "chain_earliest", chainEarliest)
-		earliest = chainEarliest
 	}
 
 	head := status.SyncInfo.LatestBlockHeight
@@ -169,6 +171,27 @@ func (s *Syncer) Run(ctx context.Context) error {
 		pace.Add(1)
 		return nil
 	})
+}
+
+func (s *Syncer) resolveEarliestBlock(ctx context.Context, requested int64) (int64, error) {
+	block, err := s.client.Block(ctx, &requested)
+	if err == nil {
+		if block == nil || block.Block == nil {
+			return 0, fmt.Errorf("validate earliest block %d: empty block response", requested)
+		}
+		return requested, nil
+	}
+
+	chainEarliest, ok := blocksync.LowestAvailableHeight(err)
+	if !ok {
+		return 0, fmt.Errorf("validate earliest block %d: %w", requested, err)
+	}
+	if !s.cfg.AllowGaps {
+		return 0, fmt.Errorf("earliest block %d before chain earliest %d", requested, chainEarliest)
+	}
+
+	s.logger.Warn("earliest block before chain history; using chain earliest", "requested", requested, "chain_earliest", chainEarliest)
+	return chainEarliest, nil
 }
 
 func toStatusRanges(ranges []BlockRange) []syncstatus.Range {

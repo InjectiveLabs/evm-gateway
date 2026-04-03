@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +24,8 @@ const (
 )
 
 var ErrBlockUnavailable = errors.New("block not available")
+
+var lowestAvailableHeightRE = regexp.MustCompile(`lowest height is (\d+)`)
 
 // BlockClient exposes the RPC calls needed for block sync.
 type BlockClient interface {
@@ -447,4 +451,22 @@ func (b *blockGetter) fetchWithRetry(ctx context.Context, fn func() error) error
 
 func isNotFound(err error) bool {
 	return err != nil && strings.Contains(err.Error(), NotFoundErr)
+}
+
+func LowestAvailableHeight(err error) (int64, bool) {
+	if err == nil {
+		return 0, false
+	}
+
+	matches := lowestAvailableHeightRE.FindStringSubmatch(err.Error())
+	if len(matches) != 2 {
+		return 0, false
+	}
+
+	height, parseErr := strconv.ParseInt(matches[1], 10, 64)
+	if parseErr != nil || height <= 0 {
+		return 0, false
+	}
+
+	return height, true
 }
