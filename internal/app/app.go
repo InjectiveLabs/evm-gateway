@@ -15,6 +15,7 @@ import (
 	"syscall"
 
 	rpchttp "github.com/cometbft/cometbft/rpc/client/http"
+	cmtrpctypes "github.com/cometbft/cometbft/rpc/core/types"
 	dbm "github.com/cosmos/cosmos-db"
 	"github.com/cosmos/cosmos-sdk/client"
 	"github.com/cosmos/cosmos-sdk/client/flags"
@@ -139,6 +140,10 @@ func Run(cfg config.Config, logger *slog.Logger, statsd StatsdCloser) error {
 	return nil
 }
 
+type cometStatusClient interface {
+	Status(context.Context) (*cmtrpctypes.ResultStatus, error)
+}
+
 func buildClientContext(ctx context.Context, cfg *config.Config, dataDir string, logger *slog.Logger) (client.Context, *rpchttp.HTTP, *grpc.ClientConn, error) {
 	clientCtx, err := chainclient.NewClientContext("", "", nil)
 	if err != nil {
@@ -159,16 +164,12 @@ func buildClientContext(ctx context.Context, cfg *config.Config, dataDir string,
 	}
 	clientCtx = clientCtx.WithClient(rpcClient)
 
-	status, err := rpcClient.Status(ctx)
+	chainID, err := cometChainID(ctx, rpcClient)
 	if err != nil {
-		return client.Context{}, nil, nil, fmt.Errorf("fetch node status: %w", err)
+		return client.Context{}, nil, nil, err
 	}
-	chainID := status.NodeInfo.Network
-	if cfg.ChainID != "" && cfg.ChainID != chainID {
-		return client.Context{}, nil, nil, fmt.Errorf("chain id mismatch: expected %s, got %s", cfg.ChainID, chainID)
-	}
-	if cfg.ChainID == "" {
-		cfg.ChainID = chainID
+	if err := validateCometChainID(cfg, chainID); err != nil {
+		return client.Context{}, nil, nil, err
 	}
 	clientCtx = clientCtx.WithChainID(cfg.ChainID)
 
@@ -180,6 +181,29 @@ func buildClientContext(ctx context.Context, cfg *config.Config, dataDir string,
 	logger.Info("grpc client ready", "address", cfg.GRPCAddr)
 
 	return clientCtx, rpcClient, grpcConn, nil
+}
+
+func cometChainID(ctx context.Context, rpcClient cometStatusClient) (string, error) {
+	status, err := rpcClient.Status(ctx)
+	if err != nil {
+		return "", fmt.Errorf("fetch node status: %w", err)
+	}
+
+	chainID := strings.TrimSpace(status.NodeInfo.Network)
+	if chainID == "" {
+		return "", errors.New("empty chain id from comet status")
+	}
+
+	return chainID, nil
+}
+
+func validateCometChainID(cfg *config.Config, cometChainID string) error {
+	if cfg.ChainID != "" && cfg.ChainID != cometChainID {
+		return fmt.Errorf("chain id mismatch: expected %s, got %s", cfg.ChainID, cometChainID)
+	}
+
+	cfg.ChainID = cometChainID
+	return nil
 }
 
 func dialGRPC(ctx context.Context, addr string, registry codectypes.InterfaceRegistry) (*grpc.ClientConn, error) {

@@ -13,9 +13,9 @@ import (
 	"github.com/ethereum/go-ethereum/common/math"
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
 
-	evmtypes "github.com/InjectiveLabs/sdk-go/chain/evm/types"
 	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/backend"
 	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
+	evmtypes "github.com/InjectiveLabs/sdk-go/chain/evm/types"
 )
 
 // The Ethereum API allows applications to connect to an Injective node that is
@@ -452,7 +452,7 @@ func (e *PublicAPI) GetPendingTransactions() ([]*rpctypes.RPCTransaction, error)
 				uint64(0),
 				uint64(0),
 				nil,
-				e.backend.ChainConfig().ChainID,
+				e.backend.ChainID().ToInt(),
 			)
 			if err != nil {
 				return nil, err

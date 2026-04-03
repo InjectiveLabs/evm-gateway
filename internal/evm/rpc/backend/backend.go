@@ -142,6 +142,7 @@ type Backend struct {
 	queryClient         *rpctypes.QueryClient // gRPC query client
 	logger              *slog.Logger
 	cfg                 appconfig.Config
+	chainID             *big.Int
 	allowUnprotectedTxs bool
 	indexer             txindexer.TxIndexer
 	syncStatus          *syncstatus.Tracker
@@ -157,12 +158,18 @@ func NewBackend(
 	indexer txindexer.TxIndexer,
 	syncStatus *syncstatus.Tracker,
 ) *Backend {
+	chainID, err := chaintypes.ParseChainID(clientCtx.ChainID)
+	if err != nil {
+		panic("parse backend chain id: " + err.Error())
+	}
+
 	b := &Backend{
 		ctx:                 context.Background(),
 		clientCtx:           clientCtx,
 		queryClient:         rpctypes.NewQueryClient(clientCtx),
 		logger:              logger.With("module", "backend"),
 		cfg:                 cfg,
+		chainID:             new(big.Int).Set(chainID),
 		allowUnprotectedTxs: allowUnprotectedTxs,
 		indexer:             indexer,
 		syncStatus:          syncStatus,
