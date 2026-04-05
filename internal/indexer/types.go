@@ -10,6 +10,10 @@ import (
 	chaintypes "github.com/InjectiveLabs/sdk-go/chain/types"
 )
 
+type BlockIndexStats struct {
+	IndexedEthTxs int64
+}
+
 // TxIndexer captures the indexing methods required by the RPC/backend layers.
 type TxIndexer interface {
 	IndexBlock(block *cmtypes.Block, txResults []*abci.ExecTxResult) error

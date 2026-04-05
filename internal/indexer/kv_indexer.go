@@ -18,10 +18,10 @@ import (
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 
+	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
 	evmtypes "github.com/InjectiveLabs/sdk-go/chain/evm/types"
 	txfeestypes "github.com/InjectiveLabs/sdk-go/chain/txfees/types"
 	chaintypes "github.com/InjectiveLabs/sdk-go/chain/types"
-	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
 )
 
 const (
@@ -53,6 +53,11 @@ func NewKVIndexer(db dbm.DB, logger *slog.Logger, clientCtx client.Context) *KVI
 // - Iterates over all the messages of the Tx
 // - Builds and stores a indexer.TxResult based on parsed events for every message
 func (kv *KVIndexer) IndexBlock(block *cmtypes.Block, txResults []*abci.ExecTxResult) (err error) {
+	_, err = kv.IndexBlockWithStats(block, txResults)
+	return err
+}
+
+func (kv *KVIndexer) IndexBlockWithStats(block *cmtypes.Block, txResults []*abci.ExecTxResult) (stats BlockIndexStats, err error) {
 	defer func(err *error) {
 		if e := recover(); e != nil {
 			kv.logger.Debug("panic during parsing block results", "error", e)
@@ -69,6 +74,9 @@ func (kv *KVIndexer) IndexBlock(block *cmtypes.Block, txResults []*abci.ExecTxRe
 
 	batch := kv.db.NewBatch()
 	defer batch.Close()
+	if err := kv.resetBlock(batch, block.Height); err != nil {
+		return stats, err
+	}
 
 	blockHash := common.BytesToHash(block.Hash())
 	flatLogs := make([]*ethtypes.Log, 0)
@@ -156,7 +164,7 @@ func (kv *KVIndexer) IndexBlock(block *cmtypes.Block, txResults []*abci.ExecTxRe
 			txResult.CumulativeGasUsed = cumulativeTxEthGasUsed
 
 			if err := saveTxResult(kv.clientCtx.Codec, batch, txHash, &txResult); err != nil {
-				return errorsmod.Wrapf(err, "IndexBlock %d", block.Height)
+				return stats, errorsmod.Wrapf(err, "IndexBlock %d", block.Height)
 			}
 
 			txData := ethMsg.AsTransaction()
@@ -211,7 +219,7 @@ func (kv *KVIndexer) IndexBlock(block *cmtypes.Block, txResults []*abci.ExecTxRe
 				uint64(txData.Type()),
 			)
 			if err := batch.Set(ReceiptKey(txHash), mustJSON(receipt)); err != nil {
-				return errorsmod.Wrapf(err, "IndexBlock %d, set receipt", block.Height)
+				return stats, errorsmod.Wrapf(err, "IndexBlock %d, set receipt", block.Height)
 			}
 
 			rpcTx, err := rpctypes.NewRPCTransaction(
@@ -226,15 +234,16 @@ func (kv *KVIndexer) IndexBlock(block *cmtypes.Block, txResults []*abci.ExecTxRe
 				kv.logger.Warn("failed to build rpc tx", "height", block.Height, "txHash", txHash.Hex(), "error", err.Error())
 			} else {
 				if err := batch.Set(RPCtxHashKey(txHash), mustJSON(rpcTx)); err != nil {
-					return errorsmod.Wrapf(err, "IndexBlock %d, set rpc tx hash", block.Height)
+					return stats, errorsmod.Wrapf(err, "IndexBlock %d, set rpc tx hash", block.Height)
 				}
 				if err := batch.Set(RPCtxIndexKey(block.Height, ethTxIndex), txHash.Bytes()); err != nil {
-					return errorsmod.Wrapf(err, "IndexBlock %d, set rpc tx index", block.Height)
+					return stats, errorsmod.Wrapf(err, "IndexBlock %d, set rpc tx index", block.Height)
 				}
 			}
 
 			blockLogs = append(blockLogs, logs)
 			flatLogs = append(flatLogs, logs...)
+			stats.IndexedEthTxs++
 			ethTxIndex++
 		}
 
@@ -256,18 +265,33 @@ func (kv *KVIndexer) IndexBlock(block *cmtypes.Block, txResults []*abci.ExecTxRe
 	}
 
 	if err := batch.Set(BlockMetaKey(block.Height), mustJSON(meta)); err != nil {
-		return errorsmod.Wrapf(err, "IndexBlock %d, set block meta", block.Height)
+		return stats, errorsmod.Wrapf(err, "IndexBlock %d, set block meta", block.Height)
 	}
 	if err := batch.Set(BlockHashKey(blockHash), sdk.Uint64ToBigEndian(uint64(block.Height))); err != nil {
-		return errorsmod.Wrapf(err, "IndexBlock %d, set block hash map", block.Height)
+		return stats, errorsmod.Wrapf(err, "IndexBlock %d, set block hash map", block.Height)
 	}
 	if err := batch.Set(BlockLogsKey(block.Height), mustJSON(blockLogs)); err != nil {
-		return errorsmod.Wrapf(err, "IndexBlock %d, set block logs", block.Height)
+		return stats, errorsmod.Wrapf(err, "IndexBlock %d, set block logs", block.Height)
 	}
 
 	if err := batch.Write(); err != nil {
-		return errorsmod.Wrapf(err, "IndexBlock %d, write batch", block.Height)
+		return stats, errorsmod.Wrapf(err, "IndexBlock %d, write batch", block.Height)
 	}
+	return stats, nil
+}
+
+// DeleteBlock removes all indexed data associated with a block height.
+func (kv *KVIndexer) DeleteBlock(height int64) error {
+	batch := kv.db.NewBatch()
+	defer batch.Close()
+
+	if err := kv.resetBlock(batch, height); err != nil {
+		return err
+	}
+	if err := batch.Write(); err != nil {
+		return errorsmod.Wrapf(err, "DeleteBlock %d", height)
+	}
+
 	return nil
 }
 
@@ -414,4 +438,83 @@ func queryBlockBaseFee(queryClient *rpctypes.QueryClient, height int64) *big.Int
 		return nil
 	}
 	return res.BaseFee.BaseFee.RoundInt().BigInt()
+}
+
+func (kv *KVIndexer) resetBlock(batch dbm.Batch, height int64) error {
+	metaBz, err := kv.db.Get(BlockMetaKey(height))
+	if err != nil {
+		return errorsmod.Wrapf(err, "reset block %d: get meta", height)
+	}
+	if len(metaBz) > 0 {
+		meta, err := unmarshalJSON[CachedBlockMeta](metaBz)
+		if err != nil {
+			return errorsmod.Wrapf(err, "reset block %d: unmarshal meta", height)
+		}
+		if err := batch.Delete(BlockHashKey(common.HexToHash(meta.Hash))); err != nil {
+			return errorsmod.Wrapf(err, "reset block %d: delete block hash", height)
+		}
+	}
+
+	txIndexStart := txIndexPrefixStart(height)
+	txIndexEnd := txIndexPrefixEnd(height)
+	it, err := kv.db.Iterator(txIndexStart, txIndexEnd)
+	if err != nil {
+		return errorsmod.Wrapf(err, "reset block %d: tx iterator", height)
+	}
+	defer it.Close()
+
+	for ; it.Valid(); it.Next() {
+		txHash := common.BytesToHash(it.Value())
+		if err := batch.Delete(it.Key()); err != nil {
+			return errorsmod.Wrapf(err, "reset block %d: delete tx index", height)
+		}
+		if err := batch.Delete(TxHashKey(txHash)); err != nil {
+			return errorsmod.Wrapf(err, "reset block %d: delete tx hash", height)
+		}
+		if err := batch.Delete(ReceiptKey(txHash)); err != nil {
+			return errorsmod.Wrapf(err, "reset block %d: delete receipt", height)
+		}
+		if err := batch.Delete(RPCtxHashKey(txHash)); err != nil {
+			return errorsmod.Wrapf(err, "reset block %d: delete rpc tx hash", height)
+		}
+	}
+
+	rpcIndexStart := rpcTxIndexPrefixStart(height)
+	rpcIndexEnd := rpcTxIndexPrefixEnd(height)
+	rpcIt, err := kv.db.Iterator(rpcIndexStart, rpcIndexEnd)
+	if err != nil {
+		return errorsmod.Wrapf(err, "reset block %d: rpc tx iterator", height)
+	}
+	defer rpcIt.Close()
+
+	for ; rpcIt.Valid(); rpcIt.Next() {
+		if err := batch.Delete(rpcIt.Key()); err != nil {
+			return errorsmod.Wrapf(err, "reset block %d: delete rpc tx index", height)
+		}
+	}
+
+	if err := batch.Delete(BlockLogsKey(height)); err != nil {
+		return errorsmod.Wrapf(err, "reset block %d: delete block logs", height)
+	}
+	if err := batch.Delete(BlockMetaKey(height)); err != nil {
+		return errorsmod.Wrapf(err, "reset block %d: delete block meta", height)
+	}
+
+	return nil
+}
+
+func txIndexPrefixStart(height int64) []byte {
+	return append([]byte{KeyPrefixTxIndex}, sdk.Uint64ToBigEndian(uint64(height))...)
+}
+
+func txIndexPrefixEnd(height int64) []byte {
+	return append([]byte{KeyPrefixTxIndex}, sdk.Uint64ToBigEndian(uint64(height+1))...)
+}
+
+func rpcTxIndexPrefixStart(height int64) []byte {
+	return append([]byte{KeyPrefixRPCtxIndex}, sdk.Uint64ToBigEndian(uint64(height))...)
+}
+
+func rpcTxIndexPrefixEnd(height int64) []byte {
+	return append([]byte{KeyPrefixRPCtxIndex}, sdk.Uint64ToBigEndian(uint64(height+1))...)
 }

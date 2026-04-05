@@ -44,8 +44,10 @@ func newGatewayCLI() *cli.Cli {
 
 	app.Command("version", "Print build version information and exit.", versionCmd)
 	app.Command("resync", "Resync gateway state for specified block range.", func(cmd *cli.Cmd) {
+		targets := cmd.StringsArg("TARGETS", nil, "Block heights or START:END ranges to reindex.")
+		cmd.Spec = "TARGETS..."
 		cmd.Action = func() {
-			runOrFail(resyncRunner(opts))
+			runOrFail(resyncRunner(opts, *targets))
 		}
 	})
 

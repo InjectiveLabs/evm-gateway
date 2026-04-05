@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	rpchttp "github.com/cometbft/cometbft/rpc/client/http"
 	cmtrpctypes "github.com/cometbft/cometbft/rpc/core/types"
@@ -137,6 +138,56 @@ func Run(cfg config.Config, logger *slog.Logger, statsd StatsdCloser) error {
 	}
 
 	logger.Info("shutdown complete", "after", cfg.Shutdown.Timeout)
+	return nil
+}
+
+// RunResync reindexes the requested block ranges and exits.
+func RunResync(cfg config.Config, logger *slog.Logger, targets []txindexer.BlockRange) error {
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	dataDir, err := expandHome(cfg.DataDir)
+	if err != nil {
+		return err
+	}
+
+	clientCtx, rpcClient, grpcConn, err := buildClientContext(ctx, &cfg, dataDir, logger)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if rpcClient != nil {
+			_ = rpcClient.Stop()
+		}
+		if grpcConn != nil {
+			_ = grpcConn.Close()
+		}
+	}()
+
+	idxDB, err := openIndexerDB(dataDir, cfg.DBBackend)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = idxDB.Close()
+	}()
+
+	idxLogger := logger.With("indexer", "evm")
+	txIndexer := txindexer.NewKVIndexer(idxDB, idxLogger, clientCtx)
+	syncer := txindexer.NewSyncer(cfg, logger, rpcClient, idxDB, txIndexer, nil)
+
+	startedAt := time.Now()
+	stats, err := syncer.Resync(ctx, targets)
+	if err != nil {
+		return err
+	}
+
+	logger.Info(
+		"resync complete",
+		"time_passed", time.Since(startedAt),
+		"blocks_synced", stats.BlocksSynced,
+		"unique_txns_seen", stats.UniqueTxnsSeen,
+	)
 	return nil
 }
 

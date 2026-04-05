@@ -2,11 +2,14 @@ package indexer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
 
+	abci "github.com/cometbft/cometbft/abci/types"
 	coretypes "github.com/cometbft/cometbft/rpc/core/types"
+	cmtypes "github.com/cometbft/cometbft/types"
 	dbm "github.com/cosmos/cosmos-db"
 
 	"github.com/InjectiveLabs/evm-gateway/internal/blocksync"
@@ -27,6 +30,15 @@ type Syncer struct {
 	db      dbm.DB
 	indexer TxIndexer
 	status  *syncstatus.Tracker
+}
+
+type ResyncStats struct {
+	BlocksSynced   int64
+	UniqueTxnsSeen int64
+}
+
+type txIndexerWithStats interface {
+	IndexBlockWithStats(block *cmtypes.Block, txResults []*abci.ExecTxResult) (BlockIndexStats, error)
 }
 
 func NewSyncer(cfg config.Config, logger *slog.Logger, client syncClient, db dbm.DB, indexer TxIndexer, status *syncstatus.Tracker) *Syncer {
@@ -122,21 +134,7 @@ func (s *Syncer) Run(ctx context.Context) error {
 			s.status.StartSegment("gap", gap.Start, &end)
 		}
 		err := rangeSyncer.SyncRange(ctx, gap.Start, gap.End, func(block blocksync.NewBlockData) error {
-			if block.Skipped {
-				if s.status != nil {
-					s.status.MarkBlock(block.Height, false)
-				}
-				pace.Add(1)
-				return nil
-			}
-			if err := s.indexer.IndexBlock(block.Block, block.BlockResults.TxResults); err != nil {
-				s.logger.Error("failed to index block", "height", block.Height, "error", err)
-			}
-			if s.status != nil {
-				s.status.MarkBlock(block.Height, true)
-			}
-			pace.Add(1)
-			return nil
+			return s.handleSyncedBlock(block, pace)
 		})
 		if err != nil {
 			return err
@@ -155,22 +153,50 @@ func (s *Syncer) Run(ctx context.Context) error {
 
 	forwardSyncer := blocksync.NewSyncer(s.client, s.logger, s.cfg.FetchJobs, false, false)
 	return forwardSyncer.SyncForward(ctx, lastSynced+1, func(block blocksync.NewBlockData) error {
-		if block.Skipped {
-			if s.status != nil {
-				s.status.MarkBlock(block.Height, false)
+		return s.handleSyncedBlock(block, pace)
+	})
+}
+
+// Resync reindexes the requested block ranges and exits once complete.
+func (s *Syncer) Resync(ctx context.Context, targets []BlockRange) (ResyncStats, error) {
+	var stats ResyncStats
+
+	if s.indexer == nil {
+		return stats, errors.New("tx indexer not configured")
+	}
+	if len(targets) == 0 {
+		return stats, errors.New("no resync targets provided")
+	}
+
+	targets = NormalizeRanges(targets)
+
+	pace := blocksync.NewPace("blocks resynced", 1*time.Minute, s.logger)
+	defer pace.Stop()
+
+	rangeSyncer := blocksync.NewSyncer(s.client, s.logger, s.cfg.FetchJobs, false, false)
+	for _, target := range targets {
+		s.logger.Info("resyncing segment", "start", target.Start, "end", target.End)
+
+		err := rangeSyncer.SyncRange(ctx, target.Start, target.End, func(block blocksync.NewBlockData) error {
+			if block.Skipped {
+				return fmt.Errorf("block %d was skipped during resync", block.Height)
 			}
+			indexStats, err := s.indexBlockForResync(block.Block, block.BlockResults.TxResults)
+			if err != nil {
+				return fmt.Errorf("index block %d: %w", block.Height, err)
+			}
+
+			stats.BlocksSynced++
+			stats.UniqueTxnsSeen += indexStats.IndexedEthTxs
 			pace.Add(1)
 			return nil
+		})
+		if err != nil {
+			return stats, err
 		}
-		if err := s.indexer.IndexBlock(block.Block, block.BlockResults.TxResults); err != nil {
-			s.logger.Error("failed to index block", "height", block.Height, "error", err)
-		}
-		if s.status != nil {
-			s.status.MarkBlock(block.Height, true)
-		}
-		pace.Add(1)
-		return nil
-	})
+	}
+
+	return stats, nil
 }
 
 func (s *Syncer) resolveEarliestBlock(ctx context.Context, requested int64) (int64, error) {
@@ -203,4 +229,32 @@ func toStatusRanges(ranges []BlockRange) []syncstatus.Range {
 		out = append(out, syncstatus.Range{Start: r.Start, End: r.End})
 	}
 	return out
+}
+
+func (s *Syncer) handleSyncedBlock(block blocksync.NewBlockData, pace *blocksync.Pace) error {
+	if block.Skipped {
+		if s.status != nil {
+			s.status.MarkBlock(block.Height, false)
+		}
+		pace.Add(1)
+		return nil
+	}
+	if err := s.indexer.IndexBlock(block.Block, block.BlockResults.TxResults); err != nil {
+		s.logger.Error("failed to index block", "height", block.Height, "error", err)
+	}
+	if s.status != nil {
+		s.status.MarkBlock(block.Height, true)
+	}
+	pace.Add(1)
+	return nil
+}
+
+func (s *Syncer) indexBlockForResync(block *cmtypes.Block, txResults []*abci.ExecTxResult) (BlockIndexStats, error) {
+	if withStats, ok := s.indexer.(txIndexerWithStats); ok {
+		return withStats.IndexBlockWithStats(block, txResults)
+	}
+	if err := s.indexer.IndexBlock(block, txResults); err != nil {
+		return BlockIndexStats{}, err
+	}
+	return BlockIndexStats{}, nil
 }

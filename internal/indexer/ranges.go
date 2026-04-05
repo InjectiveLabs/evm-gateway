@@ -138,3 +138,45 @@ func ComputeGaps(start, end int64, ranges []BlockRange) []BlockRange {
 
 	return gaps
 }
+
+// NormalizeRanges sorts ranges and merges overlapping or adjacent segments.
+func NormalizeRanges(ranges []BlockRange) []BlockRange {
+	if len(ranges) == 0 {
+		return nil
+	}
+
+	out := append([]BlockRange(nil), ranges...)
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Start == out[j].Start {
+			return out[i].End < out[j].End
+		}
+		return out[i].Start < out[j].Start
+	})
+
+	merged := make([]BlockRange, 0, len(out))
+	current := out[0]
+
+	for _, next := range out[1:] {
+		if next.Start <= current.End+1 {
+			if next.End > current.End {
+				current.End = next.End
+			}
+			continue
+		}
+
+		merged = append(merged, current)
+		current = next
+	}
+
+	merged = append(merged, current)
+	return merged
+}
+
+// CountBlocks returns the total number of block heights covered by ranges.
+func CountBlocks(ranges []BlockRange) int64 {
+	var total int64
+	for _, r := range ranges {
+		total += r.End - r.Start + 1
+	}
+	return total
+}

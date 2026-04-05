@@ -70,8 +70,8 @@ func NewSyncer(client BlockClient, logger *slog.Logger, jobs int, allowGaps, fet
 
 // SyncRange syncs blocks from start to end, inclusive, in ascending order.
 func (s *Syncer) SyncRange(ctx context.Context, start, end int64, handler Handler) error {
-	if start <= 0 {
-		start = 1
+	if start < 0 {
+		return fmt.Errorf("negative start block %d", start)
 	}
 	if end < start {
 		return nil
@@ -108,8 +108,8 @@ func (s *Syncer) SyncRange(ctx context.Context, start, end int64, handler Handle
 
 // SyncForward syncs blocks from start forward until the context is canceled.
 func (s *Syncer) SyncForward(ctx context.Context, start int64, handler Handler) error {
-	if start <= 0 {
-		start = 1
+	if start < 0 {
+		return fmt.Errorf("negative start block %d", start)
 	}
 
 	getter := newBlockGetter(ctx, s.client, s.logger, uint64(start), s.jobs, BlockGetterDirectionForward, false, s.fetchValidators)
@@ -309,10 +309,13 @@ func (b *blockGetter) pullBlocks() {
 
 				newBlock, err := b.fetchBlockByNum(b.ctx, height)
 				if err != nil {
+					if errors.Is(err, context.Canceled) || b.isDone() {
+						return
+					}
 					if errors.Is(err, ErrBlockUnavailable) && b.allowGaps {
 						newBlock = NewBlockData{Height: int64(height), Skipped: true}
 					} else {
-						jobLog.Warn("failed to fully fetch block, retry in 1s", "error", err)
+						b.logFetchFailure(jobLog, err)
 						time.Sleep(1 * time.Second)
 						continue
 					}
@@ -447,6 +450,17 @@ func (b *blockGetter) fetchWithRetry(ctx context.Context, fn func() error) error
 		}
 	}
 	return nil
+}
+
+func (b *blockGetter) logFetchFailure(logger *slog.Logger, err error) {
+	if err == nil || errors.Is(err, context.Canceled) {
+		return
+	}
+	if b.allowGaps {
+		logger.Warn("failed to fetch block after retries", "error", err)
+		return
+	}
+	logger.Error("failed to fetch block after retries", "error", err)
 }
 
 func isNotFound(err error) bool {
