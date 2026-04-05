@@ -1,12 +1,14 @@
 package types
 
 import (
+	"context"
 	"fmt"
 
 	abci "github.com/cometbft/cometbft/abci/types"
 	crypto "github.com/cometbft/cometbft/api/cometbft/crypto/v1"
 	"github.com/cosmos/cosmos-sdk/client"
 	"github.com/cosmos/cosmos-sdk/types/tx"
+	"upd.dev/xlab/gotracer"
 
 	evmtypes "github.com/InjectiveLabs/sdk-go/chain/evm/types"
 	txfeestypes "github.com/InjectiveLabs/sdk-go/chain/txfees/types"
@@ -21,6 +23,8 @@ type QueryClient struct {
 	evmtypes.QueryClient
 	TxFeesQueryClient txfeestypes.QueryClient
 }
+
+var queryClientTraceTag = gotracer.NewTag("component", "rpc_query_client")
 
 // NewQueryClient creates a new gRPC query client
 func NewQueryClient(clientCtx client.Context) *QueryClient {
@@ -37,6 +41,14 @@ func NewQueryClient(clientCtx client.Context) *QueryClient {
 // proof. Proof queries at height less than or equal to 2 are not supported.
 // Issue: https://github.com/cosmos/cosmos-sdk/issues/6567
 func (QueryClient) GetProof(clientCtx client.Context, storeKey string, key []byte) ([]byte, *crypto.ProofOps, error) {
+	ctx := clientCtx.CmdContext
+	if ctx != nil {
+		defer gotracer.Trace(&ctx, queryClientTraceTag)()
+	} else {
+		ctx = context.Background()
+		defer gotracer.Traceless(&ctx, queryClientTraceTag)()
+	}
+
 	height := clientCtx.Height
 	// ABCI queries at height less than or equal to 2 are not supported.
 	// Base app does not support queries for height less than or equal to 1.

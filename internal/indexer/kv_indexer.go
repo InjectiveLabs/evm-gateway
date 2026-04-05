@@ -413,6 +413,9 @@ func TxIndexKey(blockNumber int64, txIndex int32) []byte {
 
 // LoadLastBlock returns the latest indexed block number, returns -1 if db is empty
 func LoadLastBlock(db dbm.DB) (int64, error) {
+	ctx := context.Background()
+	defer gotracer.Traceless(&ctx, txIndexerTraceTag)()
+
 	itMeta, err := db.ReverseIterator([]byte{KeyPrefixBlockMeta}, []byte{KeyPrefixBlockMeta + 1})
 	if err != nil {
 		return 0, errorsmod.Wrap(err, "LoadLastBlock")
@@ -435,6 +438,9 @@ func LoadLastBlock(db dbm.DB) (int64, error) {
 
 // LoadFirstBlock loads the first indexed block, returns -1 if db is empty
 func LoadFirstBlock(db dbm.DB) (int64, error) {
+	ctx := context.Background()
+	defer gotracer.Traceless(&ctx, txIndexerTraceTag)()
+
 	itMeta, err := db.Iterator([]byte{KeyPrefixBlockMeta}, []byte{KeyPrefixBlockMeta + 1})
 	if err != nil {
 		return 0, errorsmod.Wrap(err, "LoadFirstBlock")

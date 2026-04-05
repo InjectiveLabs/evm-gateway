@@ -32,14 +32,9 @@ func runStart(opts *gatewayCLIOptions) error {
 
 	initSDKConfig()
 
-	statsdClient, err := telemetry.InitStatsd(cfg.Statsd, cfg.Env, logger)
-	if err != nil {
-		logger.Error("statsd init failed", "error", err)
-	}
-
 	telemetry.InitTracing(cfg.Tracing, cfg.Env, logger)
 
-	if err := gatewayapp.Run(cfg, logger, statsdClient); err != nil {
+	if err := gatewayapp.Run(cfg, logger); err != nil {
 		logger.Error("evm-gateway failed", "error", err)
 		return err
 	}
@@ -61,9 +56,6 @@ func buildConfig(opts *gatewayCLIOptions) (config.Config, error) {
 	cfg.JSONRPC.Address = *opts.rpcAddr
 	cfg.JSONRPC.WsAddress = *opts.wsAddr
 	cfg.JSONRPC.API = parseCSV(*opts.rpcAPI, cfg.JSONRPC.API)
-	cfg.Statsd.Enabled = *opts.statsdEnabled
-	cfg.Statsd.Addr = *opts.statsdAddr
-	cfg.Statsd.Prefix = *opts.statsdPrefix
 	cfg.Tracing.Enabled = *opts.tracingEnabled
 	cfg.Tracing.CollectorDSN = *opts.tracingDSN
 

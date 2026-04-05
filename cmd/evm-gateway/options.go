@@ -20,10 +20,6 @@ type gatewayCLIOptions struct {
 	wsAddr  *string
 	rpcAPI  *string
 
-	statsdEnabled *bool
-	statsdAddr    *string
-	statsdPrefix  *string
-
 	tracingEnabled *bool
 	tracingDSN     *string
 }

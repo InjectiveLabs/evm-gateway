@@ -20,10 +20,7 @@ func TestPaceStopFlushesFinalProgressAtInfo(t *testing.T) {
 	pace.Stop()
 
 	out := buf.String()
-	if !strings.Contains(out, "pace final") {
+	if !strings.Contains(out, "blocks synced [done]") {
 		t.Fatalf("expected final pace log, got %q", out)
-	}
-	if !strings.Contains(out, "label=\"blocks synced\"") {
-		t.Fatalf("expected pace label in log, got %q", out)
 	}
 }

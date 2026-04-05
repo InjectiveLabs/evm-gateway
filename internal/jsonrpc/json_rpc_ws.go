@@ -24,6 +24,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
 	"github.com/pkg/errors"
+	"upd.dev/xlab/gotracer"
 
 	"github.com/InjectiveLabs/evm-gateway/internal/config"
 )
@@ -303,7 +304,10 @@ func (s *websocketsServer) getParamsAndCheckValid(msg map[string]interface{}, ws
 // tcpGetAndSendResponse connects to the rest-server over tcp, posts a JSON-RPC request, and sends the response
 // to the client over websockets
 func (s *websocketsServer) tcpGetAndSendResponse(wsConn *wsConn, mb []byte) error {
-	req, err := http.NewRequestWithContext(context.Background(), "POST", "http://"+s.rpcAddr, bytes.NewBuffer(mb))
+	ctx := context.Background()
+	defer gotracer.Traceless(&ctx, jsonRPCTraceTag)()
+
+	req, err := http.NewRequestWithContext(ctx, "POST", "http://"+s.rpcAddr, bytes.NewBuffer(mb))
 	if err != nil {
 		return errors.Wrap(err, "Could not build request")
 	}

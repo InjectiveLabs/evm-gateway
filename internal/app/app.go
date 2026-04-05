@@ -36,22 +36,12 @@ import (
 	"github.com/InjectiveLabs/evm-gateway/internal/syncstatus"
 )
 
-type StatsdCloser interface {
-	Close()
-}
-
 var appTraceTag = gotracer.NewTag("component", "app")
 
 // Run starts the evm-gateway services and blocks until shutdown.
-func Run(cfg config.Config, logger *slog.Logger, statsd StatsdCloser) error {
+func Run(cfg config.Config, logger *slog.Logger) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-
-	if statsd != nil {
-		defer func() {
-			statsd.Close()
-		}()
-	}
 
 	dataDir, err := expandHome(cfg.DataDir)
 	if err != nil {

@@ -34,7 +34,6 @@ type Config struct {
 	MinGasPrices string
 
 	JSONRPC  JSONRPCConfig
-	Statsd   StatsdConfig
 	Tracing  TracingConfig
 	Shutdown ShutdownConfig
 }
@@ -57,12 +56,6 @@ type JSONRPCConfig struct {
 	AllowUnprotectedTx bool
 	MaxOpenConnections int
 	ReturnDataLimit    int64
-}
-
-type StatsdConfig struct {
-	Enabled bool
-	Prefix  string
-	Addr    string
 }
 
 type TracingConfig struct {
@@ -113,11 +106,6 @@ func DefaultConfig() Config {
 			AllowUnprotectedTx: false,
 			MaxOpenConnections: 0,
 			ReturnDataLimit:    512000,
-		},
-		Statsd: StatsdConfig{
-			Enabled: false,
-			Prefix:  "web3gateway",
-			Addr:    "localhost:8125",
 		},
 		Tracing: TracingConfig{
 			Enabled:            false,
@@ -271,10 +259,6 @@ func applyEnvOverrides(cfg *Config) {
 	cfg.JSONRPC.AllowUnprotectedTx = getEnvBool("JSONRPC_ALLOW_UNPROTECTED_TXS", cfg.JSONRPC.AllowUnprotectedTx)
 	cfg.JSONRPC.MaxOpenConnections = getEnvInt("JSONRPC_MAX_OPEN_CONNECTIONS", cfg.JSONRPC.MaxOpenConnections)
 	cfg.JSONRPC.ReturnDataLimit = getEnvInt64("JSONRPC_RETURN_DATA_LIMIT", cfg.JSONRPC.ReturnDataLimit)
-
-	cfg.Statsd.Enabled = getEnvBool("STATSD_ENABLED", cfg.Statsd.Enabled)
-	cfg.Statsd.Prefix = getEnvString("STATSD_PREFIX", cfg.Statsd.Prefix)
-	cfg.Statsd.Addr = getEnvString("STATSD_ADDR", cfg.Statsd.Addr)
 
 	cfg.Tracing.Enabled = getEnvBool("GOTRACER_ENABLED", cfg.Tracing.Enabled)
 	cfg.Tracing.CollectorDSN = getEnvString("GOTRACER_COLLECTOR_DSN", cfg.Tracing.CollectorDSN)
