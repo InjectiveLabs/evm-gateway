@@ -28,9 +28,13 @@ func (b *Backend) TraceTransaction(hash common.Hash, config *rpctypes.TraceConfi
 	}
 
 	block, err := b.TendermintBlockByNumber(rpctypes.BlockNumber(transaction.Height))
-	if err != nil || block == nil {
+	if err != nil {
 		b.logger.Debug("block not found", "height", transaction.Height)
-		return nil, fmt.Errorf("block not found, err: %w", err)
+		return nil, errors.Wrap(err, "block not found")
+	}
+	if block == nil {
+		b.logger.Debug("block not found", "height", transaction.Height)
+		return nil, errors.New("block not found")
 	}
 
 	// check tx index is not out of bound

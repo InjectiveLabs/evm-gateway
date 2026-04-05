@@ -17,6 +17,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	pkgerrors "github.com/pkg/errors"
 )
 
 const (
@@ -491,7 +493,10 @@ func startGateway(t *testing.T, cfg gatewayStartConfig) *gatewayProcess {
 	waitForCondition(t, cfg.WaitTimeout, func() (bool, error) {
 		select {
 		case err := <-done:
-			return false, fmt.Errorf("gateway exited early: %w", err)
+			if err != nil {
+				return false, pkgerrors.Wrap(err, "gateway exited early")
+			}
+			return false, errors.New("gateway exited early")
 		default:
 		}
 		_, err := proc.Status(context.Background())

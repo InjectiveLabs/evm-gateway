@@ -11,6 +11,7 @@ import (
 	coretypes "github.com/cometbft/cometbft/rpc/core/types"
 	cmtypes "github.com/cometbft/cometbft/types"
 	dbm "github.com/cosmos/cosmos-db"
+	pkgerrors "github.com/pkg/errors"
 
 	"github.com/InjectiveLabs/evm-gateway/internal/blocksync"
 	"github.com/InjectiveLabs/evm-gateway/internal/config"
@@ -41,10 +42,12 @@ type txIndexerWithStats interface {
 	IndexBlockWithStats(block *cmtypes.Block, txResults []*abci.ExecTxResult) (BlockIndexStats, error)
 }
 
+const paceInterval = 10 * time.Second
+
 func NewSyncer(cfg config.Config, logger *slog.Logger, client syncClient, db dbm.DB, indexer TxIndexer, status *syncstatus.Tracker) *Syncer {
 	return &Syncer{
 		cfg:     cfg,
-		logger:  logger.With("module", "evm-indexer"),
+		logger:  logger.With("module", "indexer"),
 		client:  client,
 		db:      db,
 		indexer: indexer,
@@ -123,12 +126,10 @@ func (s *Syncer) Run(ctx context.Context) error {
 		}
 	}
 
-	pace := blocksync.NewPace("blocks synced", 1*time.Minute, s.logger)
-	defer pace.Stop()
-
 	rangeSyncer := blocksync.NewSyncer(s.client, s.logger, s.cfg.FetchJobs, s.cfg.AllowGaps, false)
 	for _, gap := range gaps {
 		s.logger.Info("syncing gap", "start", gap.Start, "end", gap.End)
+		pace := blocksync.NewPace("blocks synced", paceInterval, s.logger.With("sync_queue", "gap"))
 		if s.status != nil {
 			end := gap.End
 			s.status.StartSegment("gap", gap.Start, &end)
@@ -136,6 +137,7 @@ func (s *Syncer) Run(ctx context.Context) error {
 		err := rangeSyncer.SyncRange(ctx, gap.Start, gap.End, func(block blocksync.NewBlockData) error {
 			return s.handleSyncedBlock(block, pace)
 		})
+		pace.Stop()
 		if err != nil {
 			return err
 		}
@@ -150,6 +152,9 @@ func (s *Syncer) Run(ctx context.Context) error {
 		s.status.SetPhase("forward_sync")
 		s.status.StartSegment("forward", lastSynced+1, nil)
 	}
+
+	pace := blocksync.NewPace("blocks synced", paceInterval, s.logger.With("sync_queue", "tip"))
+	defer pace.Stop()
 
 	forwardSyncer := blocksync.NewSyncer(s.client, s.logger, s.cfg.FetchJobs, false, false)
 	return forwardSyncer.SyncForward(ctx, lastSynced+1, func(block blocksync.NewBlockData) error {
@@ -170,12 +175,10 @@ func (s *Syncer) Resync(ctx context.Context, targets []BlockRange) (ResyncStats,
 
 	targets = NormalizeRanges(targets)
 
-	pace := blocksync.NewPace("blocks resynced", 1*time.Minute, s.logger)
-	defer pace.Stop()
-
 	rangeSyncer := blocksync.NewSyncer(s.client, s.logger, s.cfg.FetchJobs, false, false)
 	for _, target := range targets {
 		s.logger.Info("resyncing segment", "start", target.Start, "end", target.End)
+		pace := blocksync.NewPace("blocks resynced", paceInterval, s.logger.With("sync_queue", "resync"))
 
 		err := rangeSyncer.SyncRange(ctx, target.Start, target.End, func(block blocksync.NewBlockData) error {
 			if block.Skipped {
@@ -183,7 +186,7 @@ func (s *Syncer) Resync(ctx context.Context, targets []BlockRange) (ResyncStats,
 			}
 			indexStats, err := s.indexBlockForResync(block.Block, block.BlockResults.TxResults)
 			if err != nil {
-				return fmt.Errorf("index block %d: %w", block.Height, err)
+				return pkgerrors.Wrapf(err, "index block %d", block.Height)
 			}
 
 			stats.BlocksSynced++
@@ -191,6 +194,7 @@ func (s *Syncer) Resync(ctx context.Context, targets []BlockRange) (ResyncStats,
 			pace.Add(1)
 			return nil
 		})
+		pace.Stop()
 		if err != nil {
 			return stats, err
 		}
@@ -210,7 +214,7 @@ func (s *Syncer) resolveEarliestBlock(ctx context.Context, requested int64) (int
 
 	chainEarliest, ok := blocksync.LowestAvailableHeight(err)
 	if !ok {
-		return 0, fmt.Errorf("validate earliest block %d: %w", requested, err)
+		return 0, pkgerrors.Wrapf(err, "validate earliest block %d", requested)
 	}
 	if !s.cfg.AllowGaps {
 		return 0, fmt.Errorf("earliest block %d before chain earliest %d", requested, chainEarliest)

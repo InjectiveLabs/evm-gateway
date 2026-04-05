@@ -39,7 +39,7 @@ func (b *Backend) BlockNumber() (hexutil.Uint64, error) {
 
 	height, err := strconv.ParseUint(blockHeightHeader[0], 10, 64)
 	if err != nil {
-		return 0, fmt.Errorf("failed to parse block height: %w", err)
+		return 0, errors.Wrap(err, "failed to parse block height")
 	}
 
 	return hexutil.Uint64(height), nil

@@ -27,8 +27,11 @@ func (b *Backend) GetTxHashByEthHash(ethHash common.Hash) (common.Hash, error) {
 	}
 
 	block, err := b.TendermintBlockByNumber(rpctypes.BlockNumber(res.Height))
-	if err != nil || block == nil {
-		return common.Hash{}, fmt.Errorf("block not found, err: %w", err)
+	if err != nil {
+		return common.Hash{}, errors.Wrap(err, "block not found")
+	}
+	if block == nil {
+		return common.Hash{}, errors.New("block not found")
 	}
 
 	bftHash := block.Block.Txs[res.TxIndex].Hash()
@@ -186,7 +189,7 @@ func (b *Backend) GetTransactionReceipt(hash common.Hash) (map[string]interface{
 	tx, err := b.clientCtx.TxConfig.TxDecoder()(resBlock.Block.Txs[res.TxIndex])
 	if err != nil {
 		b.logger.Warn("decoding failed", "error", err.Error())
-		return nil, fmt.Errorf("failed to decode tx: %w", err)
+		return nil, errors.Wrap(err, "failed to decode tx")
 	}
 	ethMsg := tx.GetMsgs()[res.MsgIndex].(*evmtypes.MsgEthereumTx)
 

@@ -104,14 +104,14 @@ func (b *Backend) FeeHistory(
 	rewardPercentiles []float64, // percentiles to fetch reward
 ) (*rpctypes.FeeHistoryResult, error) {
 	if len(rewardPercentiles) > 100 {
-		return nil, fmt.Errorf("%w: exceed max length", errInvalidPercentile)
+		return nil, errors.Wrap(errInvalidPercentile, "exceed max length")
 	}
 	for i, p := range rewardPercentiles {
 		if p < 0 || p > 100 {
-			return nil, fmt.Errorf("%w: %f", errInvalidPercentile, p)
+			return nil, errors.Wrapf(errInvalidPercentile, "%f", p)
 		}
 		if i > 0 && p <= rewardPercentiles[i-1] {
-			return nil, fmt.Errorf("%w: #%d:%f > #%d:%f", errInvalidPercentile, i-1, rewardPercentiles[i-1], i, p)
+			return nil, errors.Wrapf(errInvalidPercentile, "#%d:%f > #%d:%f", i-1, rewardPercentiles[i-1], i, p)
 		}
 	}
 	blockNumber, err := b.BlockNumber()
@@ -122,7 +122,7 @@ func (b *Backend) FeeHistory(
 	if blockEnd < 0 {
 		blockEnd = int64(blockNumber)
 	} else if int64(blockNumber) < blockEnd {
-		return nil, fmt.Errorf("%w: requested %d, head %d", errRequestBeyondHead, blockEnd, int64(blockNumber))
+		return nil, errors.Wrapf(errRequestBeyondHead, "requested %d, head %d", blockEnd, int64(blockNumber))
 	}
 
 	blocks := int64(userBlockCount)

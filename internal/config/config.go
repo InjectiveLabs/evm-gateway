@@ -11,6 +11,7 @@ import (
 	"time"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	pkgerrors "github.com/pkg/errors"
 )
 
 const envPrefix = "WEB3INJ_"
@@ -204,7 +205,7 @@ func loadEnvFileIfExists(path string) error {
 func loadEnvFile(path string) error {
 	file, err := os.Open(path)
 	if err != nil {
-		return fmt.Errorf("read env file: %w", err)
+		return pkgerrors.Wrap(err, "read env file")
 	}
 	defer file.Close()
 
@@ -226,12 +227,12 @@ func loadEnvFile(path string) error {
 			continue
 		}
 		if err := os.Setenv(key, value); err != nil {
-			return fmt.Errorf("set env %s: %w", key, err)
+			return pkgerrors.Wrapf(err, "set env %s", key)
 		}
 	}
 
 	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("scan env file: %w", err)
+		return pkgerrors.Wrap(err, "scan env file")
 	}
 	return nil
 }

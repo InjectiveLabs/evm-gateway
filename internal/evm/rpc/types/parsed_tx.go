@@ -14,6 +14,7 @@ import (
 	cmrpctypes "github.com/cometbft/cometbft/rpc/core/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/ethereum/go-ethereum/common"
+	pkgerrors "github.com/pkg/errors"
 )
 
 // ParsedTx is the tx infos parsed from events (success) or log field (failure).
@@ -95,7 +96,7 @@ func ParseTxResult(result *abci.ExecTxResult, tx sdk.Tx) (*ParsedTxs, error) {
 func ParseTxIndexerResult(txResult *cmrpctypes.ResultTx, tx sdk.Tx, getter func(*ParsedTxs) *ParsedTx) (*chaintypes.TxResult, error) {
 	txs, err := ParseTxResult(&txResult.TxResult, tx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse tx events: block %d, index %d, %w", txResult.Height, txResult.Index, err)
+		return nil, pkgerrors.Wrapf(err, "failed to parse tx events: block %d, index %d", txResult.Height, txResult.Index)
 	}
 
 	parsedTx := getter(txs)

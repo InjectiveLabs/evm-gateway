@@ -9,6 +9,7 @@ import (
 	gatewayapp "github.com/InjectiveLabs/evm-gateway/internal/app"
 	"github.com/InjectiveLabs/evm-gateway/internal/indexer"
 	"github.com/InjectiveLabs/evm-gateway/internal/logging"
+	"github.com/pkg/errors"
 )
 
 var resyncRunner = runResync
@@ -71,7 +72,7 @@ func parseResyncTarget(raw string) (indexer.BlockRange, error) {
 	if !strings.Contains(raw, ":") {
 		height, err := parseResyncHeight(raw)
 		if err != nil {
-			return indexer.BlockRange{}, fmt.Errorf("parse resync target %q: %w", raw, err)
+			return indexer.BlockRange{}, errors.Wrapf(err, "parse resync target %q", raw)
 		}
 		return indexer.BlockRange{Start: height, End: height}, nil
 	}
@@ -83,11 +84,11 @@ func parseResyncTarget(raw string) (indexer.BlockRange, error) {
 	startRaw, endRaw, _ := strings.Cut(raw, ":")
 	start, err := parseResyncHeight(startRaw)
 	if err != nil {
-		return indexer.BlockRange{}, fmt.Errorf("parse resync target %q: %w", raw, err)
+		return indexer.BlockRange{}, errors.Wrapf(err, "parse resync target %q", raw)
 	}
 	end, err := parseResyncHeight(endRaw)
 	if err != nil {
-		return indexer.BlockRange{}, fmt.Errorf("parse resync target %q: %w", raw, err)
+		return indexer.BlockRange{}, errors.Wrapf(err, "parse resync target %q", raw)
 	}
 	if start > end {
 		return indexer.BlockRange{}, fmt.Errorf("parse resync target %q: start block %d greater than end block %d", raw, start, end)

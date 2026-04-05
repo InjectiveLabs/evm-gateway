@@ -22,6 +22,7 @@ import (
 	"github.com/cosmos/cosmos-sdk/client/flags"
 	"github.com/cosmos/cosmos-sdk/codec"
 	codectypes "github.com/cosmos/cosmos-sdk/codec/types"
+	pkgerrors "github.com/pkg/errors"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -198,7 +199,7 @@ type cometStatusClient interface {
 func buildClientContext(ctx context.Context, cfg *config.Config, dataDir string, logger *slog.Logger) (client.Context, *rpchttp.HTTP, *grpc.ClientConn, error) {
 	clientCtx, err := chainclient.NewClientContext("", "", nil)
 	if err != nil {
-		return client.Context{}, nil, nil, fmt.Errorf("init injective client context: %w", err)
+		return client.Context{}, nil, nil, pkgerrors.Wrap(err, "init injective client context")
 	}
 	clientCtx = clientCtx.
 		WithCmdContext(ctx).
@@ -208,7 +209,7 @@ func buildClientContext(ctx context.Context, cfg *config.Config, dataDir string,
 
 	rpcClient, err := rpchttp.NewWithTimeout(cfg.CometRPC, 10)
 	if err != nil {
-		return client.Context{}, nil, nil, fmt.Errorf("init comet rpc client: %w", err)
+		return client.Context{}, nil, nil, pkgerrors.Wrap(err, "init comet rpc client")
 	}
 	clientCtx = clientCtx.WithClient(rpcClient)
 
@@ -234,7 +235,7 @@ func buildClientContext(ctx context.Context, cfg *config.Config, dataDir string,
 func cometChainID(ctx context.Context, rpcClient cometStatusClient) (string, error) {
 	status, err := rpcClient.Status(ctx)
 	if err != nil {
-		return "", fmt.Errorf("fetch node status: %w", err)
+		return "", pkgerrors.Wrap(err, "fetch node status")
 	}
 
 	chainID := strings.TrimSpace(status.NodeInfo.Network)

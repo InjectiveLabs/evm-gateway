@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"sync"
 
+	"log/slog"
+
 	rpcfilters "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/namespaces/ethereum/eth/filters"
 	rpcstream "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/stream"
 	"github.com/cosmos/cosmos-sdk/client"
@@ -22,7 +24,6 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
 	"github.com/pkg/errors"
-	"log/slog"
 
 	"github.com/InjectiveLabs/evm-gateway/internal/config"
 )
@@ -339,7 +340,7 @@ type pubSubAPI struct {
 
 // newPubSubAPI creates an instance of the ethereum PubSub API.
 func newPubSubAPI(clientCtx client.Context, logger *slog.Logger, stream *rpcstream.RPCStream) *pubSubAPI {
-	logger = logger.With("module", "websocket-client")
+	logger = logger.With("module", "ws-client")
 	return &pubSubAPI{
 		events:    stream,
 		logger:    logger,
@@ -514,7 +515,7 @@ func (api *pubSubAPI) subscribeLogs(wsConn *wsConn, subID rpc.ID, extra interfac
 	}
 
 	if err := rpcfilters.ValidateFilterCriteria(crit); err != nil {
-		return nil, fmt.Errorf("invalid filter criteria: %w", err)
+		return nil, errors.Wrap(err, "invalid filter criteria")
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

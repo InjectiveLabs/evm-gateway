@@ -14,6 +14,7 @@ import (
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	ethfilters "github.com/ethereum/go-ethereum/eth/filters"
+	"github.com/pkg/errors"
 )
 
 // BloomIV represents the bit indexes and value inside the bloom filter that belong
@@ -94,7 +95,7 @@ func (f *Filter) Logs(_ context.Context, logLimit int, blockLimit int64) ([]*eth
 	if f.criteria.BlockHash != nil && *f.criteria.BlockHash != (common.Hash{}) {
 		resBlock, err := f.backend.TendermintBlockByHash(*f.criteria.BlockHash)
 		if err != nil {
-			return nil, fmt.Errorf("failed to fetch header by hash %s: %w", f.criteria.BlockHash, err)
+			return nil, errors.Wrapf(err, "failed to fetch header by hash %s", f.criteria.BlockHash)
 		}
 		if resBlock == nil || resBlock.Block == nil {
 			return []*ethtypes.Log{}, nil
@@ -115,7 +116,7 @@ func (f *Filter) Logs(_ context.Context, logLimit int, blockLimit int64) ([]*eth
 	// Figure out the limits of the filter range
 	header, err := f.backend.HeaderByNumber(types.EthLatestBlockNumber)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch header by number (latest): %w", err)
+		return nil, errors.Wrap(err, "failed to fetch header by number (latest)")
 	}
 
 	if header == nil || header.Number == nil {

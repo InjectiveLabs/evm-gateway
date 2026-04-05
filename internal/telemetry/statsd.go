@@ -1,10 +1,10 @@
 package telemetry
 
 import (
-	"fmt"
 	"log/slog"
 
 	"github.com/alexcesaro/statsd"
+	"github.com/pkg/errors"
 
 	"github.com/InjectiveLabs/evm-gateway/internal/config"
 )
@@ -34,7 +34,7 @@ func InitStatsd(cfg config.StatsdConfig, env string, logger *slog.Logger) (Stats
 		statsd.Tags("env", env),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("statsd init: %w", err)
+		return nil, errors.Wrap(err, "statsd init")
 	}
 
 	logger.Info("statsd enabled", "addr", cfg.Addr, "prefix", prefix)
