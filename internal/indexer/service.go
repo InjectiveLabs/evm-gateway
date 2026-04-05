@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"time"
+	"upd.dev/xlab/gotracer"
 
 	abci "github.com/cometbft/cometbft/abci/types"
 	coretypes "github.com/cometbft/cometbft/rpc/core/types"
@@ -43,6 +44,8 @@ type txIndexerWithStats interface {
 }
 
 const paceInterval = 10 * time.Second
+
+var txIndexerSyncerTraceTag = gotracer.NewTag("component", "tx_indexer_syncer")
 
 func NewSyncer(cfg config.Config, logger *slog.Logger, client syncClient, db dbm.DB, indexer TxIndexer, status *syncstatus.Tracker) *Syncer {
 	return &Syncer{
@@ -164,6 +167,8 @@ func (s *Syncer) Run(ctx context.Context) error {
 
 // Resync reindexes the requested block ranges and exits once complete.
 func (s *Syncer) Resync(ctx context.Context, targets []BlockRange) (ResyncStats, error) {
+	defer gotracer.Trace(&ctx, txIndexerSyncerTraceTag)()
+
 	var stats ResyncStats
 
 	if s.indexer == nil {
@@ -204,6 +209,8 @@ func (s *Syncer) Resync(ctx context.Context, targets []BlockRange) (ResyncStats,
 }
 
 func (s *Syncer) resolveEarliestBlock(ctx context.Context, requested int64) (int64, error) {
+	defer gotracer.Trace(&ctx, txIndexerSyncerTraceTag)()
+
 	block, err := s.client.Block(ctx, &requested)
 	if err == nil {
 		if block == nil || block.Block == nil {
@@ -236,6 +243,9 @@ func toStatusRanges(ranges []BlockRange) []syncstatus.Range {
 }
 
 func (s *Syncer) handleSyncedBlock(block blocksync.NewBlockData, pace *blocksync.Pace) error {
+	ctx := context.Background()
+	defer gotracer.Traceless(&ctx, txIndexerSyncerTraceTag)()
+
 	if block.Skipped {
 		if s.status != nil {
 			s.status.MarkBlock(block.Height, false)
@@ -254,6 +264,9 @@ func (s *Syncer) handleSyncedBlock(block blocksync.NewBlockData, pace *blocksync
 }
 
 func (s *Syncer) indexBlockForResync(block *cmtypes.Block, txResults []*abci.ExecTxResult) (BlockIndexStats, error) {
+	ctx := context.Background()
+	defer gotracer.Traceless(&ctx, txIndexerSyncerTraceTag)()
+
 	if withStats, ok := s.indexer.(txIndexerWithStats); ok {
 		return withStats.IndexBlockWithStats(block, txResults)
 	}

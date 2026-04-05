@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"upd.dev/xlab/gotracer"
 
 	ctypes "github.com/cometbft/cometbft/rpc/core/types"
 	tmtypes "github.com/cometbft/cometbft/types"
@@ -25,7 +26,10 @@ const (
 
 var ErrBlockUnavailable = errors.New("block not available")
 
-var lowestAvailableHeightRE = regexp.MustCompile(`lowest height is (\d+)`)
+var (
+	lowestAvailableHeightRE = regexp.MustCompile(`lowest height is (\d+)`)
+	blockSyncTraceTag       = gotracer.NewTag("component", "block_sync")
+)
 
 // BlockClient exposes the RPC calls needed for block sync.
 type BlockClient interface {
@@ -70,6 +74,8 @@ func NewSyncer(client BlockClient, logger *slog.Logger, jobs int, allowGaps, fet
 
 // SyncRange syncs blocks from start to end, inclusive, in ascending order.
 func (s *Syncer) SyncRange(ctx context.Context, start, end int64, handler Handler) error {
+	defer gotracer.Trace(&ctx, blockSyncTraceTag)()
+
 	if start < 0 {
 		return fmt.Errorf("negative start block %d", start)
 	}
@@ -345,6 +351,8 @@ func (b *blockGetter) pullBlocks() {
 }
 
 func (b *blockGetter) fetchBlockByNum(ctx context.Context, height uint64) (NewBlockData, error) {
+	defer gotracer.Trace(&ctx, blockSyncTraceTag)()
+
 	blockC := make(chan *ctypes.ResultBlock, 1)
 	blockResultsC := make(chan *ctypes.ResultBlockResults, 1)
 	validatorSetC := make(chan []*tmtypes.Validator, 1)
@@ -429,6 +437,8 @@ func (b *blockGetter) fetchBlockByNum(ctx context.Context, height uint64) (NewBl
 }
 
 func (b *blockGetter) fetchWithRetry(ctx context.Context, fn func() error) error {
+	defer gotracer.Trace(&ctx, blockSyncTraceTag)()
+
 	for attempt := 0; attempt < retryAttempts; attempt++ {
 		if ctx.Err() != nil {
 			return ctx.Err()

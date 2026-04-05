@@ -10,6 +10,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
+	"upd.dev/xlab/gotracer"
 
 	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
 	evmtypes "github.com/InjectiveLabs/sdk-go/chain/evm/types"
@@ -136,6 +137,14 @@ func unmarshalJSON[T any](bz []byte) (T, error) {
 }
 
 func (kv *KVIndexer) GetRPCTransactionByHash(hash common.Hash) (*rpctypes.RPCTransaction, error) {
+	ctx := kv.operationContext()
+	if kv.ctx != nil {
+		defer gotracer.Trace(&ctx, kv.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, kv.baseTraceTags)()
+	}
+	kv = kv.WithContext(ctx).(*KVIndexer)
+
 	bz, err := kv.db.Get(RPCtxHashKey(hash))
 	if err != nil {
 		return nil, errorsmod.Wrapf(err, "GetRPCTransactionByHash %s", hash.Hex())
@@ -152,6 +161,14 @@ func (kv *KVIndexer) GetRPCTransactionByHash(hash common.Hash) (*rpctypes.RPCTra
 }
 
 func (kv *KVIndexer) GetRPCTransactionByBlockAndIndex(blockNumber int64, txIndex int32) (*rpctypes.RPCTransaction, error) {
+	ctx := kv.operationContext()
+	if kv.ctx != nil {
+		defer gotracer.Trace(&ctx, kv.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, kv.baseTraceTags)()
+	}
+	kv = kv.WithContext(ctx).(*KVIndexer)
+
 	hashBz, err := kv.db.Get(RPCtxIndexKey(blockNumber, txIndex))
 	if err != nil {
 		return nil, errorsmod.Wrapf(err, "GetRPCTransactionByBlockAndIndex %d %d", blockNumber, txIndex)
@@ -163,6 +180,14 @@ func (kv *KVIndexer) GetRPCTransactionByBlockAndIndex(blockNumber int64, txIndex
 }
 
 func (kv *KVIndexer) GetReceiptByTxHash(hash common.Hash) (map[string]interface{}, error) {
+	ctx := kv.operationContext()
+	if kv.ctx != nil {
+		defer gotracer.Trace(&ctx, kv.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, kv.baseTraceTags)()
+	}
+	kv = kv.WithContext(ctx).(*KVIndexer)
+
 	bz, err := kv.db.Get(ReceiptKey(hash))
 	if err != nil {
 		return nil, errorsmod.Wrapf(err, "GetReceiptByTxHash %s", hash.Hex())
@@ -179,6 +204,14 @@ func (kv *KVIndexer) GetReceiptByTxHash(hash common.Hash) (map[string]interface{
 }
 
 func (kv *KVIndexer) GetBlockMetaByHeight(height int64) (*CachedBlockMeta, error) {
+	ctx := kv.operationContext()
+	if kv.ctx != nil {
+		defer gotracer.Trace(&ctx, kv.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, kv.baseTraceTags)()
+	}
+	kv = kv.WithContext(ctx).(*KVIndexer)
+
 	bz, err := kv.db.Get(BlockMetaKey(height))
 	if err != nil {
 		return nil, errorsmod.Wrapf(err, "GetBlockMetaByHeight %d", height)
@@ -195,6 +228,14 @@ func (kv *KVIndexer) GetBlockMetaByHeight(height int64) (*CachedBlockMeta, error
 }
 
 func (kv *KVIndexer) GetLogsByBlockHeight(height int64) ([][]*ethtypes.Log, error) {
+	ctx := kv.operationContext()
+	if kv.ctx != nil {
+		defer gotracer.Trace(&ctx, kv.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, kv.baseTraceTags)()
+	}
+	kv = kv.WithContext(ctx).(*KVIndexer)
+
 	bz, err := kv.db.Get(BlockLogsKey(height))
 	if err != nil {
 		return nil, errorsmod.Wrapf(err, "GetLogsByBlockHeight %d", height)
@@ -206,6 +247,14 @@ func (kv *KVIndexer) GetLogsByBlockHeight(height int64) ([][]*ethtypes.Log, erro
 }
 
 func (kv *KVIndexer) GetLogsByBlockHash(hash common.Hash) ([][]*ethtypes.Log, error) {
+	ctx := kv.operationContext()
+	if kv.ctx != nil {
+		defer gotracer.Trace(&ctx, kv.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, kv.baseTraceTags)()
+	}
+	kv = kv.WithContext(ctx).(*KVIndexer)
+
 	bz, err := kv.db.Get(BlockHashKey(hash))
 	if err != nil {
 		return nil, errorsmod.Wrapf(err, "GetLogsByBlockHash %s", hash.Hex())
@@ -218,6 +267,14 @@ func (kv *KVIndexer) GetLogsByBlockHash(hash common.Hash) ([][]*ethtypes.Log, er
 }
 
 func (kv *KVIndexer) IsBlockIndexed(height int64) (bool, error) {
+	ctx := kv.operationContext()
+	if kv.ctx != nil {
+		defer gotracer.Trace(&ctx, kv.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, kv.baseTraceTags)()
+	}
+	kv = kv.WithContext(ctx).(*KVIndexer)
+
 	bz, err := kv.db.Get(BlockMetaKey(height))
 	if err != nil {
 		return false, errorsmod.Wrapf(err, "IsBlockIndexed %d", height)

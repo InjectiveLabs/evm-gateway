@@ -12,6 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/common/math"
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
+	"upd.dev/xlab/gotracer"
 
 	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/backend"
 	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
@@ -28,53 +29,53 @@ type EthereumAPI interface {
 	// Getting Blocks
 	//
 	// Retrieves information from a particular block in the blockchain.
-	BlockNumber() (hexutil.Uint64, error)
-	GetBlockByNumber(ethBlockNum rpctypes.BlockNumber, fullTx bool) (map[string]interface{}, error)
-	GetBlockByHash(hash common.Hash, fullTx bool) (map[string]interface{}, error)
-	GetBlockTransactionCountByHash(hash common.Hash) *hexutil.Uint
-	GetBlockTransactionCountByNumber(blockNum rpctypes.BlockNumber) *hexutil.Uint
+	BlockNumber(ctx context.Context) (hexutil.Uint64, error)
+	GetBlockByNumber(ctx context.Context, ethBlockNum rpctypes.BlockNumber, fullTx bool) (map[string]interface{}, error)
+	GetBlockByHash(ctx context.Context, hash common.Hash, fullTx bool) (map[string]interface{}, error)
+	GetBlockTransactionCountByHash(ctx context.Context, hash common.Hash) *hexutil.Uint
+	GetBlockTransactionCountByNumber(ctx context.Context, blockNum rpctypes.BlockNumber) *hexutil.Uint
 
 	// Reading Transactions
 	//
 	// Retrieves information on the state data for addresses regardless of whether
 	// it is a user or a smart contract.
-	GetTransactionByHash(hash common.Hash) (*rpctypes.RPCTransaction, error)
-	GetTransactionCount(address common.Address, blockNrOrHash rpctypes.BlockNumberOrHash) (*hexutil.Uint64, error)
-	GetTransactionReceipt(hash common.Hash) (map[string]interface{}, error)
-	GetTransactionByBlockHashAndIndex(hash common.Hash, idx hexutil.Uint) (*rpctypes.RPCTransaction, error)
-	GetTransactionByBlockNumberAndIndex(blockNum rpctypes.BlockNumber, idx hexutil.Uint) (*rpctypes.RPCTransaction, error)
+	GetTransactionByHash(ctx context.Context, hash common.Hash) (*rpctypes.RPCTransaction, error)
+	GetTransactionCount(ctx context.Context, address common.Address, blockNrOrHash rpctypes.BlockNumberOrHash) (*hexutil.Uint64, error)
+	GetTransactionReceipt(ctx context.Context, hash common.Hash) (map[string]interface{}, error)
+	GetTransactionByBlockHashAndIndex(ctx context.Context, hash common.Hash, idx hexutil.Uint) (*rpctypes.RPCTransaction, error)
+	GetTransactionByBlockNumberAndIndex(ctx context.Context, blockNum rpctypes.BlockNumber, idx hexutil.Uint) (*rpctypes.RPCTransaction, error)
 	// eth_getBlockReceipts
 
 	// Writing Transactions
 	//
 	// Allows developers to both send ETH from one address to another, write data
 	// on-chain, and interact with smart contracts.
-	SendRawTransaction(data hexutil.Bytes) (common.Hash, error)
+	SendRawTransaction(ctx context.Context, data hexutil.Bytes) (common.Hash, error)
 	// eth_sendPrivateTransaction
 	// eth_cancel	PrivateTransaction
 
 	// Account Information
 	//
 	// Returns information regarding an address's stored on-chain data.
-	GetBalance(address common.Address, blockNrOrHash rpctypes.BlockNumberOrHash) (*hexutil.Big, error)
-	GetStorageAt(address common.Address, key string, blockNrOrHash rpctypes.BlockNumberOrHash) (hexutil.Bytes, error)
-	GetCode(address common.Address, blockNrOrHash rpctypes.BlockNumberOrHash) (hexutil.Bytes, error)
-	GetProof(address common.Address, storageKeys []string, blockNrOrHash rpctypes.BlockNumberOrHash) (*rpctypes.AccountResult, error)
+	GetBalance(ctx context.Context, address common.Address, blockNrOrHash rpctypes.BlockNumberOrHash) (*hexutil.Big, error)
+	GetStorageAt(ctx context.Context, address common.Address, key string, blockNrOrHash rpctypes.BlockNumberOrHash) (hexutil.Bytes, error)
+	GetCode(ctx context.Context, address common.Address, blockNrOrHash rpctypes.BlockNumberOrHash) (hexutil.Bytes, error)
+	GetProof(ctx context.Context, address common.Address, storageKeys []string, blockNrOrHash rpctypes.BlockNumberOrHash) (*rpctypes.AccountResult, error)
 
 	// EVM/Smart Contract Execution
 	//
 	// Allows developers to read data from the blockchain which includes executing
 	// smart contracts. However, no data is published to the Ethereum network.
-	Call(args rpctypes.TransactionArgs, blockNrOrHash rpctypes.BlockNumberOrHash, overrides *json.RawMessage) (hexutil.Bytes, error)
+	Call(ctx context.Context, args rpctypes.TransactionArgs, blockNrOrHash rpctypes.BlockNumberOrHash, overrides *json.RawMessage) (hexutil.Bytes, error)
 
 	// Chain Information
 	//
 	// Returns information on the Ethereum network and internal settings.
 	ProtocolVersion() hexutil.Uint
-	GasPrice() (*hexutil.Big, error)
-	EstimateGas(args rpctypes.TransactionArgs, blockNrOptional *rpctypes.BlockNumber) (hexutil.Uint64, error)
-	FeeHistory(blockCount math.HexOrDecimal64, lastBlock rpc.BlockNumber, rewardPercentiles []float64) (*rpctypes.FeeHistoryResult, error)
-	MaxPriorityFeePerGas() (*hexutil.Big, error)
+	GasPrice(ctx context.Context) (*hexutil.Big, error)
+	EstimateGas(ctx context.Context, args rpctypes.TransactionArgs, blockNrOptional *rpctypes.BlockNumber) (hexutil.Uint64, error)
+	FeeHistory(ctx context.Context, blockCount math.HexOrDecimal64, lastBlock rpc.BlockNumber, rewardPercentiles []float64) (*rpctypes.FeeHistoryResult, error)
+	MaxPriorityFeePerGas(ctx context.Context) (*hexutil.Big, error)
 	ChainId() (*hexutil.Big, error)
 
 	// Getting Uncles
@@ -90,11 +91,11 @@ type EthereumAPI interface {
 	Mining() bool
 
 	// Other
-	Syncing() (interface{}, error)
-	Coinbase() (string, error)
-	GetTransactionLogs(txHash common.Hash) ([]*ethtypes.Log, error)
-	FillTransaction(args rpctypes.TransactionArgs) (*rpctypes.SignTransactionResult, error)
-	GetPendingTransactions() ([]*rpctypes.RPCTransaction, error)
+	Syncing(ctx context.Context) (interface{}, error)
+	Coinbase(ctx context.Context) (string, error)
+	GetTransactionLogs(ctx context.Context, txHash common.Hash) ([]*ethtypes.Log, error)
+	FillTransaction(ctx context.Context, args rpctypes.TransactionArgs) (*rpctypes.SignTransactionResult, error)
+	GetPendingTransactions(ctx context.Context) ([]*rpctypes.RPCTransaction, error)
 	// eth_signTransaction (on Ethereum.org)
 	// eth_getCompilers (on Ethereum.org)
 	// eth_compileSolidity (on Ethereum.org)
@@ -130,21 +131,24 @@ func NewPublicAPI(logger *slog.Logger, evmBackend backend.EVMBackend) *PublicAPI
 ///////////////////////////////////////////////////////////////////////////////
 
 // BlockNumber returns the current block number.
-func (e *PublicAPI) BlockNumber() (hexutil.Uint64, error) {
+func (e *PublicAPI) BlockNumber(ctx context.Context) (hexutil.Uint64, error) {
+	defer gotracer.Trace(&ctx)()
 	e.logger.Debug("eth_blockNumber")
-	return e.backend.BlockNumber()
+	return e.backend.WithContext(ctx).BlockNumber()
 }
 
 // GetBlockByNumber returns the block identified by number.
-func (e *PublicAPI) GetBlockByNumber(ethBlockNum rpctypes.BlockNumber, fullTx bool) (map[string]interface{}, error) {
+func (e *PublicAPI) GetBlockByNumber(ctx context.Context, ethBlockNum rpctypes.BlockNumber, fullTx bool) (map[string]interface{}, error) {
+	defer gotracer.Trace(&ctx)()
 	e.logger.Debug("eth_getBlockByNumber", "number", ethBlockNum, "full", fullTx)
-	return e.backend.GetBlockByNumber(ethBlockNum, fullTx)
+	return e.backend.WithContext(ctx).GetBlockByNumber(ethBlockNum, fullTx)
 }
 
 // GetBlockByHash returns the block identified by hash.
-func (e *PublicAPI) GetBlockByHash(hash common.Hash, fullTx bool) (map[string]interface{}, error) {
+func (e *PublicAPI) GetBlockByHash(ctx context.Context, hash common.Hash, fullTx bool) (map[string]interface{}, error) {
+	defer gotracer.Trace(&ctx)()
 	e.logger.Debug("eth_getBlockByHash", "hash", hash.Hex(), "full", fullTx)
-	return e.backend.GetBlockByHash(hash, fullTx)
+	return e.backend.WithContext(ctx).GetBlockByHash(hash, fullTx)
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -152,50 +156,58 @@ func (e *PublicAPI) GetBlockByHash(hash common.Hash, fullTx bool) (map[string]in
 ///////////////////////////////////////////////////////////////////////////////
 
 // GetTransactionByHash returns the transaction identified by hash.
-func (e *PublicAPI) GetTransactionByHash(hash common.Hash) (*rpctypes.RPCTransaction, error) {
+func (e *PublicAPI) GetTransactionByHash(ctx context.Context, hash common.Hash) (*rpctypes.RPCTransaction, error) {
+	defer gotracer.Trace(&ctx)()
 	e.logger.Debug("eth_getTransactionByHash", "hash", hash.Hex())
-	return e.backend.GetTransactionByHash(hash)
+	return e.backend.WithContext(ctx).GetTransactionByHash(hash)
 }
 
 // GetTransactionCount returns the number of transactions at the given address up to the given block number.
-func (e *PublicAPI) GetTransactionCount(address common.Address, blockNrOrHash rpctypes.BlockNumberOrHash) (*hexutil.Uint64, error) {
+func (e *PublicAPI) GetTransactionCount(ctx context.Context, address common.Address, blockNrOrHash rpctypes.BlockNumberOrHash) (*hexutil.Uint64, error) {
+	defer gotracer.Trace(&ctx)()
 	e.logger.Debug("eth_getTransactionCount", "address", address.Hex(), "block number or hash", blockNrOrHash)
-	blockNum, err := e.backend.BlockNumberFromTendermint(blockNrOrHash)
+	backend := e.backend.WithContext(ctx)
+	blockNum, err := backend.BlockNumberFromTendermint(blockNrOrHash)
 	if err != nil {
 		return nil, err
 	}
-	return e.backend.GetTransactionCount(address, blockNum)
+	return backend.GetTransactionCount(address, blockNum)
 }
 
 // GetTransactionReceipt returns the transaction receipt identified by hash.
-func (e *PublicAPI) GetTransactionReceipt(hash common.Hash) (map[string]interface{}, error) {
+func (e *PublicAPI) GetTransactionReceipt(ctx context.Context, hash common.Hash) (map[string]interface{}, error) {
+	defer gotracer.Trace(&ctx)()
 	hexTx := hash.Hex()
 	e.logger.Debug("eth_getTransactionReceipt", "hash", hexTx)
-	return e.backend.GetTransactionReceipt(hash)
+	return e.backend.WithContext(ctx).GetTransactionReceipt(hash)
 }
 
 // GetBlockTransactionCountByHash returns the number of transactions in the block identified by hash.
-func (e *PublicAPI) GetBlockTransactionCountByHash(hash common.Hash) *hexutil.Uint {
+func (e *PublicAPI) GetBlockTransactionCountByHash(ctx context.Context, hash common.Hash) *hexutil.Uint {
+	defer gotracer.Trace(&ctx)()
 	e.logger.Debug("eth_getBlockTransactionCountByHash", "hash", hash.Hex())
-	return e.backend.GetBlockTransactionCountByHash(hash)
+	return e.backend.WithContext(ctx).GetBlockTransactionCountByHash(hash)
 }
 
 // GetBlockTransactionCountByNumber returns the number of transactions in the block identified by number.
-func (e *PublicAPI) GetBlockTransactionCountByNumber(blockNum rpctypes.BlockNumber) *hexutil.Uint {
+func (e *PublicAPI) GetBlockTransactionCountByNumber(ctx context.Context, blockNum rpctypes.BlockNumber) *hexutil.Uint {
+	defer gotracer.Trace(&ctx)()
 	e.logger.Debug("eth_getBlockTransactionCountByNumber", "height", blockNum.Int64())
-	return e.backend.GetBlockTransactionCountByNumber(blockNum)
+	return e.backend.WithContext(ctx).GetBlockTransactionCountByNumber(blockNum)
 }
 
 // GetTransactionByBlockHashAndIndex returns the transaction identified by hash and index.
-func (e *PublicAPI) GetTransactionByBlockHashAndIndex(hash common.Hash, idx hexutil.Uint) (*rpctypes.RPCTransaction, error) {
+func (e *PublicAPI) GetTransactionByBlockHashAndIndex(ctx context.Context, hash common.Hash, idx hexutil.Uint) (*rpctypes.RPCTransaction, error) {
+	defer gotracer.Trace(&ctx)()
 	e.logger.Debug("eth_getTransactionByBlockHashAndIndex", "hash", hash.Hex(), "index", idx)
-	return e.backend.GetTransactionByBlockHashAndIndex(hash, idx)
+	return e.backend.WithContext(ctx).GetTransactionByBlockHashAndIndex(hash, idx)
 }
 
 // GetTransactionByBlockNumberAndIndex returns the transaction identified by number and index.
-func (e *PublicAPI) GetTransactionByBlockNumberAndIndex(blockNum rpctypes.BlockNumber, idx hexutil.Uint) (*rpctypes.RPCTransaction, error) {
+func (e *PublicAPI) GetTransactionByBlockNumberAndIndex(ctx context.Context, blockNum rpctypes.BlockNumber, idx hexutil.Uint) (*rpctypes.RPCTransaction, error) {
+	defer gotracer.Trace(&ctx)()
 	e.logger.Debug("eth_getTransactionByBlockNumberAndIndex", "number", blockNum, "index", idx)
-	return e.backend.GetTransactionByBlockNumberAndIndex(blockNum, idx)
+	return e.backend.WithContext(ctx).GetTransactionByBlockNumberAndIndex(blockNum, idx)
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -203,9 +215,10 @@ func (e *PublicAPI) GetTransactionByBlockNumberAndIndex(blockNum rpctypes.BlockN
 ///////////////////////////////////////////////////////////////////////////////
 
 // SendRawTransaction send a raw Ethereum transaction.
-func (e *PublicAPI) SendRawTransaction(data hexutil.Bytes) (common.Hash, error) {
+func (e *PublicAPI) SendRawTransaction(ctx context.Context, data hexutil.Bytes) (common.Hash, error) {
+	defer gotracer.Trace(&ctx)()
 	e.logger.Debug("eth_sendRawTransaction", "length", len(data))
-	return e.backend.SendRawTransaction(data)
+	return e.backend.WithContext(ctx).SendRawTransaction(data)
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -213,30 +226,34 @@ func (e *PublicAPI) SendRawTransaction(data hexutil.Bytes) (common.Hash, error) 
 ///////////////////////////////////////////////////////////////////////////////
 
 // GetBalance returns the provided account's balance up to the provided block number.
-func (e *PublicAPI) GetBalance(address common.Address, blockNrOrHash rpctypes.BlockNumberOrHash) (*hexutil.Big, error) {
+func (e *PublicAPI) GetBalance(ctx context.Context, address common.Address, blockNrOrHash rpctypes.BlockNumberOrHash) (*hexutil.Big, error) {
+	defer gotracer.Trace(&ctx)()
 	e.logger.Debug("eth_getBalance", "address", address.String(), "block number or hash", blockNrOrHash)
-	return e.backend.GetBalance(address, blockNrOrHash)
+	return e.backend.WithContext(ctx).GetBalance(address, blockNrOrHash)
 }
 
 // GetStorageAt returns the contract storage at the given address, block number, and key.
-func (e *PublicAPI) GetStorageAt(address common.Address, key string, blockNrOrHash rpctypes.BlockNumberOrHash) (hexutil.Bytes, error) {
+func (e *PublicAPI) GetStorageAt(ctx context.Context, address common.Address, key string, blockNrOrHash rpctypes.BlockNumberOrHash) (hexutil.Bytes, error) {
+	defer gotracer.Trace(&ctx)()
 	e.logger.Debug("eth_getStorageAt", "address", address.Hex(), "key", key, "block number or hash", blockNrOrHash)
-	return e.backend.GetStorageAt(address, key, blockNrOrHash)
+	return e.backend.WithContext(ctx).GetStorageAt(address, key, blockNrOrHash)
 }
 
 // GetCode returns the contract code at the given address and block number.
-func (e *PublicAPI) GetCode(address common.Address, blockNrOrHash rpctypes.BlockNumberOrHash) (hexutil.Bytes, error) {
+func (e *PublicAPI) GetCode(ctx context.Context, address common.Address, blockNrOrHash rpctypes.BlockNumberOrHash) (hexutil.Bytes, error) {
+	defer gotracer.Trace(&ctx)()
 	e.logger.Debug("eth_getCode", "address", address.Hex(), "block number or hash", blockNrOrHash)
-	return e.backend.GetCode(address, blockNrOrHash)
+	return e.backend.WithContext(ctx).GetCode(address, blockNrOrHash)
 }
 
 // GetProof returns an account object with proof and any storage proofs
-func (e *PublicAPI) GetProof(address common.Address,
+func (e *PublicAPI) GetProof(ctx context.Context, address common.Address,
 	storageKeys []string,
 	blockNrOrHash rpctypes.BlockNumberOrHash,
 ) (*rpctypes.AccountResult, error) {
+	defer gotracer.Trace(&ctx)()
 	e.logger.Debug("eth_getProof", "address", address.Hex(), "keys", storageKeys, "block number or hash", blockNrOrHash)
-	return e.backend.GetProof(address, storageKeys, blockNrOrHash)
+	return e.backend.WithContext(ctx).GetProof(address, storageKeys, blockNrOrHash)
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -244,17 +261,19 @@ func (e *PublicAPI) GetProof(address common.Address,
 ///////////////////////////////////////////////////////////////////////////////
 
 // Call performs a raw contract call.
-func (e *PublicAPI) Call(args rpctypes.TransactionArgs,
+func (e *PublicAPI) Call(ctx context.Context, args rpctypes.TransactionArgs,
 	blockNrOrHash rpctypes.BlockNumberOrHash,
 	overrides *json.RawMessage,
 ) (hexutil.Bytes, error) {
+	defer gotracer.Trace(&ctx)()
 	e.logger.Debug("eth_call", "args", args.String(), "block number or hash", blockNrOrHash)
 
-	blockNum, err := e.backend.BlockNumberFromTendermint(blockNrOrHash)
+	backend := e.backend.WithContext(ctx)
+	blockNum, err := backend.BlockNumberFromTendermint(blockNrOrHash)
 	if err != nil {
 		return nil, err
 	}
-	data, err := e.backend.DoCall(args, blockNum, overrides)
+	data, err := backend.DoCall(args, blockNum, overrides)
 	if err != nil {
 		return []byte{}, err
 	}
@@ -278,33 +297,38 @@ func (e *PublicAPI) ProtocolVersion() hexutil.Uint {
 }
 
 // GasPrice returns the current gas price based on Ethermint's gas price oracle.
-func (e *PublicAPI) GasPrice() (*hexutil.Big, error) {
+func (e *PublicAPI) GasPrice(ctx context.Context) (*hexutil.Big, error) {
+	defer gotracer.Trace(&ctx)()
 	e.logger.Debug("eth_gasPrice")
-	return e.backend.GasPrice()
+	return e.backend.WithContext(ctx).GasPrice()
 }
 
 // EstimateGas returns an estimate of gas usage for the given smart contract call.
-func (e *PublicAPI) EstimateGas(args rpctypes.TransactionArgs, blockNrOptional *rpctypes.BlockNumber) (hexutil.Uint64, error) {
+func (e *PublicAPI) EstimateGas(ctx context.Context, args rpctypes.TransactionArgs, blockNrOptional *rpctypes.BlockNumber) (hexutil.Uint64, error) {
+	defer gotracer.Trace(&ctx)()
 	e.logger.Debug("eth_estimateGas")
-	return e.backend.EstimateGas(args, blockNrOptional)
+	return e.backend.WithContext(ctx).EstimateGas(args, blockNrOptional)
 }
 
-func (e *PublicAPI) FeeHistory(blockCount math.HexOrDecimal64,
+func (e *PublicAPI) FeeHistory(ctx context.Context, blockCount math.HexOrDecimal64,
 	lastBlock rpc.BlockNumber,
 	rewardPercentiles []float64,
 ) (*rpctypes.FeeHistoryResult, error) {
+	defer gotracer.Trace(&ctx)()
 	e.logger.Debug("eth_feeHistory")
-	return e.backend.FeeHistory(blockCount, lastBlock, rewardPercentiles)
+	return e.backend.WithContext(ctx).FeeHistory(blockCount, lastBlock, rewardPercentiles)
 }
 
 // MaxPriorityFeePerGas returns a suggestion for a gas tip cap for dynamic fee transactions.
-func (e *PublicAPI) MaxPriorityFeePerGas() (*hexutil.Big, error) {
+func (e *PublicAPI) MaxPriorityFeePerGas(ctx context.Context) (*hexutil.Big, error) {
+	defer gotracer.Trace(&ctx)()
 	e.logger.Debug("eth_maxPriorityFeePerGas")
-	head, err := e.backend.CurrentHeader()
+	backend := e.backend.WithContext(ctx)
+	head, err := backend.CurrentHeader()
 	if err != nil {
 		return nil, err
 	}
-	tipcap, err := e.backend.SuggestGasTipCap(head.BaseFee)
+	tipcap, err := backend.SuggestGasTipCap(head.BaseFee)
 	if err != nil {
 		return nil, err
 	}
@@ -368,16 +392,18 @@ func (e *PublicAPI) Mining() bool {
 // - highestBlock:  block number of the highest block header this node has received from peers
 // - pulledStates:  number of state entries processed until now
 // - knownStates:   number of known state entries that still need to be pulled
-func (e *PublicAPI) Syncing() (interface{}, error) {
+func (e *PublicAPI) Syncing(ctx context.Context) (interface{}, error) {
+	defer gotracer.Trace(&ctx)()
 	e.logger.Debug("eth_syncing")
-	return e.backend.Syncing()
+	return e.backend.WithContext(ctx).Syncing()
 }
 
 // Coinbase is the address that staking rewards will be send to (alias for Etherbase).
-func (e *PublicAPI) Coinbase() (string, error) {
+func (e *PublicAPI) Coinbase(ctx context.Context) (string, error) {
+	defer gotracer.Trace(&ctx)()
 	e.logger.Debug("eth_coinbase")
 
-	coinbase, err := e.backend.GetCoinbase()
+	coinbase, err := e.backend.WithContext(ctx).GetCoinbase()
 	if err != nil {
 		return "", err
 	}
@@ -386,9 +412,10 @@ func (e *PublicAPI) Coinbase() (string, error) {
 }
 
 // GetTransactionLogs returns the logs given a transaction hash.
-func (e *PublicAPI) GetTransactionLogs(txHash common.Hash) ([]*ethtypes.Log, error) {
+func (e *PublicAPI) GetTransactionLogs(ctx context.Context, txHash common.Hash) ([]*ethtypes.Log, error) {
+	defer gotracer.Trace(&ctx)()
 	e.logger.Debug("eth_getTransactionLogs", "hash", txHash)
-	receipt, err := e.backend.GetTransactionReceipt(txHash)
+	receipt, err := e.backend.WithContext(ctx).GetTransactionReceipt(txHash)
 	if err != nil || receipt == nil {
 		return nil, err
 	}
@@ -406,9 +433,10 @@ func (e *PublicAPI) GetTransactionLogs(txHash common.Hash) ([]*ethtypes.Log, err
 // FillTransaction fills the defaults (nonce, gas, gasPrice or 1559 fields)
 // on a given unsigned transaction, and returns it to the caller for further
 // processing (signing + broadcast).
-func (e *PublicAPI) FillTransaction(args rpctypes.TransactionArgs) (*rpctypes.SignTransactionResult, error) {
+func (e *PublicAPI) FillTransaction(ctx context.Context, args rpctypes.TransactionArgs) (*rpctypes.SignTransactionResult, error) {
+	defer gotracer.Trace(&ctx)()
 	// Set some sanity defaults and terminate on failure
-	args, err := e.backend.SetTxDefaults(args)
+	args, err := e.backend.WithContext(ctx).SetTxDefaults(args)
 	if err != nil {
 		return nil, err
 	}
@@ -429,10 +457,12 @@ func (e *PublicAPI) FillTransaction(args rpctypes.TransactionArgs) (*rpctypes.Si
 
 // GetPendingTransactions returns the transactions that are in the transaction pool
 // and have a from address that is one of the accounts this node manages.
-func (e *PublicAPI) GetPendingTransactions() ([]*rpctypes.RPCTransaction, error) {
+func (e *PublicAPI) GetPendingTransactions(ctx context.Context) ([]*rpctypes.RPCTransaction, error) {
+	defer gotracer.Trace(&ctx)()
 	e.logger.Debug("eth_getPendingTransactions")
 
-	txs, err := e.backend.PendingTransactions()
+	backend := e.backend.WithContext(ctx)
+	txs, err := backend.PendingTransactions()
 	if err != nil {
 		return nil, err
 	}
@@ -452,7 +482,7 @@ func (e *PublicAPI) GetPendingTransactions() ([]*rpctypes.RPCTransaction, error)
 				uint64(0),
 				uint64(0),
 				nil,
-				e.backend.ChainID().ToInt(),
+				backend.ChainID().ToInt(),
 			)
 			if err != nil {
 				return nil, err

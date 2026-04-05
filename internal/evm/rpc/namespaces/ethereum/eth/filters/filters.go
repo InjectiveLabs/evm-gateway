@@ -15,6 +15,9 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	ethfilters "github.com/ethereum/go-ethereum/eth/filters"
 	"github.com/pkg/errors"
+	"upd.dev/xlab/gotracer"
+
+	backendpkg "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/backend"
 )
 
 // BloomIV represents the bit indexes and value inside the bloom filter that belong
@@ -90,10 +93,19 @@ const (
 
 // Logs searches the blockchain for matching log entries, returning all from the
 // first block that contains matches, updating the start of the filter accordingly.
-func (f *Filter) Logs(_ context.Context, logLimit int, blockLimit int64) ([]*ethtypes.Log, error) {
+func (f *Filter) Logs(ctx context.Context, logLimit int, blockLimit int64) ([]*ethtypes.Log, error) {
+	defer gotracer.Trace(&ctx)()
+
+	backend := f.backend
+	if carrier, ok := f.backend.(interface {
+		WithContext(context.Context) backendpkg.EVMBackend
+	}); ok {
+		backend = carrier.WithContext(ctx)
+	}
+
 	// If we're doing singleton block filtering, execute and return
 	if f.criteria.BlockHash != nil && *f.criteria.BlockHash != (common.Hash{}) {
-		resBlock, err := f.backend.TendermintBlockByHash(*f.criteria.BlockHash)
+		resBlock, err := backend.TendermintBlockByHash(*f.criteria.BlockHash)
 		if err != nil {
 			return nil, errors.Wrapf(err, "failed to fetch header by hash %s", f.criteria.BlockHash)
 		}
@@ -101,7 +113,7 @@ func (f *Filter) Logs(_ context.Context, logLimit int, blockLimit int64) ([]*eth
 			return []*ethtypes.Log{}, nil
 		}
 
-		bloom, err := f.backend.GetBlockBloomByHeight(resBlock.Block.Height)
+		bloom, err := backend.GetBlockBloomByHeight(resBlock.Block.Height)
 		if err != nil {
 			f.logger.Debug("failed to fetch block bloom", "height", resBlock.Block.Height, "error", err.Error())
 			return nil, nil
@@ -114,7 +126,7 @@ func (f *Filter) Logs(_ context.Context, logLimit int, blockLimit int64) ([]*eth
 	}
 
 	// Figure out the limits of the filter range
-	header, err := f.backend.HeaderByNumber(types.EthLatestBlockNumber)
+	header, err := backend.HeaderByNumber(types.EthLatestBlockNumber)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to fetch header by number (latest)")
 	}
@@ -152,7 +164,7 @@ func (f *Filter) Logs(_ context.Context, logLimit int, blockLimit int64) ([]*eth
 	logs := []*ethtypes.Log{}
 
 	for height := from; height <= to; height++ {
-		bloom, err := f.backend.GetBlockBloomByHeight(height)
+		bloom, err := backend.GetBlockBloomByHeight(height)
 		if err != nil {
 			f.logger.Debug("failed to fetch block bloom", "height", height, "error", err.Error())
 			return logs, nil

@@ -14,6 +14,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"upd.dev/xlab/gotracer"
 
 	rpchttp "github.com/cometbft/cometbft/rpc/client/http"
 	cmtrpctypes "github.com/cometbft/cometbft/rpc/core/types"
@@ -38,6 +39,8 @@ import (
 type StatsdCloser interface {
 	Close()
 }
+
+var appTraceTag = gotracer.NewTag("component", "app")
 
 // Run starts the evm-gateway services and blocks until shutdown.
 func Run(cfg config.Config, logger *slog.Logger, statsd StatsdCloser) error {
@@ -146,6 +149,7 @@ func Run(cfg config.Config, logger *slog.Logger, statsd StatsdCloser) error {
 func RunResync(cfg config.Config, logger *slog.Logger, targets []txindexer.BlockRange) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+	defer gotracer.Trace(&ctx, appTraceTag)()
 
 	dataDir, err := expandHome(cfg.DataDir)
 	if err != nil {
@@ -197,6 +201,8 @@ type cometStatusClient interface {
 }
 
 func buildClientContext(ctx context.Context, cfg *config.Config, dataDir string, logger *slog.Logger) (client.Context, *rpchttp.HTTP, *grpc.ClientConn, error) {
+	defer gotracer.Trace(&ctx, appTraceTag)()
+
 	clientCtx, err := chainclient.NewClientContext("", "", nil)
 	if err != nil {
 		return client.Context{}, nil, nil, pkgerrors.Wrap(err, "init injective client context")
@@ -233,6 +239,8 @@ func buildClientContext(ctx context.Context, cfg *config.Config, dataDir string,
 }
 
 func cometChainID(ctx context.Context, rpcClient cometStatusClient) (string, error) {
+	defer gotracer.Trace(&ctx, appTraceTag)()
+
 	status, err := rpcClient.Status(ctx)
 	if err != nil {
 		return "", pkgerrors.Wrap(err, "fetch node status")
@@ -256,6 +264,8 @@ func validateCometChainID(cfg *config.Config, cometChainID string) error {
 }
 
 func dialGRPC(ctx context.Context, addr string, registry codectypes.InterfaceRegistry) (*grpc.ClientConn, error) {
+	defer gotracer.Trace(&ctx, appTraceTag)()
+
 	return grpc.DialContext(
 		ctx,
 		addr,
@@ -280,6 +290,9 @@ func protocolAndAddress(listenAddr string) (string, string) {
 }
 
 func openIndexerDB(rootDir string, backend string) (dbm.DB, error) {
+	ctx := context.Background()
+	defer gotracer.Traceless(&ctx, appTraceTag)()
+
 	dataDir := filepath.Join(rootDir, "data")
 	return dbm.NewDB("evmindexer", dbm.BackendType(backend), dataDir)
 }

@@ -1,6 +1,7 @@
 package indexer
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"math/big"
@@ -17,6 +18,7 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
+	"upd.dev/xlab/gotracer"
 
 	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
 	evmtypes "github.com/InjectiveLabs/sdk-go/chain/evm/types"
@@ -37,14 +39,22 @@ var _ TxIndexer = &KVIndexer{}
 
 // KVIndexer implements a eth tx indexer on a KV db.
 type KVIndexer struct {
-	db        dbm.DB
-	logger    *slog.Logger
-	clientCtx client.Context
+	ctx           context.Context
+	db            dbm.DB
+	logger        *slog.Logger
+	clientCtx     client.Context
+	baseTraceTags gotracer.Tags
 }
 
 // NewKVIndexer creates the KVIndexer
 func NewKVIndexer(db dbm.DB, logger *slog.Logger, clientCtx client.Context) *KVIndexer {
-	return &KVIndexer{db, logger, clientCtx}
+	return &KVIndexer{
+		ctx:           nil,
+		db:            db,
+		logger:        logger,
+		clientCtx:     clientCtx,
+		baseTraceTags: newIndexerTraceTags(),
+	}
 }
 
 // IndexBlock index all the eth txs in a block through the following steps:
@@ -53,11 +63,27 @@ func NewKVIndexer(db dbm.DB, logger *slog.Logger, clientCtx client.Context) *KVI
 // - Iterates over all the messages of the Tx
 // - Builds and stores a indexer.TxResult based on parsed events for every message
 func (kv *KVIndexer) IndexBlock(block *cmtypes.Block, txResults []*abci.ExecTxResult) (err error) {
+	ctx := kv.operationContext()
+	if kv.ctx != nil {
+		defer gotracer.Trace(&ctx, kv.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, kv.baseTraceTags)()
+	}
+	kv = kv.WithContext(ctx).(*KVIndexer)
+
 	_, err = kv.IndexBlockWithStats(block, txResults)
 	return err
 }
 
 func (kv *KVIndexer) IndexBlockWithStats(block *cmtypes.Block, txResults []*abci.ExecTxResult) (stats BlockIndexStats, err error) {
+	ctx := kv.operationContext()
+	if kv.ctx != nil {
+		defer gotracer.Trace(&ctx, kv.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, kv.baseTraceTags)()
+	}
+	kv = kv.WithContext(ctx).(*KVIndexer)
+
 	defer func(err *error) {
 		if e := recover(); e != nil {
 			kv.logger.Debug("panic during parsing block results", "error", e)
@@ -84,7 +110,7 @@ func (kv *KVIndexer) IndexBlockWithStats(block *cmtypes.Block, txResults []*abci
 	blockGasUsed := uint64(0)
 	blockResultGasUsedBeforeTx := uint64(0)
 	queryClient := rpctypes.NewQueryClient(kv.clientCtx)
-	blockBaseFee := queryBlockBaseFee(queryClient, block.Height)
+	blockBaseFee := queryBlockBaseFee(kv.contextWithHeight(block.Height), queryClient, block.Height)
 
 	// record index of valid eth tx during the iteration
 	var ethTxIndex int32
@@ -282,6 +308,14 @@ func (kv *KVIndexer) IndexBlockWithStats(block *cmtypes.Block, txResults []*abci
 
 // DeleteBlock removes all indexed data associated with a block height.
 func (kv *KVIndexer) DeleteBlock(height int64) error {
+	ctx := kv.operationContext()
+	if kv.ctx != nil {
+		defer gotracer.Trace(&ctx, kv.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, kv.baseTraceTags)()
+	}
+	kv = kv.WithContext(ctx).(*KVIndexer)
+
 	batch := kv.db.NewBatch()
 	defer batch.Close()
 
@@ -297,16 +331,40 @@ func (kv *KVIndexer) DeleteBlock(height int64) error {
 
 // LastIndexedBlock returns the latest indexed block number, returns -1 if db is empty
 func (kv *KVIndexer) LastIndexedBlock() (int64, error) {
+	ctx := kv.operationContext()
+	if kv.ctx != nil {
+		defer gotracer.Trace(&ctx, kv.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, kv.baseTraceTags)()
+	}
+	kv = kv.WithContext(ctx).(*KVIndexer)
+
 	return LoadLastBlock(kv.db)
 }
 
 // FirstIndexedBlock returns the first indexed block number, returns -1 if db is empty
 func (kv *KVIndexer) FirstIndexedBlock() (int64, error) {
+	ctx := kv.operationContext()
+	if kv.ctx != nil {
+		defer gotracer.Trace(&ctx, kv.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, kv.baseTraceTags)()
+	}
+	kv = kv.WithContext(ctx).(*KVIndexer)
+
 	return LoadFirstBlock(kv.db)
 }
 
 // GetByTxHash finds eth tx by eth tx hash
 func (kv *KVIndexer) GetByTxHash(hash common.Hash) (*chaintypes.TxResult, error) {
+	ctx := kv.operationContext()
+	if kv.ctx != nil {
+		defer gotracer.Trace(&ctx, kv.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, kv.baseTraceTags)()
+	}
+	kv = kv.WithContext(ctx).(*KVIndexer)
+
 	bz, err := kv.db.Get(TxHashKey(hash))
 	if err != nil {
 		return nil, errorsmod.Wrapf(err, "GetByTxHash %s", hash.Hex())
@@ -323,6 +381,14 @@ func (kv *KVIndexer) GetByTxHash(hash common.Hash) (*chaintypes.TxResult, error)
 
 // GetByBlockAndIndex finds eth tx by block number and eth tx index
 func (kv *KVIndexer) GetByBlockAndIndex(blockNumber int64, txIndex int32) (*chaintypes.TxResult, error) {
+	ctx := kv.operationContext()
+	if kv.ctx != nil {
+		defer gotracer.Trace(&ctx, kv.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, kv.baseTraceTags)()
+	}
+	kv = kv.WithContext(ctx).(*KVIndexer)
+
 	bz, err := kv.db.Get(TxIndexKey(blockNumber, txIndex))
 	if err != nil {
 		return nil, errorsmod.Wrapf(err, "GetByBlockAndIndex %d %d", blockNumber, txIndex)
@@ -432,8 +498,10 @@ func parseHeightFromHeightKey(key []byte, prefix byte) (int64, error) {
 	return int64(sdk.BigEndianToUint64(key[1:])), nil
 }
 
-func queryBlockBaseFee(queryClient *rpctypes.QueryClient, height int64) *big.Int {
-	res, err := queryClient.TxFeesQueryClient.GetEipBaseFee(rpctypes.ContextWithHeight(height), &txfeestypes.QueryEipBaseFeeRequest{})
+func queryBlockBaseFee(ctx context.Context, queryClient *rpctypes.QueryClient, height int64) *big.Int {
+	defer gotracer.Trace(&ctx, txIndexerTraceTag)()
+
+	res, err := queryClient.TxFeesQueryClient.GetEipBaseFee(rpctypes.ContextWithHeightFrom(ctx, height), &txfeestypes.QueryEipBaseFeeRequest{})
 	if err != nil || res == nil || res.BaseFee == nil {
 		return nil
 	}
@@ -441,6 +509,14 @@ func queryBlockBaseFee(queryClient *rpctypes.QueryClient, height int64) *big.Int
 }
 
 func (kv *KVIndexer) resetBlock(batch dbm.Batch, height int64) error {
+	ctx := kv.operationContext()
+	if kv.ctx != nil {
+		defer gotracer.Trace(&ctx, kv.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, kv.baseTraceTags)()
+	}
+	kv = kv.WithContext(ctx).(*KVIndexer)
+
 	metaBz, err := kv.db.Get(BlockMetaKey(height))
 	if err != nil {
 		return errorsmod.Wrapf(err, "reset block %d: get meta", height)

@@ -4,10 +4,19 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/pkg/errors"
+	"upd.dev/xlab/gotracer"
 )
 
 // GetLogs returns all the logs from all the ethereum transactions in a block.
 func (b *Backend) GetLogs(hash common.Hash) ([][]*ethtypes.Log, error) {
+	ctx := b.operationContext()
+	if b.ctx != nil {
+		defer gotracer.Trace(&ctx, b.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, b.baseTraceTags)()
+	}
+	b = b.WithContext(ctx).(*Backend)
+
 	if b.indexer != nil {
 		logs, err := b.indexer.GetLogsByBlockHash(hash)
 		if err == nil {
@@ -34,6 +43,14 @@ func (b *Backend) GetLogs(hash common.Hash) ([][]*ethtypes.Log, error) {
 
 // GetLogsByHeight returns all the logs from all the ethereum transactions in a block.
 func (b *Backend) GetLogsByHeight(height *int64) ([][]*ethtypes.Log, error) {
+	ctx := b.operationContext()
+	if b.ctx != nil {
+		defer gotracer.Trace(&ctx, b.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, b.baseTraceTags)()
+	}
+	b = b.WithContext(ctx).(*Backend)
+
 	if b.indexer != nil {
 		logs, err := b.indexer.GetLogsByBlockHeight(*height)
 		if err == nil {
@@ -58,6 +75,14 @@ func (b *Backend) GetLogsByHeight(height *int64) ([][]*ethtypes.Log, error) {
 }
 
 func (b *Backend) GetBlockBloomByHeight(height int64) (ethtypes.Bloom, error) {
+	ctx := b.operationContext()
+	if b.ctx != nil {
+		defer gotracer.Trace(&ctx, b.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, b.baseTraceTags)()
+	}
+	b = b.WithContext(ctx).(*Backend)
+
 	if b.indexer != nil {
 		meta, err := b.indexer.GetBlockMetaByHeight(height)
 		if err == nil {

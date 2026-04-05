@@ -19,6 +19,7 @@ import (
 	"github.com/pkg/errors"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"upd.dev/xlab/gotracer"
 
 	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
 	evmtypes "github.com/InjectiveLabs/sdk-go/chain/evm/types"
@@ -27,6 +28,14 @@ import (
 // Resend accepts an existing transaction and a new gas price and limit. It will remove
 // the given transaction from the pool and reinsert it with the new gas price and limit.
 func (b *Backend) Resend(args rpctypes.TransactionArgs, gasPrice *hexutil.Big, gasLimit *hexutil.Uint64) (common.Hash, error) {
+	ctx := b.operationContext()
+	if b.ctx != nil {
+		defer gotracer.Trace(&ctx, b.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, b.baseTraceTags)()
+	}
+	b = b.WithContext(ctx).(*Backend)
+
 	if args.Nonce == nil {
 		return common.Hash{}, fmt.Errorf("missing transaction nonce in transaction spec")
 	}
@@ -98,6 +107,14 @@ func (b *Backend) Resend(args rpctypes.TransactionArgs, gasPrice *hexutil.Big, g
 
 // SendRawTransaction send a raw Ethereum transaction.
 func (b *Backend) SendRawTransaction(data hexutil.Bytes) (common.Hash, error) {
+	ctx := b.operationContext()
+	if b.ctx != nil {
+		defer gotracer.Trace(&ctx, b.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, b.baseTraceTags)()
+	}
+	b = b.WithContext(ctx).(*Backend)
+
 	// RLP decode raw transaction bytes
 	var tx ethtypes.Transaction
 	if err := tx.UnmarshalBinary(data); err != nil {
@@ -185,6 +202,14 @@ func unwrapBroadcastTxError(err error) error {
 // SetTxDefaults populates tx message with default values in case they are not
 // provided on the args
 func (b *Backend) SetTxDefaults(args rpctypes.TransactionArgs) (rpctypes.TransactionArgs, error) {
+	ctx := b.operationContext()
+	if b.ctx != nil {
+		defer gotracer.Trace(&ctx, b.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, b.baseTraceTags)()
+	}
+	b = b.WithContext(ctx).(*Backend)
+
 	if args.GasPrice != nil && (args.MaxFeePerGas != nil || args.MaxPriorityFeePerGas != nil) {
 		return args, errors.New("both gasPrice and (maxFeePerGas or maxPriorityFeePerGas) specified")
 	}
@@ -329,6 +354,14 @@ func (b *Backend) handleRevertError(vmError string, ret []byte) error {
 
 // EstimateGas returns an estimate of gas usage for the given smart contract call.
 func (b *Backend) EstimateGas(args rpctypes.TransactionArgs, blockNrOptional *rpctypes.BlockNumber) (hexutil.Uint64, error) {
+	ctx := b.operationContext()
+	if b.ctx != nil {
+		defer gotracer.Trace(&ctx, b.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, b.baseTraceTags)()
+	}
+	b = b.WithContext(ctx).(*Backend)
+
 	blockNr := rpctypes.EthPendingBlockNumber
 	if blockNrOptional != nil {
 		blockNr = *blockNrOptional
@@ -355,7 +388,7 @@ func (b *Backend) EstimateGas(args rpctypes.TransactionArgs, blockNrOptional *rp
 	// From ContextWithHeight: if the provided height is 0,
 	// it will return an empty context and the gRPC query will use
 	// the latest block height for querying.
-	res, err := b.queryClient.EstimateGas(rpctypes.ContextWithHeight(blockNr.Int64()), &req)
+	res, err := b.queryClient.EstimateGas(b.contextWithHeight(blockNr.Int64()), &req)
 	if err != nil {
 		return 0, err
 	}
@@ -371,6 +404,14 @@ func (b *Backend) DoCall(
 	args rpctypes.TransactionArgs, blockNr rpctypes.BlockNumber,
 	overrides *json.RawMessage,
 ) (*evmtypes.MsgEthereumTxResponse, error) {
+	ctx := b.operationContext()
+	if b.ctx != nil {
+		defer gotracer.Trace(&ctx, b.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, b.baseTraceTags)()
+	}
+	b = b.WithContext(ctx).(*Backend)
+
 	bz, err := json.Marshal(&args)
 	if err != nil {
 		return nil, err
@@ -397,23 +438,23 @@ func (b *Backend) DoCall(
 	// From ContextWithHeight: if the provided height is 0,
 	// it will return an empty context and the gRPC query will use
 	// the latest block height for querying.
-	ctx := rpctypes.ContextWithHeight(blockNr.Int64())
+	callCtx := b.contextWithHeight(blockNr.Int64())
 	timeout := b.RPCEVMTimeout()
 
 	// Setup context so it may be canceled the call has completed
 	// or, in case of unmetered gas, setup a context with a timeout.
 	var cancel context.CancelFunc
 	if timeout > 0 {
-		ctx, cancel = context.WithTimeout(ctx, timeout)
+		callCtx, cancel = context.WithTimeout(callCtx, timeout)
 	} else {
-		ctx, cancel = context.WithCancel(ctx)
+		callCtx, cancel = context.WithCancel(callCtx)
 	}
 
 	// Make sure the context is canceled when the call has completed
 	// this makes sure resources are cleaned up.
 	defer cancel()
 
-	res, err := b.queryClient.EthCall(ctx, &req)
+	res, err := b.queryClient.EthCall(callCtx, &req)
 	if err != nil {
 		return nil, err
 	}
@@ -430,6 +471,14 @@ func (b *Backend) DoCall(
 
 // GasPrice returns the current gas price based on Ethermint's gas price oracle.
 func (b *Backend) GasPrice() (*hexutil.Big, error) {
+	ctx := b.operationContext()
+	if b.ctx != nil {
+		defer gotracer.Trace(&ctx, b.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, b.baseTraceTags)()
+	}
+	b = b.WithContext(ctx).(*Backend)
+
 	var (
 		result *big.Int
 		err    error

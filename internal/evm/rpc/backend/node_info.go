@@ -8,6 +8,7 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
+	"upd.dev/xlab/gotracer"
 
 	evmtypes "github.com/InjectiveLabs/sdk-go/chain/evm/types"
 )
@@ -20,6 +21,14 @@ import (
 // - pulledStates:  number of state entries processed until now
 // - knownStates:   number of known state entries that still need to be pulled
 func (b *Backend) Syncing() (interface{}, error) {
+	ctx := b.operationContext()
+	if b.ctx != nil {
+		defer gotracer.Trace(&ctx, b.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, b.baseTraceTags)()
+	}
+	b = b.WithContext(ctx).(*Backend)
+
 	status, err := b.clientCtx.Client.Status(b.ctx)
 	if err != nil {
 		return false, err
@@ -115,6 +124,14 @@ func (b *Backend) RPCBlockRangeCap() int32 {
 // the node config. If set value is 0, it will default to 20.
 
 func (b *Backend) RPCMinGasPrice() *big.Int {
+	ctx := b.operationContext()
+	if b.ctx != nil {
+		defer gotracer.Trace(&ctx, b.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, b.baseTraceTags)()
+	}
+	b = b.WithContext(ctx).(*Backend)
+
 	evmParams, err := b.queryClient.Params(b.ctx, &evmtypes.QueryParamsRequest{})
 	if err != nil {
 		return new(big.Int).SetInt64(evmtypes.DefaultGasPrice)

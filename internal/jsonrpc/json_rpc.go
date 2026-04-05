@@ -13,6 +13,7 @@ import (
 	"github.com/rs/cors"
 	"golang.org/x/net/netutil"
 	"golang.org/x/sync/errgroup"
+	"upd.dev/xlab/gotracer"
 
 	"github.com/InjectiveLabs/evm-gateway/internal/config"
 	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc"
@@ -25,6 +26,8 @@ import (
 	ethrpc "github.com/ethereum/go-ethereum/rpc"
 )
 
+var jsonRPCTraceTag = gotracer.NewTag("component", "jsonrpc")
+
 // Start starts the JSON-RPC server
 func Start(
 	logger *slog.Logger,
@@ -35,6 +38,9 @@ func Start(
 	indexer txindexer.TxIndexer,
 	status *syncstatus.Tracker,
 ) (*http.Server, chan struct{}, error) {
+	ctx := context.Background()
+	defer gotracer.Traceless(&ctx, jsonRPCTraceTag)()
+
 	logger = logger.With("module", "jsonrpc")
 
 	var rpcStream *stream.RPCStream

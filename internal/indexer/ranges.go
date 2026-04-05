@@ -1,10 +1,14 @@
 package indexer
 
 import (
+	"context"
 	"sort"
 
 	dbm "github.com/cosmos/cosmos-db"
+	"upd.dev/xlab/gotracer"
 )
+
+var txIndexerTraceTag = gotracer.NewTag("component", "tx_indexer")
 
 // BlockRange represents an inclusive range of block heights.
 type BlockRange struct {
@@ -14,6 +18,9 @@ type BlockRange struct {
 
 // LoadIndexedRanges scans the indexer DB and groups indexed block heights into ranges.
 func LoadIndexedRanges(db dbm.DB) ([]BlockRange, error) {
+	ctx := context.Background()
+	defer gotracer.Traceless(&ctx, txIndexerTraceTag)()
+
 	it, err := db.Iterator([]byte{KeyPrefixBlockMeta}, []byte{KeyPrefixBlockMeta + 1})
 	if err != nil {
 		return nil, err

@@ -1,6 +1,8 @@
 package indexer
 
 import (
+	"context"
+
 	abci "github.com/cometbft/cometbft/abci/types"
 	cmtypes "github.com/cometbft/cometbft/types"
 	"github.com/ethereum/go-ethereum/common"
@@ -16,6 +18,8 @@ type BlockIndexStats struct {
 
 // TxIndexer captures the indexing methods required by the RPC/backend layers.
 type TxIndexer interface {
+	WithContext(ctx context.Context) TxIndexer
+
 	IndexBlock(block *cmtypes.Block, txResults []*abci.ExecTxResult) error
 	LastIndexedBlock() (int64, error)
 	FirstIndexedBlock() (int64, error)

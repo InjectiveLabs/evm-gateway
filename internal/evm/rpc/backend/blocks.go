@@ -18,6 +18,7 @@ import (
 	"github.com/pkg/errors"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
+	"upd.dev/xlab/gotracer"
 )
 
 // BlockNumber returns the current block number in abci app state. Because abci
@@ -25,6 +26,14 @@ import (
 // the client to use the latest block number in abci app state than tendermint
 // rpc.
 func (b *Backend) BlockNumber() (hexutil.Uint64, error) {
+	ctx := b.operationContext()
+	if b.ctx != nil {
+		defer gotracer.Trace(&ctx, b.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, b.baseTraceTags)()
+	}
+	b = b.WithContext(ctx).(*Backend)
+
 	// do any grpc query, ignore the response and use the returned block height
 	var header metadata.MD
 	_, err := b.queryClient.Params(b.ctx, &evmtypes.QueryParamsRequest{}, grpc.Header(&header))
@@ -49,6 +58,14 @@ func (b *Backend) BlockNumber() (hexutil.Uint64, error) {
 // block number. Depending on fullTx it either returns the full transaction
 // objects or if false only the hashes of the transactions.
 func (b *Backend) GetBlockByNumber(blockNum rpctypes.BlockNumber, fullTx bool) (map[string]interface{}, error) {
+	ctx := b.operationContext()
+	if b.ctx != nil {
+		defer gotracer.Trace(&ctx, b.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, b.baseTraceTags)()
+	}
+	b = b.WithContext(ctx).(*Backend)
+
 	resBlock, err := b.TendermintBlockByNumber(blockNum)
 	if err != nil {
 		return nil, nil
@@ -77,6 +94,14 @@ func (b *Backend) GetBlockByNumber(blockNum rpctypes.BlockNumber, fullTx bool) (
 // GetBlockByHash returns the JSON-RPC compatible Ethereum block identified by
 // hash.
 func (b *Backend) GetBlockByHash(hash common.Hash, fullTx bool) (map[string]interface{}, error) {
+	ctx := b.operationContext()
+	if b.ctx != nil {
+		defer gotracer.Trace(&ctx, b.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, b.baseTraceTags)()
+	}
+	b = b.WithContext(ctx).(*Backend)
+
 	resBlock, err := b.TendermintBlockByHash(hash)
 	if err != nil {
 		return nil, err
@@ -105,6 +130,14 @@ func (b *Backend) GetBlockByHash(hash common.Hash, fullTx bool) (map[string]inte
 // GetBlockTransactionCountByHash returns the number of Ethereum transactions in
 // the block identified by hash.
 func (b *Backend) GetBlockTransactionCountByHash(hash common.Hash) *hexutil.Uint {
+	ctx := b.operationContext()
+	if b.ctx != nil {
+		defer gotracer.Trace(&ctx, b.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, b.baseTraceTags)()
+	}
+	b = b.WithContext(ctx).(*Backend)
+
 	sc, ok := b.clientCtx.Client.(cmrpcclient.SignClient)
 	if !ok {
 		b.logger.Error("invalid rpc client")
@@ -127,6 +160,14 @@ func (b *Backend) GetBlockTransactionCountByHash(hash common.Hash) *hexutil.Uint
 // GetBlockTransactionCountByNumber returns the number of Ethereum transactions
 // in the block identified by number.
 func (b *Backend) GetBlockTransactionCountByNumber(blockNum rpctypes.BlockNumber) *hexutil.Uint {
+	ctx := b.operationContext()
+	if b.ctx != nil {
+		defer gotracer.Trace(&ctx, b.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, b.baseTraceTags)()
+	}
+	b = b.WithContext(ctx).(*Backend)
+
 	block, err := b.TendermintBlockByNumber(blockNum)
 	if err != nil {
 		b.logger.Debug("block not found", "height", blockNum.Int64(), "error", err.Error())
@@ -153,6 +194,14 @@ func (b *Backend) GetBlockTransactionCount(block *cmrpctypes.ResultBlock) *hexut
 // TendermintBlockByNumber returns a Tendermint-formatted block for a given
 // block number
 func (b *Backend) TendermintBlockByNumber(blockNum rpctypes.BlockNumber) (*cmrpctypes.ResultBlock, error) {
+	ctx := b.operationContext()
+	if b.ctx != nil {
+		defer gotracer.Trace(&ctx, b.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, b.baseTraceTags)()
+	}
+	b = b.WithContext(ctx).(*Backend)
+
 	height := blockNum.Int64()
 	if height <= 0 {
 		// fetch the latest block number from the app state, more accurate than the tendermint block store state.
@@ -179,6 +228,14 @@ func (b *Backend) TendermintBlockByNumber(blockNum rpctypes.BlockNumber) (*cmrpc
 // TendermintBlockResultByNumber returns a Tendermint-formatted block result
 // by block number
 func (b *Backend) TendermintBlockResultByNumber(height *int64) (*cmrpctypes.ResultBlockResults, error) {
+	ctx := b.operationContext()
+	if b.ctx != nil {
+		defer gotracer.Trace(&ctx, b.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, b.baseTraceTags)()
+	}
+	b = b.WithContext(ctx).(*Backend)
+
 	sc, ok := b.clientCtx.Client.(cmrpcclient.SignClient)
 	if !ok {
 		return nil, errors.New("invalid rpc client")
@@ -188,6 +245,14 @@ func (b *Backend) TendermintBlockResultByNumber(height *int64) (*cmrpctypes.Resu
 
 // TendermintBlockByHash returns a Tendermint-formatted block by block number
 func (b *Backend) TendermintBlockByHash(blockHash common.Hash) (*cmrpctypes.ResultBlock, error) {
+	ctx := b.operationContext()
+	if b.ctx != nil {
+		defer gotracer.Trace(&ctx, b.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, b.baseTraceTags)()
+	}
+	b = b.WithContext(ctx).(*Backend)
+
 	sc, ok := b.clientCtx.Client.(cmrpcclient.SignClient)
 	if !ok {
 		return nil, errors.New("invalid rpc client")
@@ -208,6 +273,14 @@ func (b *Backend) TendermintBlockByHash(blockHash common.Hash) (*cmrpctypes.Resu
 
 // BlockNumberFromTendermint returns the BlockNumber from BlockNumberOrHash
 func (b *Backend) BlockNumberFromTendermint(blockNrOrHash rpctypes.BlockNumberOrHash) (rpctypes.BlockNumber, error) {
+	ctx := b.operationContext()
+	if b.ctx != nil {
+		defer gotracer.Trace(&ctx, b.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, b.baseTraceTags)()
+	}
+	b = b.WithContext(ctx).(*Backend)
+
 	switch {
 	case blockNrOrHash.BlockHash == nil && blockNrOrHash.BlockNumber == nil:
 		return rpctypes.EthEarliestBlockNumber, fmt.Errorf("types BlockHash and BlockNumber cannot be both nil")
@@ -226,6 +299,14 @@ func (b *Backend) BlockNumberFromTendermint(blockNrOrHash rpctypes.BlockNumberOr
 
 // BlockNumberFromTendermintByHash returns the block height of given block hash
 func (b *Backend) BlockNumberFromTendermintByHash(blockHash common.Hash) (*big.Int, error) {
+	ctx := b.operationContext()
+	if b.ctx != nil {
+		defer gotracer.Trace(&ctx, b.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, b.baseTraceTags)()
+	}
+	b = b.WithContext(ctx).(*Backend)
+
 	resBlock, err := b.TendermintBlockByHash(blockHash)
 	if err != nil {
 		return nil, err
@@ -240,6 +321,14 @@ func (b *Backend) BlockNumberFromTendermintByHash(blockHash common.Hash) (*big.I
 func (b *Backend) EthMsgsFromTendermintBlock(
 	resBlock *cmrpctypes.ResultBlock,
 ) []*evmtypes.MsgEthereumTx {
+	ctx := b.operationContext()
+	if b.ctx != nil {
+		defer gotracer.Trace(&ctx, b.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, b.baseTraceTags)()
+	}
+	b = b.WithContext(ctx).(*Backend)
+
 	var result []*evmtypes.MsgEthereumTx
 	block := resBlock.Block
 
@@ -265,6 +354,14 @@ func (b *Backend) EthMsgsFromTendermintBlock(
 
 // HeaderByNumber returns the block header identified by height.
 func (b *Backend) HeaderByNumber(blockNum rpctypes.BlockNumber) (*ethtypes.Header, error) {
+	ctx := b.operationContext()
+	if b.ctx != nil {
+		defer gotracer.Trace(&ctx, b.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, b.baseTraceTags)()
+	}
+	b = b.WithContext(ctx).(*Backend)
+
 	resBlock, err := b.TendermintBlockByNumber(blockNum)
 	if err != nil {
 		return nil, err
@@ -296,6 +393,14 @@ func (b *Backend) HeaderByNumber(blockNum rpctypes.BlockNumber) (*ethtypes.Heade
 
 // HeaderByHash returns the block header identified by hash.
 func (b *Backend) HeaderByHash(blockHash common.Hash) (*ethtypes.Header, error) {
+	ctx := b.operationContext()
+	if b.ctx != nil {
+		defer gotracer.Trace(&ctx, b.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, b.baseTraceTags)()
+	}
+	b = b.WithContext(ctx).(*Backend)
+
 	resBlock, err := b.TendermintBlockByHash(blockHash)
 	if err != nil {
 		return nil, err
@@ -326,6 +431,14 @@ func (b *Backend) HeaderByHash(blockHash common.Hash) (*ethtypes.Header, error) 
 
 // BlockBloom query block bloom filter from block results
 func (b *Backend) BlockBloom(blockRes *cmrpctypes.ResultBlockResults) (ethtypes.Bloom, error) {
+	ctx := b.operationContext()
+	if b.ctx != nil {
+		defer gotracer.Trace(&ctx, b.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, b.baseTraceTags)()
+	}
+	b = b.WithContext(ctx).(*Backend)
+
 	if blockRes != nil && b.indexer != nil {
 		meta, err := b.indexer.GetBlockMetaByHeight(blockRes.Height)
 		if err == nil {
@@ -370,6 +483,14 @@ func (b *Backend) RPCBlockFromTendermintBlock(
 	blockRes *cmrpctypes.ResultBlockResults,
 	fullTx bool,
 ) (map[string]interface{}, error) {
+	ctx := b.operationContext()
+	if b.ctx != nil {
+		defer gotracer.Trace(&ctx, b.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, b.baseTraceTags)()
+	}
+	b = b.WithContext(ctx).(*Backend)
+
 	ethRPCTxs := []interface{}{}
 	block := resBlock.Block
 
@@ -412,8 +533,8 @@ func (b *Backend) RPCBlockFromTendermintBlock(
 
 	var validatorAccAddr sdk.AccAddress
 
-	ctx := rpctypes.ContextWithHeight(block.Height)
-	res, err := b.queryClient.ValidatorAccount(ctx, req)
+	queryCtx := b.contextWithHeight(block.Height)
+	res, err := b.queryClient.ValidatorAccount(queryCtx, req)
 	if err != nil {
 		b.logger.Debug(
 			"failed to query validator operator address",
@@ -432,7 +553,7 @@ func (b *Backend) RPCBlockFromTendermintBlock(
 
 	validatorAddr := common.BytesToAddress(validatorAccAddr)
 
-	gasLimit, err := rpctypes.BlockMaxGasFromConsensusParams(ctx, b.clientCtx, block.Height)
+	gasLimit, err := rpctypes.BlockMaxGasFromConsensusParams(queryCtx, b.clientCtx, block.Height)
 	if err != nil {
 		b.logger.Error("failed to query consensus params", "error", err.Error())
 	}
@@ -452,6 +573,14 @@ func (b *Backend) RPCBlockFromTendermintBlock(
 
 // EthBlockByNumber returns the Ethereum Block identified by number.
 func (b *Backend) EthBlockByNumber(blockNum rpctypes.BlockNumber) (*ethtypes.Block, error) {
+	ctx := b.operationContext()
+	if b.ctx != nil {
+		defer gotracer.Trace(&ctx, b.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, b.baseTraceTags)()
+	}
+	b = b.WithContext(ctx).(*Backend)
+
 	resBlock, err := b.TendermintBlockByNumber(blockNum)
 	if err != nil {
 		return nil, err
@@ -475,6 +604,14 @@ func (b *Backend) EthBlockFromTendermintBlock(
 	resBlock *cmrpctypes.ResultBlock,
 	blockRes *cmrpctypes.ResultBlockResults,
 ) (*ethtypes.Block, error) {
+	ctx := b.operationContext()
+	if b.ctx != nil {
+		defer gotracer.Trace(&ctx, b.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, b.baseTraceTags)()
+	}
+	b = b.WithContext(ctx).(*Backend)
+
 	block := resBlock.Block
 	height := block.Height
 	bloom, err := b.BlockBloom(blockRes)

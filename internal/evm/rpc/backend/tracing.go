@@ -10,11 +10,20 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/pkg/errors"
+	"upd.dev/xlab/gotracer"
 )
 
 // TraceTransaction returns the structured logs created during the execution of EVM
 // and returns them as a JSON object.
 func (b *Backend) TraceTransaction(hash common.Hash, config *rpctypes.TraceConfig) (interface{}, error) {
+	ctx := b.operationContext()
+	if b.ctx != nil {
+		defer gotracer.Trace(&ctx, b.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, b.baseTraceTags)()
+	}
+	b = b.WithContext(ctx).(*Backend)
+
 	// Get transaction by hash
 	transaction, err := b.GetTxByEthHash(hash)
 	if err != nil {
@@ -101,7 +110,7 @@ func (b *Backend) TraceTransaction(hash common.Hash, config *rpctypes.TraceConfi
 		// 0 is a special value in `ContextWithHeight`
 		contextHeight = 1
 	}
-	traceResult, err := b.queryClient.TraceTx(rpctypes.ContextWithHeight(contextHeight), &traceTxRequest)
+	traceResult, err := b.queryClient.TraceTx(b.contextWithHeight(contextHeight), &traceTxRequest)
 	if err != nil {
 		return nil, err
 	}
@@ -135,6 +144,14 @@ func (b *Backend) TraceBlock(height rpctypes.BlockNumber,
 	config *rpctypes.TraceConfig,
 	block *cmrpctypes.ResultBlock,
 ) ([]*rpctypes.TxTraceResult, error) {
+	ctx := b.operationContext()
+	if b.ctx != nil {
+		defer gotracer.Trace(&ctx, b.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, b.baseTraceTags)()
+	}
+	b = b.WithContext(ctx).(*Backend)
+
 	txs := block.Block.Txs
 	txsLength := len(txs)
 
@@ -169,7 +186,7 @@ func (b *Backend) TraceBlock(height rpctypes.BlockNumber,
 		// 0 is a special value for `ContextWithHeight`.
 		contextHeight = 1
 	}
-	ctxWithHeight := rpctypes.ContextWithHeight(int64(contextHeight))
+	ctxWithHeight := b.contextWithHeight(int64(contextHeight))
 
 	traceBlockRequest := &evmtypes.QueryTraceBlockRequest{
 		Txs:             txsMessages,
@@ -199,6 +216,14 @@ func (b *Backend) TraceBlock(height rpctypes.BlockNumber,
 func (b *Backend) TraceCall(
 	args rpctypes.TransactionArgs, blockNrOrHash rpctypes.BlockNumberOrHash, config *rpctypes.TraceConfig,
 ) (interface{}, error) {
+	ctx := b.operationContext()
+	if b.ctx != nil {
+		defer gotracer.Trace(&ctx, b.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, b.baseTraceTags)()
+	}
+	b = b.WithContext(ctx).(*Backend)
+
 	bz, err := json.Marshal(&args)
 	if err != nil {
 		return nil, err
@@ -233,7 +258,7 @@ func (b *Backend) TraceCall(
 		// 0 is a special value in `ContextWithHeight`
 		contextHeight = 1
 	}
-	traceResult, err := b.queryClient.TraceCall(rpctypes.ContextWithHeight(contextHeight), &traceCallRequest)
+	traceResult, err := b.queryClient.TraceCall(b.contextWithHeight(contextHeight), &traceCallRequest)
 	if err != nil {
 		return nil, err
 	}

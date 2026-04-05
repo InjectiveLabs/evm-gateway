@@ -16,6 +16,7 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/ethereum/go-ethereum/common"
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
+	"upd.dev/xlab/gotracer"
 )
 
 const (
@@ -38,6 +39,7 @@ var (
 		sdk.AttributeKeyModule, evmtypes.ModuleName)).String()
 	blockEvents  = cmtypes.QueryForEvent(cmtypes.EventNewBlock).String()
 	evmTxHashKey = fmt.Sprintf("%s.%s", evmtypes.TypeMsgEthereumTx, evmtypes.AttributeKeyEthereumTxHash)
+	rpcStreamTag = gotracer.NewTag("component", "rpc_stream")
 )
 
 type RPCHeader struct {
@@ -63,6 +65,9 @@ func NewRPCStreams(
 	logger *slog.Logger,
 	txDecoder sdk.TxDecoder,
 ) (*RPCStream, error) {
+	ctx := context.Background()
+	defer gotracer.Traceless(&ctx, rpcStreamTag)()
+
 	s := &RPCStream{
 		evtClient: evtClient,
 		logger:    logger,
@@ -72,8 +77,6 @@ func NewRPCStreams(
 		pendingTxStream: NewStream[common.Hash](txStreamSegmentSize, txStreamCapacity),
 		logStream:       NewStream[*ethtypes.Log](logStreamSegmentSize, logStreamCapacity),
 	}
-
-	ctx := context.Background()
 
 	chBlocks, err := s.evtClient.Subscribe(ctx, streamSubscriberName, blockEvents, subscribBufferSize)
 	if err != nil {
@@ -94,6 +97,9 @@ func NewRPCStreams(
 }
 
 func (s *RPCStream) Close() error {
+	ctx := context.Background()
+	defer gotracer.Traceless(&ctx, rpcStreamTag)()
+
 	if err := s.evtClient.UnsubscribeAll(context.Background(), streamSubscriberName); err != nil {
 		return err
 	}

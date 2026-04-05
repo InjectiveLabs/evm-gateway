@@ -216,6 +216,7 @@ func (s *stubSyncClient) Validators(context.Context, *int64, *int, *int) (*coret
 
 type stubTxIndexer struct{}
 
+func (stubTxIndexer) WithContext(context.Context) TxIndexer                 { return stubTxIndexer{} }
 func (stubTxIndexer) IndexBlock(*tmtypes.Block, []*abci.ExecTxResult) error { return nil }
 func (stubTxIndexer) LastIndexedBlock() (int64, error)                      { return 0, nil }
 func (stubTxIndexer) FirstIndexedBlock() (int64, error)                     { return 0, nil }
@@ -257,6 +258,7 @@ type recordingTxIndexer struct {
 	blockTxs map[int64][]string
 }
 
+func (r *recordingTxIndexer) WithContext(context.Context) TxIndexer { return r }
 func (r *recordingTxIndexer) IndexBlock(block *tmtypes.Block, _ []*abci.ExecTxResult) error {
 	txNames := make([]string, 0, len(block.Txs))
 	for _, tx := range block.Txs {

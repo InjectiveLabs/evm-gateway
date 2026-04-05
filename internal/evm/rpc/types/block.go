@@ -49,11 +49,20 @@ func NewBlockNumber(n *big.Int) BlockNumber {
 // 0, it will return an empty context and the gRPC query will use the latest block height for querying.
 // Note that all metadata are processed and removed by tendermint layer, so it wont be accessible at gRPC server level.
 func ContextWithHeight(height int64) context.Context {
+	return ContextWithHeightFrom(context.Background(), height)
+}
+
+// ContextWithHeightFrom appends block height metadata to the provided context while
+// preserving any existing cancellation or tracing state.
+func ContextWithHeightFrom(parent context.Context, height int64) context.Context {
+	if parent == nil {
+		parent = context.Background()
+	}
 	if height == 0 {
-		return context.Background()
+		return parent
 	}
 
-	return metadata.AppendToOutgoingContext(context.Background(), grpctypes.GRPCBlockHeightHeader, fmt.Sprintf("%d", height))
+	return metadata.AppendToOutgoingContext(parent, grpctypes.GRPCBlockHeightHeader, fmt.Sprintf("%d", height))
 }
 
 // UnmarshalJSON parses the given JSON fragment into a BlockNumber. It supports:

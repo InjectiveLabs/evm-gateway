@@ -18,6 +18,7 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/pkg/errors"
+	"upd.dev/xlab/gotracer"
 
 	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
 	evmtypes "github.com/InjectiveLabs/sdk-go/chain/evm/types"
@@ -31,6 +32,14 @@ func (b *Backend) ChainID() *hexutil.Big {
 
 // ChainConfig returns the latest ethereum chain configuration
 func (b *Backend) ChainConfig() *params.ChainConfig {
+	ctx := b.operationContext()
+	if b.ctx != nil {
+		defer gotracer.Trace(&ctx, b.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, b.baseTraceTags)()
+	}
+	b = b.WithContext(ctx).(*Backend)
+
 	queryParams, err := b.queryClient.Params(b.ctx, &evmtypes.QueryParamsRequest{})
 	if err != nil {
 		return nil
@@ -40,12 +49,28 @@ func (b *Backend) ChainConfig() *params.ChainConfig {
 
 // CurrentHeader returns the latest block header
 func (b *Backend) CurrentHeader() (*ethtypes.Header, error) {
+	ctx := b.operationContext()
+	if b.ctx != nil {
+		defer gotracer.Trace(&ctx, b.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, b.baseTraceTags)()
+	}
+	b = b.WithContext(ctx).(*Backend)
+
 	return b.HeaderByNumber(rpctypes.EthLatestBlockNumber)
 }
 
 // PendingTransactions returns the transactions that are in the transaction pool
 // and have a from address that is one of the accounts this node manages.
 func (b *Backend) PendingTransactions() ([]sdk.Tx, error) {
+	ctx := b.operationContext()
+	if b.ctx != nil {
+		defer gotracer.Trace(&ctx, b.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, b.baseTraceTags)()
+	}
+	b = b.WithContext(ctx).(*Backend)
+
 	mc, ok := b.clientCtx.Client.(cmtrpcclient.MempoolClient)
 	if !ok {
 		return nil, errors.New("invalid rpc client")
@@ -69,6 +94,14 @@ func (b *Backend) PendingTransactions() ([]sdk.Tx, error) {
 
 // GetCoinbase is the address that staking rewards will be send to (alias for Etherbase).
 func (b *Backend) GetCoinbase() (sdk.AccAddress, error) {
+	ctx := b.operationContext()
+	if b.ctx != nil {
+		defer gotracer.Trace(&ctx, b.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, b.baseTraceTags)()
+	}
+	b = b.WithContext(ctx).(*Backend)
+
 	node, err := b.clientCtx.GetNode()
 	if err != nil {
 		return nil, err
@@ -103,6 +136,14 @@ func (b *Backend) FeeHistory(
 	lastBlock rpc.BlockNumber, // the block to start search , to oldest
 	rewardPercentiles []float64, // percentiles to fetch reward
 ) (*rpctypes.FeeHistoryResult, error) {
+	ctx := b.operationContext()
+	if b.ctx != nil {
+		defer gotracer.Trace(&ctx, b.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, b.baseTraceTags)()
+	}
+	b = b.WithContext(ctx).(*Backend)
+
 	if len(rewardPercentiles) > 100 {
 		return nil, errors.Wrap(errInvalidPercentile, "exceed max length")
 	}
@@ -244,6 +285,14 @@ func (b *Backend) FeeHistory(
 // Although we don't support tx prioritization yet, but we return a positive value to help client to
 // mitigate the base fee changes.
 func (b *Backend) SuggestGasTipCap(baseFee *big.Int) (*big.Int, error) {
+	ctx := b.operationContext()
+	if b.ctx != nil {
+		defer gotracer.Trace(&ctx, b.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, b.baseTraceTags)()
+	}
+	b = b.WithContext(ctx).(*Backend)
+
 	if baseFee == nil {
 		// london hardfork not enabled or feemarket not enabled
 		return big.NewInt(0), nil
@@ -279,6 +328,14 @@ func (b *Backend) SuggestGasTipCap(baseFee *big.Int) (*big.Int, error) {
 
 // GlobalMinGasPrice returns MinGasPrice param from txfees
 func (b *Backend) GlobalMinGasPrice() (sdkmath.LegacyDec, error) {
+	ctx := b.operationContext()
+	if b.ctx != nil {
+		defer gotracer.Trace(&ctx, b.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, b.baseTraceTags)()
+	}
+	b = b.WithContext(ctx).(*Backend)
+
 	res, err := b.queryClient.TxFeesQueryClient.Params(b.ctx, &txfeestypes.QueryParamsRequest{})
 	if err != nil {
 		return sdkmath.LegacyZeroDec(), err
@@ -291,8 +348,16 @@ func (b *Backend) GlobalMinGasPrice() (sdkmath.LegacyDec, error) {
 // If the London hard fork is not activated at the current height, the query will
 // return nil.
 func (b *Backend) BaseFee(blockRes *cmtrpctypes.ResultBlockResults) (*big.Int, error) {
+	ctx := b.operationContext()
+	if b.ctx != nil {
+		defer gotracer.Trace(&ctx, b.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, b.baseTraceTags)()
+	}
+	b = b.WithContext(ctx).(*Backend)
+
 	// return BaseFee if London hard fork is activated and feemarket is enabled
-	res, err := b.queryClient.TxFeesQueryClient.GetEipBaseFee(rpctypes.ContextWithHeight(blockRes.Height), &txfeestypes.QueryEipBaseFeeRequest{})
+	res, err := b.queryClient.TxFeesQueryClient.GetEipBaseFee(b.contextWithHeight(blockRes.Height), &txfeestypes.QueryEipBaseFeeRequest{})
 	if err != nil || res.BaseFee == nil {
 		// we can't tell if it's london HF not enabled or the state is pruned,
 		// in either case, we'll fallback to parsing from begin blocker event,

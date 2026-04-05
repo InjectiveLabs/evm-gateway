@@ -16,10 +16,19 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/pkg/errors"
+	"upd.dev/xlab/gotracer"
 )
 
 // GetCode returns the contract code at the given address and block number.
 func (b *Backend) GetCode(address common.Address, blockNrOrHash rpctypes.BlockNumberOrHash) (hexutil.Bytes, error) {
+	ctx := b.operationContext()
+	if b.ctx != nil {
+		defer gotracer.Trace(&ctx, b.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, b.baseTraceTags)()
+	}
+	b = b.WithContext(ctx).(*Backend)
+
 	blockNum, err := b.BlockNumberFromTendermint(blockNrOrHash)
 	if err != nil {
 		return nil, err
@@ -29,7 +38,7 @@ func (b *Backend) GetCode(address common.Address, blockNrOrHash rpctypes.BlockNu
 		Address: address.String(),
 	}
 
-	res, err := b.queryClient.Code(rpctypes.ContextWithHeight(blockNum.Int64()), req)
+	res, err := b.queryClient.Code(b.contextWithHeight(blockNum.Int64()), req)
 	if err != nil {
 		return nil, err
 	}
@@ -39,6 +48,14 @@ func (b *Backend) GetCode(address common.Address, blockNrOrHash rpctypes.BlockNu
 
 // GetProof returns an account object with proof and any storage proofs
 func (b *Backend) GetProof(address common.Address, storageKeys []string, blockNrOrHash rpctypes.BlockNumberOrHash) (*rpctypes.AccountResult, error) {
+	ctx := b.operationContext()
+	if b.ctx != nil {
+		defer gotracer.Trace(&ctx, b.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, b.baseTraceTags)()
+	}
+	b = b.WithContext(ctx).(*Backend)
+
 	blockNum, err := b.BlockNumberFromTendermint(blockNrOrHash)
 	if err != nil {
 		return nil, err
@@ -50,7 +67,7 @@ func (b *Backend) GetProof(address common.Address, storageKeys []string, blockNr
 		// the error message imitates geth behavior
 		return nil, errors.New("header not found")
 	}
-	ctx := rpctypes.ContextWithHeight(height)
+	queryCtx := b.contextWithHeight(height)
 
 	// if the height is equal to zero, meaning the query condition of the block is either "pending" or "latest"
 	if height == 0 {
@@ -90,7 +107,7 @@ func (b *Backend) GetProof(address common.Address, storageKeys []string, blockNr
 		Address: address.String(),
 	}
 
-	res, err := b.queryClient.Account(ctx, req)
+	res, err := b.queryClient.Account(queryCtx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -120,6 +137,14 @@ func (b *Backend) GetProof(address common.Address, storageKeys []string, blockNr
 
 // GetStorageAt returns the contract storage at the given address, block number, and key.
 func (b *Backend) GetStorageAt(address common.Address, key string, blockNrOrHash rpctypes.BlockNumberOrHash) (hexutil.Bytes, error) {
+	ctx := b.operationContext()
+	if b.ctx != nil {
+		defer gotracer.Trace(&ctx, b.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, b.baseTraceTags)()
+	}
+	b = b.WithContext(ctx).(*Backend)
+
 	blockNum, err := b.BlockNumberFromTendermint(blockNrOrHash)
 	if err != nil {
 		return nil, err
@@ -130,7 +155,7 @@ func (b *Backend) GetStorageAt(address common.Address, key string, blockNrOrHash
 		Key:     key,
 	}
 
-	res, err := b.queryClient.Storage(rpctypes.ContextWithHeight(blockNum.Int64()), req)
+	res, err := b.queryClient.Storage(b.contextWithHeight(blockNum.Int64()), req)
 	if err != nil {
 		return nil, err
 	}
@@ -141,6 +166,14 @@ func (b *Backend) GetStorageAt(address common.Address, key string, blockNrOrHash
 
 // GetBalance returns the provided account's balance up to the provided block number.
 func (b *Backend) GetBalance(address common.Address, blockNrOrHash rpctypes.BlockNumberOrHash) (*hexutil.Big, error) {
+	ctx := b.operationContext()
+	if b.ctx != nil {
+		defer gotracer.Trace(&ctx, b.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, b.baseTraceTags)()
+	}
+	b = b.WithContext(ctx).(*Backend)
+
 	blockNum, err := b.BlockNumberFromTendermint(blockNrOrHash)
 	if err != nil {
 		return nil, err
@@ -155,7 +188,7 @@ func (b *Backend) GetBalance(address common.Address, blockNrOrHash rpctypes.Bloc
 		return nil, err
 	}
 
-	res, err := b.queryClient.Balance(rpctypes.ContextWithHeight(blockNum.Int64()), req)
+	res, err := b.queryClient.Balance(b.contextWithHeight(blockNum.Int64()), req)
 	if err != nil {
 		return nil, err
 	}
@@ -175,6 +208,14 @@ func (b *Backend) GetBalance(address common.Address, blockNrOrHash rpctypes.Bloc
 
 // GetTransactionCount returns the number of transactions at the given address up to the given block number.
 func (b *Backend) GetTransactionCount(address common.Address, blockNum rpctypes.BlockNumber) (*hexutil.Uint64, error) {
+	ctx := b.operationContext()
+	if b.ctx != nil {
+		defer gotracer.Trace(&ctx, b.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, b.baseTraceTags)()
+	}
+	b = b.WithContext(ctx).(*Backend)
+
 	n := hexutil.Uint64(0)
 	bn, err := b.BlockNumber()
 	if err != nil {

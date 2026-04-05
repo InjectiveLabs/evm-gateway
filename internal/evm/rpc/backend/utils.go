@@ -19,6 +19,7 @@ import (
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"upd.dev/xlab/gotracer"
 
 	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
 	evmtypes "github.com/InjectiveLabs/sdk-go/chain/evm/types"
@@ -45,10 +46,18 @@ func (s sortGasAndReward) Less(i, j int) bool {
 // txs in order to compute and return the pending tx sequence.
 // Todo: include the ability to specify a blockNumber
 func (b *Backend) getAccountNonce(accAddr common.Address, pending bool, height int64, logger *slog.Logger) (uint64, error) {
+	ctx := b.operationContext()
+	if b.ctx != nil {
+		defer gotracer.Trace(&ctx, b.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, b.baseTraceTags)()
+	}
+	b = b.WithContext(ctx).(*Backend)
+
 	queryClient := authtypes.NewQueryClient(b.clientCtx)
 	adr := sdk.AccAddress(accAddr.Bytes()).String()
-	ctx := types.ContextWithHeight(height)
-	res, err := queryClient.Account(ctx, &authtypes.QueryAccountRequest{Address: adr})
+	queryCtx := types.ContextWithHeightFrom(b.operationContext(), height)
+	res, err := queryClient.Account(queryCtx, &authtypes.QueryAccountRequest{Address: adr})
 	if err != nil {
 		st, ok := status.FromError(err)
 		// treat as account doesn't exist yet
@@ -107,6 +116,14 @@ func (b *Backend) processBlock(
 	cometBlockResult *cmrpctypes.ResultBlockResults,
 	targetOneFeeHistory *types.OneFeeHistory,
 ) error {
+	ctx := b.operationContext()
+	if b.ctx != nil {
+		defer gotracer.Trace(&ctx, b.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, b.baseTraceTags)()
+	}
+	b = b.WithContext(ctx).(*Backend)
+
 	blockHeight := cometBlock.Block.Height
 	blockBaseFee, err := b.BaseFee(cometBlockResult)
 	if err != nil || blockBaseFee == nil {

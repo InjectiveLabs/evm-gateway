@@ -19,6 +19,7 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/ethereum/go-ethereum/signer/core/apitypes"
+	"upd.dev/xlab/gotracer"
 
 	appconfig "github.com/InjectiveLabs/evm-gateway/internal/config"
 	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
@@ -37,6 +38,8 @@ type BackendI interface {
 // as defined by EIP-1474: https://github.com/ethereum/EIPs/blob/master/EIPS/eip-1474.md
 // Implemented by Backend.
 type EVMBackend interface {
+	WithContext(ctx context.Context) EVMBackend
+
 	// Node specific queries
 	Syncing() (interface{}, error)
 	SetEtherbase(etherbase common.Address) bool
@@ -46,6 +49,10 @@ type EVMBackend interface {
 	RPCEVMTimeout() time.Duration // global timeout for eth_call over rpc: DoS protection
 	RPCTxFeeCap() float64         // RPCTxFeeCap is the global transaction fee(price * gaslimit) cap for send-transaction variants.
 	RPCMinGasPrice() *big.Int
+	RPCFilterCap() int32
+	RPCFeeHistoryCap() int32
+	RPCLogsCap() int32
+	RPCBlockRangeCap() int32
 
 	// Sign Tx
 	Sign(address common.Address, data hexutil.Bytes) (hexutil.Bytes, error)
@@ -142,6 +149,7 @@ type Backend struct {
 	queryClient         *rpctypes.QueryClient // gRPC query client
 	logger              *slog.Logger
 	cfg                 appconfig.Config
+	baseTraceTags       gotracer.Tags
 	chainID             *big.Int
 	allowUnprotectedTxs bool
 	indexer             txindexer.TxIndexer
@@ -164,11 +172,12 @@ func NewBackend(
 	}
 
 	b := &Backend{
-		ctx:                 context.Background(),
+		ctx:                 nil,
 		clientCtx:           clientCtx,
 		queryClient:         rpctypes.NewQueryClient(clientCtx),
 		logger:              logger.With("module", "backend"),
 		cfg:                 cfg,
+		baseTraceTags:       newBackendTraceTags(),
 		chainID:             new(big.Int).Set(chainID),
 		allowUnprotectedTxs: allowUnprotectedTxs,
 		indexer:             indexer,
