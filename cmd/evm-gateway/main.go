@@ -21,7 +21,7 @@ func newGatewayCLI() *cli.Cli {
 
 	app := cli.App(
 		"evm-gateway",
-		"Standalone Ethereum JSON-RPC gateway for Injective EVM. Runs `start` when no action is specified.",
+		bannerStr+"\nStandalone Ethereum JSON-RPC gateway for Injective EVM.",
 	)
 
 	opts := &gatewayCLIOptions{}
@@ -36,14 +36,14 @@ func newGatewayCLI() *cli.Cli {
 		runDefaultAction(opts)
 	}
 
-	app.Command("start", "Start the EVM gateway service.", func(cmd *cli.Cmd) {
+	app.Command("start", "Start the EVM gateway service (runs by default).", func(cmd *cli.Cmd) {
 		cmd.Action = func() {
 			runDefaultAction(opts)
 		}
 	})
 
 	app.Command("version", "Print build version information and exit.", versionCmd)
-	app.Command("resync", "Resync gateway state (stub; not implemented yet).", func(cmd *cli.Cmd) {
+	app.Command("resync", "Resync gateway state for specified block range.", func(cmd *cli.Cmd) {
 		cmd.Action = func() {
 			runOrFail(resyncRunner(opts))
 		}
@@ -66,3 +66,11 @@ func runDefaultAction(opts *gatewayCLIOptions) {
 
 	runOrFail(startRunner(opts))
 }
+
+const bannerStr = `░█▀▀░█░█░█▄█░░░░░░░░░░░░░░░░
+░█▀▀░▀▄▀░█░█░░░░░░░░░░░░░░░░
+░▀▀▀░░▀░░▀░▀░░░░░░░░░░░░░░░░
+░█▀▀░█▀█░▀█▀░█▀▀░█░█░█▀█░█░█
+░█░█░█▀█░░█░░█▀▀░█▄█░█▀█░░█░
+░▀▀▀░▀░▀░░▀░░▀▀▀░▀░▀░▀░▀░░▀░
+`
