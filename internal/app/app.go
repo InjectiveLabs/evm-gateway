@@ -14,6 +14,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
 	"upd.dev/xlab/gotracer"
 
 	rpchttp "github.com/cometbft/cometbft/rpc/client/http"
@@ -280,9 +281,6 @@ func protocolAndAddress(listenAddr string) (string, string) {
 }
 
 func openIndexerDB(rootDir string, backend string) (dbm.DB, error) {
-	ctx := context.Background()
-	defer gotracer.Traceless(&ctx, appTraceTag)()
-
 	dataDir := filepath.Join(rootDir, "data")
 	return dbm.NewDB("evmindexer", dbm.BackendType(backend), dataDir)
 }

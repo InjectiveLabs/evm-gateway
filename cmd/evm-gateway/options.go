@@ -20,8 +20,11 @@ type gatewayCLIOptions struct {
 	wsAddr  *string
 	rpcAPI  *string
 
-	tracingEnabled *bool
-	tracingDSN     *string
+	tracingEnabled                    *bool
+	tracingDSN                        *string
+	tracingCollectorAuthorization     *string
+	tracingCollectorAuthorizationName *string
+	tracingCollectorEnableTLS         *bool
 }
 
 func initGlobalOptions(app *cli.Cli, opts *gatewayCLIOptions) {

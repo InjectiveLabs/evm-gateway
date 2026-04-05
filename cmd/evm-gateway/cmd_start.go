@@ -58,6 +58,9 @@ func buildConfig(opts *gatewayCLIOptions) (config.Config, error) {
 	cfg.JSONRPC.API = parseCSV(*opts.rpcAPI, cfg.JSONRPC.API)
 	cfg.Tracing.Enabled = *opts.tracingEnabled
 	cfg.Tracing.CollectorDSN = *opts.tracingDSN
+	cfg.Tracing.CollectorAuthorization = *opts.tracingCollectorAuthorization
+	cfg.Tracing.CollectorAuthorizationField = *opts.tracingCollectorAuthorizationName
+	cfg.Tracing.CollectorEnableTLS = *opts.tracingCollectorEnableTLS
 
 	cfg.Expand()
 
