@@ -225,9 +225,6 @@ func loadEnvFile(path string) error {
 		if key == "" {
 			continue
 		}
-		if _, exists := os.LookupEnv(key); exists {
-			continue
-		}
 		if err := os.Setenv(key, value); err != nil {
 			return fmt.Errorf("set env %s: %w", key, err)
 		}
