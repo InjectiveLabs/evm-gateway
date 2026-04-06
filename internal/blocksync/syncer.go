@@ -28,6 +28,7 @@ var ErrBlockUnavailable = errors.New("block not available")
 
 var (
 	lowestAvailableHeightRE = regexp.MustCompile(`lowest height is (\d+)`)
+	aheadOfHeadHeightRE     = regexp.MustCompile(`height \d+ must be less than or equal to the current blockchain height \d+`)
 	blockSyncTraceTag       = gotracer.NewTag("component", "block_sync")
 )
 
@@ -447,6 +448,15 @@ func (b *blockGetter) fetchWithRetry(ctx context.Context, fn func() error) error
 		if err == nil {
 			return nil
 		}
+		if isAheadOfChainHead(err) {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(retryDelay):
+			}
+			attempt--
+			continue
+		}
 		if b.allowGaps && isNotFound(err) {
 			return ErrBlockUnavailable
 		}
@@ -475,6 +485,10 @@ func (b *blockGetter) logFetchFailure(logger *slog.Logger, err error) {
 
 func isNotFound(err error) bool {
 	return err != nil && strings.Contains(err.Error(), NotFoundErr)
+}
+
+func isAheadOfChainHead(err error) bool {
+	return err != nil && aheadOfHeadHeightRE.MatchString(err.Error())
 }
 
 func LowestAvailableHeight(err error) (int64, bool) {

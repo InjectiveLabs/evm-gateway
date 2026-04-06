@@ -28,6 +28,29 @@ import (
 
 var jsonRPCTraceTag = gotracer.NewTag("component", "jsonrpc")
 
+type eventStreamStarter interface {
+	IsRunning() bool
+	Start() error
+}
+
+func eventClientForStreams(client any) (rpcclient.EventsClient, error) {
+	evtClient, ok := client.(rpcclient.EventsClient)
+	if !ok {
+		return nil, nil
+	}
+
+	starter, ok := client.(eventStreamStarter)
+	if !ok || starter.IsRunning() {
+		return evtClient, nil
+	}
+
+	if err := starter.Start(); err != nil {
+		return nil, err
+	}
+
+	return evtClient, nil
+}
+
 // Start starts the JSON-RPC server
 func Start(
 	logger *slog.Logger,
@@ -44,9 +67,17 @@ func Start(
 	logger = logger.With("module", "jsonrpc")
 
 	var rpcStream *stream.RPCStream
-	if evtClient, ok := clientCtx.Client.(rpcclient.EventsClient); ok {
+	evtClient, err := eventClientForStreams(clientCtx.Client)
+	if err != nil {
+		logger.Warn(
+			"comet event streams unavailable; continuing in polling-only mode",
+			"client_type", fmt.Sprintf("%T", clientCtx.Client),
+			"error", err,
+			"eth_subscribe_available", false,
+			"eth_new_filter_available", false,
+		)
+	} else if evtClient != nil {
 		var rpcStreamOpenAttempts = 6
-		var err error
 		for i := 0; i < rpcStreamOpenAttempts; i++ {
 			rpcStream, err = stream.NewRPCStreams(evtClient, logger, clientCtx.TxConfig.TxDecoder())
 			if err == nil {
@@ -59,6 +90,7 @@ func Start(
 		if err != nil {
 			logger.Warn(
 				"comet event streams unavailable; continuing in polling-only mode",
+				"client_type", fmt.Sprintf("%T", clientCtx.Client),
 				"error", err,
 				"eth_subscribe_available", false,
 				"eth_new_filter_available", false,
