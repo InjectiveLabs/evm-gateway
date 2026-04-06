@@ -11,6 +11,7 @@ import (
 	abci "github.com/cometbft/cometbft/abci/types"
 	coretypes "github.com/cometbft/cometbft/rpc/core/types"
 	tmtypes "github.com/cometbft/cometbft/types"
+	dbm "github.com/cosmos/cosmos-db"
 	"github.com/ethereum/go-ethereum/common"
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
 
@@ -186,6 +187,254 @@ func TestSyncerResyncReindexesRequestedBlocks(t *testing.T) {
 	}
 }
 
+func TestSyncerResyncDeletesFailedBlockAndReturnsError(t *testing.T) {
+	indexer := &faultyTxIndexer{
+		blockTxs:    map[int64][]string{12: []string{"stale"}},
+		failHeights: map[int64]error{12: newBlockParseError(errors.New("bad event"), "block 12 txIndex 0: failed to parse tx result")},
+	}
+
+	syncer := NewSyncer(
+		config.Config{
+			FetchJobs: 1,
+		},
+		testLogger(),
+		&stubSyncClient{
+			blockFn: func(_ context.Context, height *int64) (*coretypes.ResultBlock, error) {
+				if height == nil {
+					return nil, errors.New("nil height")
+				}
+				block, ok := testBlocks[*height]
+				if !ok {
+					return nil, errors.New("block not found")
+				}
+				return &coretypes.ResultBlock{Block: block}, nil
+			},
+			blockResultsFn: func(_ context.Context, height *int64) (*coretypes.ResultBlockResults, error) {
+				if height == nil {
+					return nil, errors.New("nil height")
+				}
+				block, ok := testBlocks[*height]
+				if !ok {
+					return nil, errors.New("block results not found")
+				}
+				return &coretypes.ResultBlockResults{TxResults: make([]*abci.ExecTxResult, len(block.Txs))}, nil
+			},
+		},
+		nil,
+		indexer,
+		nil,
+	)
+
+	_, err := syncer.Resync(context.Background(), []BlockRange{{Start: 12, End: 12}})
+	if err == nil {
+		t.Fatal("expected resync to return an error")
+	}
+	if !errors.Is(err, ErrBlockParse) {
+		t.Fatalf("expected parse error, got %v", err)
+	}
+	if _, ok := indexer.blockTxs[12]; ok {
+		t.Fatalf("expected failed block to be deleted, got %v", indexer.blockTxs[12])
+	}
+	if got, want := indexer.deleted, []int64{12}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected deleted heights: got %v want %v", got, want)
+	}
+}
+
+func TestSyncerRunContinuesToNextGapAfterParseErrorWithoutAllowGaps(t *testing.T) {
+	db := dbm.NewMemDB()
+	if err := db.Set(BlockMetaKey(3), mustJSON(CachedBlockMeta{Height: 3, Hash: common.HexToHash("0x03").Hex()})); err != nil {
+		t.Fatalf("set block meta: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	indexer := &faultyTxIndexer{
+		blockTxs:    make(map[int64][]string),
+		failHeights: map[int64]error{2: newBlockParseError(errors.New("bad event"), "block 2 txIndex 0: failed to parse tx result")},
+		onSuccess: func(height int64) {
+			if height == 4 {
+				cancel()
+			}
+		},
+	}
+
+	syncer := NewSyncer(
+		config.Config{
+			EnableSync: true,
+			Earliest:   1,
+			FetchJobs:  1,
+			AllowGaps:  false,
+		},
+		testLogger(),
+		&stubSyncClient{
+			status: &coretypes.ResultStatus{
+				SyncInfo: coretypes.SyncInfo{
+					LatestBlockHeight:   4,
+					EarliestBlockHeight: 1,
+				},
+			},
+			blockFn: func(_ context.Context, height *int64) (*coretypes.ResultBlock, error) {
+				if height == nil {
+					return nil, errors.New("nil height")
+				}
+				block, ok := testBlocks[*height]
+				if !ok {
+					return nil, errors.New("block not found")
+				}
+				return &coretypes.ResultBlock{Block: block}, nil
+			},
+			blockResultsFn: func(_ context.Context, height *int64) (*coretypes.ResultBlockResults, error) {
+				if height == nil {
+					return nil, errors.New("nil height")
+				}
+				block, ok := testBlocks[*height]
+				if !ok {
+					return nil, errors.New("block results not found")
+				}
+				return &coretypes.ResultBlockResults{TxResults: make([]*abci.ExecTxResult, len(block.Txs))}, nil
+			},
+		},
+		db,
+		indexer,
+		nil,
+	)
+
+	err := syncer.Run(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected run to stop on context cancel after continuing gaps, got %v", err)
+	}
+	if got, want := indexer.successes, []int64{1, 4}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected indexed heights: got %v want %v", got, want)
+	}
+	if got, want := indexer.deleted, []int64{2}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected deleted heights: got %v want %v", got, want)
+	}
+}
+
+func TestSyncerRunSkipsParseErrorWhenAllowGapsEnabled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	indexer := &faultyTxIndexer{
+		blockTxs:    make(map[int64][]string),
+		failHeights: map[int64]error{1: newBlockParseError(errors.New("bad event"), "block 1 txIndex 0: failed to parse tx result")},
+		onSuccess: func(height int64) {
+			if height == 2 {
+				cancel()
+			}
+		},
+	}
+
+	syncer := NewSyncer(
+		config.Config{
+			EnableSync: true,
+			Earliest:   1,
+			FetchJobs:  1,
+			AllowGaps:  true,
+		},
+		testLogger(),
+		&stubSyncClient{
+			status: &coretypes.ResultStatus{
+				SyncInfo: coretypes.SyncInfo{
+					LatestBlockHeight:   2,
+					EarliestBlockHeight: 1,
+				},
+			},
+			blockFn: func(_ context.Context, height *int64) (*coretypes.ResultBlock, error) {
+				if height == nil {
+					return nil, errors.New("nil height")
+				}
+				block, ok := testBlocks[*height]
+				if !ok {
+					return nil, errors.New("block not found")
+				}
+				return &coretypes.ResultBlock{Block: block}, nil
+			},
+			blockResultsFn: func(_ context.Context, height *int64) (*coretypes.ResultBlockResults, error) {
+				if height == nil {
+					return nil, errors.New("nil height")
+				}
+				block, ok := testBlocks[*height]
+				if !ok {
+					return nil, errors.New("block results not found")
+				}
+				return &coretypes.ResultBlockResults{TxResults: make([]*abci.ExecTxResult, len(block.Txs))}, nil
+			},
+		},
+		dbm.NewMemDB(),
+		indexer,
+		nil,
+	)
+
+	err := syncer.Run(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected run to stop on context cancel after skipping parse error, got %v", err)
+	}
+	if got, want := indexer.successes, []int64{2}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected indexed heights: got %v want %v", got, want)
+	}
+	if got, want := indexer.deleted, []int64{1}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected deleted heights: got %v want %v", got, want)
+	}
+}
+
+func TestSyncerRunStopsForwardSyncOnParseErrorAndReturnsNil(t *testing.T) {
+	db := dbm.NewMemDB()
+	if err := db.Set(BlockMetaKey(1), mustJSON(CachedBlockMeta{Height: 1, Hash: common.HexToHash("0x01").Hex()})); err != nil {
+		t.Fatalf("set block meta: %v", err)
+	}
+
+	indexer := &faultyTxIndexer{
+		blockTxs:    make(map[int64][]string),
+		failHeights: map[int64]error{2: newBlockParseError(errors.New("bad event"), "block 2 txIndex 0: failed to parse tx result")},
+	}
+
+	syncer := NewSyncer(
+		config.Config{
+			EnableSync: true,
+			Earliest:   1,
+			FetchJobs:  1,
+			AllowGaps:  false,
+		},
+		testLogger(),
+		&stubSyncClient{
+			status: &coretypes.ResultStatus{
+				SyncInfo: coretypes.SyncInfo{
+					LatestBlockHeight:   1,
+					EarliestBlockHeight: 1,
+				},
+			},
+			blockFn: func(_ context.Context, height *int64) (*coretypes.ResultBlock, error) {
+				if height == nil {
+					return nil, errors.New("nil height")
+				}
+				block, ok := testBlocks[*height]
+				if !ok {
+					return nil, errors.New("block not found")
+				}
+				return &coretypes.ResultBlock{Block: block}, nil
+			},
+			blockResultsFn: func(_ context.Context, height *int64) (*coretypes.ResultBlockResults, error) {
+				if height == nil {
+					return nil, errors.New("nil height")
+				}
+				block, ok := testBlocks[*height]
+				if !ok {
+					return nil, errors.New("block results not found")
+				}
+				return &coretypes.ResultBlockResults{TxResults: make([]*abci.ExecTxResult, len(block.Txs))}, nil
+			},
+		},
+		db,
+		indexer,
+		nil,
+	)
+
+	if err := syncer.Run(context.Background()); err != nil {
+		t.Fatalf("expected forward sync parse error to stop sync without failing app, got %v", err)
+	}
+	if got, want := indexer.deleted, []int64{2}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected deleted heights: got %v want %v", got, want)
+	}
+}
+
 type stubSyncClient struct {
 	status         *coretypes.ResultStatus
 	blockFn        func(context.Context, *int64) (*coretypes.ResultBlock, error)
@@ -218,6 +467,7 @@ type stubTxIndexer struct{}
 
 func (stubTxIndexer) WithContext(context.Context) TxIndexer                 { return stubTxIndexer{} }
 func (stubTxIndexer) IndexBlock(*tmtypes.Block, []*abci.ExecTxResult) error { return nil }
+func (stubTxIndexer) DeleteBlock(int64) error                               { return nil }
 func (stubTxIndexer) LastIndexedBlock() (int64, error)                      { return 0, nil }
 func (stubTxIndexer) FirstIndexedBlock() (int64, error)                     { return 0, nil }
 func (stubTxIndexer) GetByTxHash(common.Hash) (*chaintypes.TxResult, error) { return nil, nil }
@@ -241,6 +491,18 @@ func testLogger() *slog.Logger {
 }
 
 var testBlocks = map[int64]*tmtypes.Block{
+	1: tmtypes.MakeBlock(1, []tmtypes.Tx{
+		tmtypes.Tx("tx-1a"),
+	}, nil, nil),
+	2: tmtypes.MakeBlock(2, []tmtypes.Tx{
+		tmtypes.Tx("tx-2a"),
+	}, nil, nil),
+	3: tmtypes.MakeBlock(3, []tmtypes.Tx{
+		tmtypes.Tx("tx-3a"),
+	}, nil, nil),
+	4: tmtypes.MakeBlock(4, []tmtypes.Tx{
+		tmtypes.Tx("tx-4a"),
+	}, nil, nil),
 	12: tmtypes.MakeBlock(12, []tmtypes.Tx{
 		tmtypes.Tx("tx-12a"),
 	}, nil, nil),
@@ -266,6 +528,11 @@ func (r *recordingTxIndexer) IndexBlock(block *tmtypes.Block, _ []*abci.ExecTxRe
 	}
 	r.order = append(r.order, block.Height)
 	r.blockTxs[block.Height] = txNames
+	return nil
+}
+
+func (r *recordingTxIndexer) DeleteBlock(height int64) error {
+	delete(r.blockTxs, height)
 	return nil
 }
 
@@ -311,3 +578,62 @@ func (r *recordingTxIndexer) GetLogsByBlockHash(common.Hash) ([][]*ethtypes.Log,
 	return nil, nil
 }
 func (r *recordingTxIndexer) IsBlockIndexed(int64) (bool, error) { return false, nil }
+
+type faultyTxIndexer struct {
+	successes   []int64
+	deleted     []int64
+	blockTxs    map[int64][]string
+	failHeights map[int64]error
+	onSuccess   func(int64)
+}
+
+func (f *faultyTxIndexer) WithContext(context.Context) TxIndexer { return f }
+
+func (f *faultyTxIndexer) IndexBlock(block *tmtypes.Block, _ []*abci.ExecTxResult) error {
+	if err, ok := f.failHeights[block.Height]; ok {
+		return err
+	}
+
+	txNames := make([]string, 0, len(block.Txs))
+	for _, tx := range block.Txs {
+		txNames = append(txNames, string(tx))
+	}
+	f.successes = append(f.successes, block.Height)
+	f.blockTxs[block.Height] = txNames
+	if f.onSuccess != nil {
+		f.onSuccess(block.Height)
+	}
+	return nil
+}
+
+func (f *faultyTxIndexer) DeleteBlock(height int64) error {
+	f.deleted = append(f.deleted, height)
+	delete(f.blockTxs, height)
+	return nil
+}
+
+func (f *faultyTxIndexer) LastIndexedBlock() (int64, error)  { return 0, nil }
+func (f *faultyTxIndexer) FirstIndexedBlock() (int64, error) { return 0, nil }
+func (f *faultyTxIndexer) GetByTxHash(common.Hash) (*chaintypes.TxResult, error) {
+	return nil, nil
+}
+func (f *faultyTxIndexer) GetByBlockAndIndex(int64, int32) (*chaintypes.TxResult, error) {
+	return nil, nil
+}
+func (f *faultyTxIndexer) GetRPCTransactionByHash(common.Hash) (*rpctypes.RPCTransaction, error) {
+	return nil, nil
+}
+func (f *faultyTxIndexer) GetRPCTransactionByBlockAndIndex(int64, int32) (*rpctypes.RPCTransaction, error) {
+	return nil, nil
+}
+func (f *faultyTxIndexer) GetReceiptByTxHash(common.Hash) (map[string]interface{}, error) {
+	return nil, nil
+}
+func (f *faultyTxIndexer) GetBlockMetaByHeight(int64) (*CachedBlockMeta, error) { return nil, nil }
+func (f *faultyTxIndexer) GetLogsByBlockHeight(int64) ([][]*ethtypes.Log, error) {
+	return nil, nil
+}
+func (f *faultyTxIndexer) GetLogsByBlockHash(common.Hash) ([][]*ethtypes.Log, error) {
+	return nil, nil
+}
+func (f *faultyTxIndexer) IsBlockIndexed(int64) (bool, error) { return false, nil }

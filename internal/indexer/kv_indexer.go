@@ -116,22 +116,24 @@ func (kv *KVIndexer) IndexBlockWithStats(block *cmtypes.Block, txResults []*abci
 	var ethTxIndex int32
 	for txIndex, tx := range block.Txs {
 		if txIndex >= len(txResults) {
-			kv.logger.Error("tx results shorter than block tx list", "block", block.Height, "txIndex", txIndex, "txCount", len(block.Txs), "txResultCount", len(txResults))
-			break
+			return stats, newBlockParseError(
+				nil,
+				"block %d txIndex %d: tx results shorter than block tx list (txCount=%d txResultCount=%d)",
+				block.Height,
+				txIndex,
+				len(block.Txs),
+				len(txResults),
+			)
 		}
 		result := txResults[txIndex]
 		if result == nil {
-			kv.logger.Error("missing tx result", "block", block.Height, "txIndex", txIndex)
-			continue
+			return stats, newBlockParseError(nil, "block %d txIndex %d: missing tx result", block.Height, txIndex)
 		}
 		resultGasUsed := uint64(result.GasUsed)
 
 		tx, err := kv.clientCtx.TxConfig.TxDecoder()(tx)
 		if err != nil {
-			kv.logger.Error("Fail to decode tx", "err", err, "block", block.Height, "txIndex", txIndex)
-			blockGasUsed += resultGasUsed
-			blockResultGasUsedBeforeTx += resultGasUsed
-			continue
+			return stats, newBlockParseError(err, "block %d txIndex %d: failed to decode tx", block.Height, txIndex)
 		}
 
 		if !isEthTx(tx) {
@@ -142,10 +144,7 @@ func (kv *KVIndexer) IndexBlockWithStats(block *cmtypes.Block, txResults []*abci
 
 		txs, err := rpctypes.ParseTxResult(result, tx)
 		if err != nil {
-			kv.logger.Error("Fail to parse event", "err", err, "block", block.Height, "txIndex", txIndex)
-			blockGasUsed += resultGasUsed
-			blockResultGasUsedBeforeTx += resultGasUsed
-			continue
+			return stats, newBlockParseError(err, "block %d txIndex %d: failed to parse tx result", block.Height, txIndex)
 		}
 
 		var cumulativeTxEthGasUsed uint64
@@ -175,11 +174,18 @@ func (kv *KVIndexer) IndexBlockWithStats(block *cmtypes.Block, txResults []*abci
 
 				parsedTx := txs.GetTxByMsgIndex(msgIndex)
 				if parsedTx == nil {
-					kv.logger.Error("msg index not found in results", "msgIndex", msgIndex)
-					continue
+					return stats, newBlockParseError(nil, "block %d txIndex %d msgIndex %d: msg index not found in results", block.Height, txIndex, msgIndex)
 				}
 				if parsedTx.EthTxIndex >= 0 && parsedTx.EthTxIndex != ethTxIndex {
-					kv.logger.Error("eth tx index don't match", "expect", ethTxIndex, "found", parsedTx.EthTxIndex)
+					return stats, newBlockParseError(
+						nil,
+						"block %d txIndex %d msgIndex %d: eth tx index mismatch (expected=%d found=%d)",
+						block.Height,
+						txIndex,
+						msgIndex,
+						ethTxIndex,
+						parsedTx.EthTxIndex,
+					)
 				}
 				txResult.GasUsed = parsedTx.GasUsed
 				txResult.Failed = parsedTx.Failed
@@ -195,15 +201,12 @@ func (kv *KVIndexer) IndexBlockWithStats(block *cmtypes.Block, txResults []*abci
 
 			txData := ethMsg.AsTransaction()
 			if txData == nil {
-				kv.logger.Warn("failed to unpack eth tx data", "height", block.Height, "txIndex", txIndex, "msgIndex", msgIndex)
-				ethTxIndex++
-				continue
+				return stats, newBlockParseError(nil, "block %d txIndex %d msgIndex %d: failed to unpack eth tx data", block.Height, txIndex, msgIndex)
 			}
 
 			logs, err := evmtypes.DecodeMsgLogs(result.Data, msgIndex, uint64(block.Height))
 			if err != nil {
-				kv.logger.Warn("failed to decode msg logs", "height", block.Height, "txIndex", txIndex, "msgIndex", msgIndex, "error", err.Error())
-				logs = nil
+				return stats, newBlockParseError(err, "block %d txIndex %d msgIndex %d: failed to decode msg logs", block.Height, txIndex, msgIndex)
 			}
 
 			status := uint64(ethtypes.ReceiptStatusSuccessful)
@@ -219,8 +222,7 @@ func (kv *KVIndexer) IndexBlockWithStats(block *cmtypes.Block, txResults []*abci
 			}
 			from, err := ethMsg.GetSenderLegacy(signer)
 			if err != nil {
-				kv.logger.Warn("failed to derive tx sender", "height", block.Height, "txHash", txHash.Hex(), "error", err.Error())
-				from = common.Address{}
+				return stats, newBlockParseError(err, "block %d txIndex %d msgIndex %d txHash %s: failed to derive tx sender", block.Height, txIndex, msgIndex, txHash.Hex())
 			}
 
 			var contractAddress *common.Address
@@ -257,14 +259,13 @@ func (kv *KVIndexer) IndexBlockWithStats(block *cmtypes.Block, txResults []*abci
 				txData.ChainId(),
 			)
 			if err != nil {
-				kv.logger.Warn("failed to build rpc tx", "height", block.Height, "txHash", txHash.Hex(), "error", err.Error())
-			} else {
-				if err := batch.Set(RPCtxHashKey(txHash), mustJSON(rpcTx)); err != nil {
-					return stats, errorsmod.Wrapf(err, "IndexBlock %d, set rpc tx hash", block.Height)
-				}
-				if err := batch.Set(RPCtxIndexKey(block.Height, ethTxIndex), txHash.Bytes()); err != nil {
-					return stats, errorsmod.Wrapf(err, "IndexBlock %d, set rpc tx index", block.Height)
-				}
+				return stats, newBlockParseError(err, "block %d txIndex %d msgIndex %d txHash %s: failed to build rpc tx", block.Height, txIndex, msgIndex, txHash.Hex())
+			}
+			if err := batch.Set(RPCtxHashKey(txHash), mustJSON(rpcTx)); err != nil {
+				return stats, errorsmod.Wrapf(err, "IndexBlock %d, set rpc tx hash", block.Height)
+			}
+			if err := batch.Set(RPCtxIndexKey(block.Height, ethTxIndex), txHash.Bytes()); err != nil {
+				return stats, errorsmod.Wrapf(err, "IndexBlock %d, set rpc tx index", block.Height)
 			}
 
 			blockLogs = append(blockLogs, logs)

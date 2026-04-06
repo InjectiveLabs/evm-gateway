@@ -142,7 +142,11 @@ func (s *Syncer) Run(ctx context.Context) error {
 		})
 		pace.Stop()
 		if err != nil {
-			return err
+			if errors.Is(err, context.Canceled) {
+				return err
+			}
+			s.logger.Error("gap sync stopped", "start", gap.Start, "end", gap.End, "error", err)
+			continue
 		}
 		if s.status != nil {
 			s.status.CompleteCurrentSegment()
@@ -160,9 +164,21 @@ func (s *Syncer) Run(ctx context.Context) error {
 	defer pace.Stop()
 
 	forwardSyncer := blocksync.NewSyncer(s.client, s.logger, s.cfg.FetchJobs, false, false)
-	return forwardSyncer.SyncForward(ctx, lastSynced+1, func(block blocksync.NewBlockData) error {
+	err = forwardSyncer.SyncForward(ctx, lastSynced+1, func(block blocksync.NewBlockData) error {
 		return s.handleSyncedBlock(block, pace)
 	})
+	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return err
+		}
+		s.logger.Error("forward sync stopped", "start", lastSynced+1, "error", err)
+		if s.status != nil {
+			s.status.SetPhase("forward_sync_stopped")
+		}
+		return nil
+	}
+
+	return nil
 }
 
 // Resync reindexes the requested block ranges and exits once complete.
@@ -191,6 +207,9 @@ func (s *Syncer) Resync(ctx context.Context, targets []BlockRange) (ResyncStats,
 			}
 			indexStats, err := s.indexBlockForResync(block.Block, block.BlockResults.TxResults)
 			if err != nil {
+				if cleanupErr := s.cleanupFailedBlock(block.Height); cleanupErr != nil {
+					return errors.Join(pkgerrors.Wrapf(err, "index block %d", block.Height), cleanupErr)
+				}
 				return pkgerrors.Wrapf(err, "index block %d", block.Height)
 			}
 
@@ -254,7 +273,18 @@ func (s *Syncer) handleSyncedBlock(block blocksync.NewBlockData, pace *blocksync
 		return nil
 	}
 	if err := s.indexer.IndexBlock(block.Block, block.BlockResults.TxResults); err != nil {
-		s.logger.Error("failed to index block", "height", block.Height, "error", err)
+		if cleanupErr := s.cleanupFailedBlock(block.Height); cleanupErr != nil {
+			return errors.Join(fmt.Errorf("index block %d: %w", block.Height, err), cleanupErr)
+		}
+		if s.status != nil {
+			s.status.MarkBlock(block.Height, false)
+		}
+		if errors.Is(err, ErrBlockParse) && s.cfg.AllowGaps {
+			s.logger.Warn("skipping block with parsing errors", "height", block.Height, "error", err)
+			pace.Add(1)
+			return nil
+		}
+		return fmt.Errorf("index block %d: %w", block.Height, err)
 	}
 	if s.status != nil {
 		s.status.MarkBlock(block.Height, true)
@@ -274,4 +304,11 @@ func (s *Syncer) indexBlockForResync(block *cmtypes.Block, txResults []*abci.Exe
 		return BlockIndexStats{}, err
 	}
 	return BlockIndexStats{}, nil
+}
+
+func (s *Syncer) cleanupFailedBlock(height int64) error {
+	if err := s.indexer.DeleteBlock(height); err != nil {
+		return fmt.Errorf("delete failed block %d: %w", height, err)
+	}
+	return nil
 }

@@ -21,6 +21,7 @@ type TxIndexer interface {
 	WithContext(ctx context.Context) TxIndexer
 
 	IndexBlock(block *cmtypes.Block, txResults []*abci.ExecTxResult) error
+	DeleteBlock(height int64) error
 	LastIndexedBlock() (int64, error)
 	FirstIndexedBlock() (int64, error)
 	GetByTxHash(hash common.Hash) (*chaintypes.TxResult, error)
