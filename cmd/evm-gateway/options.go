@@ -6,19 +6,22 @@ type gatewayCLIOptions struct {
 	envFile      *string
 	printVersion *bool
 
-	chainID   *string
-	cometRPC  *string
-	grpcAddr  *string
-	earliest  *int
-	fetchJobs *int
-	dataDir   *string
+	chainID        *string
+	cometRPC       *string
+	grpcAddr       *string
+	earliest       *int
+	fetchJobs      *int
+	dataDir        *string
+	enableSync     *bool
+	offlineRPCOnly *bool
 
 	logFormat  *string
 	logVerbose *bool
 
-	rpcAddr *string
-	wsAddr  *string
-	rpcAPI  *string
+	enableRPC *bool
+	rpcAddr   *string
+	wsAddr    *string
+	rpcAPI    *string
 
 	tracingEnabled                    *bool
 	tracingDSN                        *string

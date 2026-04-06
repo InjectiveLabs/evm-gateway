@@ -51,8 +51,11 @@ func buildConfig(opts *gatewayCLIOptions) (config.Config, error) {
 	cfg.Earliest = int64(*opts.earliest)
 	cfg.FetchJobs = *opts.fetchJobs
 	cfg.DataDir = *opts.dataDir
+	cfg.EnableSync = *opts.enableSync
+	cfg.OfflineRPCOnly = *opts.offlineRPCOnly
 	cfg.LogFormat = *opts.logFormat
 	cfg.LogVerbose = *opts.logVerbose
+	cfg.JSONRPC.Enable = *opts.enableRPC
 	cfg.JSONRPC.Address = *opts.rpcAddr
 	cfg.JSONRPC.WsAddress = *opts.wsAddr
 	cfg.JSONRPC.API = parseCSV(*opts.rpcAPI, cfg.JSONRPC.API)

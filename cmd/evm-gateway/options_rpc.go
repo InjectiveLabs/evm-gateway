@@ -9,6 +9,13 @@ import (
 )
 
 func initRPCOptions(app *cli.Cli, opts *gatewayCLIOptions, defaults config.Config) {
+	opts.enableRPC = app.Bool(cli.BoolOpt{
+		Name:   "rpc-enable",
+		Desc:   "Enable JSON-RPC server.",
+		EnvVar: "WEB3INJ_JSONRPC_ENABLE",
+		Value:  defaults.JSONRPC.Enable,
+	})
+
 	opts.rpcAddr = app.String(cli.StringOpt{
 		Name:   "rpc-address",
 		Desc:   "JSON-RPC HTTP listen address.",

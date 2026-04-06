@@ -49,6 +49,9 @@ func TestHistoricalRPCBenchmarkSuite(t *testing.T) {
 
 	ctx := context.Background()
 	cfg := loadBenchmarkConfig(t)
+	if cfg.OfflineAfterSync {
+		t.Log("offline-after-sync mode enabled; measured phase will restart the gateway in KV-only rpc mode")
+	}
 	limit := ensureOpenFileLimit(cfg.MinNoFile)
 	if strings.TrimSpace(limit.Warning) != "" {
 		t.Logf("nofile warning: %s", limit.Warning)
@@ -150,7 +153,9 @@ func TestHistoricalRPCBenchmarkSuite(t *testing.T) {
 		APIList:     "eth,net,web3,debug,inj",
 		WaitTimeout: 90 * time.Second,
 	})
-	defer proc.Stop(t)
+	defer func() {
+		proc.Stop(t)
+	}()
 
 	waitForCondition(t, 5*time.Minute, func() (bool, error) {
 		st, err := proc.Status(ctx)
@@ -170,6 +175,26 @@ func TestHistoricalRPCBenchmarkSuite(t *testing.T) {
 	if cfg.PostSyncSettle > 0 {
 		t.Logf("post-sync settle for %s", cfg.PostSyncSettle)
 		time.Sleep(cfg.PostSyncSettle)
+	}
+	if cfg.OfflineAfterSync {
+		t.Log("restarting benchmark gateway in offline rpc-only mode against the indexed data dir")
+		proc.Stop(t)
+		proc = startGateway(t, gatewayStartConfig{
+			BinaryPath:     gatewayBin,
+			DataDir:        gatewayDataDir,
+			RPCPort:        cfg.GatewayRPCPort,
+			WSPort:         cfg.GatewayWSPort,
+			Earliest:       generatedFrom,
+			FetchJobs:      cfg.FetchJobs,
+			CometRPC:       cfg.CometRPC,
+			GRPCAddr:       cfg.GRPCAddr,
+			ChainID:        cfg.ChainID,
+			EnableSync:     false,
+			EnableRPC:      true,
+			OfflineRPCOnly: true,
+			APIList:        "eth",
+			WaitTimeout:    30 * time.Second,
+		})
 	}
 
 	scenarios := buildBenchmarkScenarios(cfg, fixtures)
@@ -218,12 +243,13 @@ func TestHistoricalRPCBenchmarkSuite(t *testing.T) {
 		WarmupDurationSeconds:  roundSeconds(cfg.WarmupDuration),
 		MeasureDurationSeconds: roundSeconds(cfg.MeasureDuration),
 		Environment: benchmarkEnvironmentReport{
-			SourceRPC:  cfg.SourceRPC,
-			CometRPC:   cfg.CometRPC,
-			GRPCAddr:   cfg.GRPCAddr,
-			ChainID:    cfg.ChainID,
-			EthChainID: cfg.EthChainID,
-			NoFile:     limit,
+			SourceRPC:        cfg.SourceRPC,
+			CometRPC:         cfg.CometRPC,
+			GRPCAddr:         cfg.GRPCAddr,
+			ChainID:          cfg.ChainID,
+			EthChainID:       cfg.EthChainID,
+			OfflineAfterSync: cfg.OfflineAfterSync,
+			NoFile:           limit,
 		},
 		Seed: benchmarkSeedReport{
 			DurationSecondsPerWorkload: roundSeconds(cfg.SeedDuration),
@@ -288,6 +314,7 @@ type benchmarkConfig struct {
 	WorkerScale            int
 	MinNoFile              uint64
 	StrictCacheOnly        bool
+	OfflineAfterSync       bool
 }
 
 func loadBenchmarkConfig(t *testing.T) benchmarkConfig {
@@ -296,6 +323,11 @@ func loadBenchmarkConfig(t *testing.T) benchmarkConfig {
 	sourceRPC := getenv("WEB3INJ_E2E_SOURCE_RPC", defaultSourceRPC)
 	cometRPC := getenv("WEB3INJ_COMET_RPC", defaultCometRPC)
 	grpcAddr := resolveParityGRPCAddr(t)
+	offlineAfterSync := strings.TrimSpace(os.Getenv("WEB3INJ_BENCH_OFFLINE_AFTER_SYNC")) == "1"
+	strictCacheOnly := strings.TrimSpace(os.Getenv("WEB3INJ_BENCH_STRICT_CACHE_ONLY")) == "1"
+	if offlineAfterSync {
+		strictCacheOnly = true
+	}
 	ethChainID, err := ethChainID(context.Background(), sourceRPC)
 	if err != nil {
 		t.Fatalf("query eth chain id: %v", err)
@@ -321,7 +353,8 @@ func loadBenchmarkConfig(t *testing.T) benchmarkConfig {
 		TxCandidateLimit:       getenvInt("WEB3INJ_BENCH_TX_CANDIDATE_LIMIT", defaultBenchTxCandidateLimit),
 		WorkerScale:            getenvInt("WEB3INJ_BENCH_WORKER_SCALE", 1),
 		MinNoFile:              getenvUint64("WEB3INJ_BENCH_MIN_NOFILE", defaultBenchMinNoFile),
-		StrictCacheOnly:        strings.TrimSpace(os.Getenv("WEB3INJ_BENCH_STRICT_CACHE_ONLY")) == "1",
+		StrictCacheOnly:        strictCacheOnly,
+		OfflineAfterSync:       offlineAfterSync,
 	}
 }
 
@@ -1038,12 +1071,13 @@ type benchmarkReport struct {
 }
 
 type benchmarkEnvironmentReport struct {
-	SourceRPC  string             `json:"source_rpc"`
-	CometRPC   string             `json:"comet_rpc"`
-	GRPCAddr   string             `json:"grpc_addr"`
-	ChainID    string             `json:"chain_id"`
-	EthChainID int64              `json:"eth_chain_id"`
-	NoFile     benchmarkNoFileCap `json:"nofile"`
+	SourceRPC        string             `json:"source_rpc"`
+	CometRPC         string             `json:"comet_rpc"`
+	GRPCAddr         string             `json:"grpc_addr"`
+	ChainID          string             `json:"chain_id"`
+	EthChainID       int64              `json:"eth_chain_id"`
+	OfflineAfterSync bool               `json:"offline_after_sync"`
+	NoFile           benchmarkNoFileCap `json:"nofile"`
 }
 
 type benchmarkNoFileCap struct {

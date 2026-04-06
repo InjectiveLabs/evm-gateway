@@ -22,16 +22,17 @@ type Config struct {
 	LogFormat  string
 	LogVerbose bool
 
-	ChainID      string
-	CometRPC     string
-	GRPCAddr     string
-	Earliest     int64
-	FetchJobs    int
-	DataDir      string
-	DBBackend    string
-	AllowGaps    bool
-	EnableSync   bool
-	MinGasPrices string
+	ChainID        string
+	CometRPC       string
+	GRPCAddr       string
+	Earliest       int64
+	FetchJobs      int
+	DataDir        string
+	DBBackend      string
+	AllowGaps      bool
+	EnableSync     bool
+	OfflineRPCOnly bool
+	MinGasPrices   string
 
 	JSONRPC  JSONRPCConfig
 	Tracing  TracingConfig
@@ -77,16 +78,17 @@ func DefaultConfig() Config {
 		LogFormat:  "json",
 		LogVerbose: false,
 
-		ChainID:      "",
-		CometRPC:     "http://localhost:26657",
-		GRPCAddr:     "localhost:9090",
-		Earliest:     1,
-		FetchJobs:    4,
-		DataDir:      "~/.evm-gateway",
-		DBBackend:    "goleveldb",
-		AllowGaps:    true,
-		EnableSync:   true,
-		MinGasPrices: "160000000inj",
+		ChainID:        "",
+		CometRPC:       "http://localhost:26657",
+		GRPCAddr:       "localhost:9090",
+		Earliest:       1,
+		FetchJobs:      4,
+		DataDir:        "~/.evm-gateway",
+		DBBackend:      "goleveldb",
+		AllowGaps:      true,
+		EnableSync:     true,
+		OfflineRPCOnly: false,
+		MinGasPrices:   "160000000inj",
 
 		JSONRPC: JSONRPCConfig{
 			Enable:             true,
@@ -162,6 +164,14 @@ func (c Config) Validate() error {
 	}
 	if c.Shutdown.Timeout <= 0 {
 		return errors.New("shutdown timeout must be positive")
+	}
+	if c.OfflineRPCOnly {
+		if c.EnableSync {
+			return errors.New("offline-rpc-only mode requires enable-sync=false")
+		}
+		if strings.TrimSpace(c.ChainID) == "" {
+			return errors.New("offline-rpc-only mode requires chain-id")
+		}
 	}
 	return nil
 }
@@ -239,6 +249,7 @@ func applyEnvOverrides(cfg *Config) {
 	cfg.DBBackend = getEnvString("DB_BACKEND", cfg.DBBackend)
 	cfg.AllowGaps = getEnvBool("ALLOW_GAPS", cfg.AllowGaps)
 	cfg.EnableSync = getEnvBool("ENABLE_SYNC", cfg.EnableSync)
+	cfg.OfflineRPCOnly = getEnvBool("OFFLINE_RPC_ONLY", cfg.OfflineRPCOnly)
 	cfg.MinGasPrices = getEnvString("MIN_GAS_PRICES", cfg.MinGasPrices)
 	cfg.Shutdown.Timeout = getEnvDuration("SHUTDOWN_TIMEOUT", cfg.Shutdown.Timeout)
 

@@ -194,15 +194,22 @@ type cometStatusClient interface {
 func buildClientContext(ctx context.Context, cfg *config.Config, dataDir string, logger *slog.Logger) (client.Context, *rpchttp.HTTP, *grpc.ClientConn, error) {
 	defer gotracer.Trace(&ctx, appTraceTag)()
 
-	clientCtx, err := chainclient.NewClientContext("", "", nil)
+	clientCtx, err := baseClientContext(ctx, dataDir)
 	if err != nil {
 		return client.Context{}, nil, nil, pkgerrors.Wrap(err, "init injective client context")
 	}
-	clientCtx = clientCtx.
-		WithCmdContext(ctx).
-		WithBroadcastMode(flags.BroadcastSync).
-		WithHomeDir(dataDir).
-		WithNodeURI(cfg.CometRPC)
+
+	if cfg.OfflineRPCOnly {
+		logger.Warn(
+			"starting in offline rpc-only mode; live comet/grpc clients are disabled",
+			"chain_id", cfg.ChainID,
+			"enable_sync", cfg.EnableSync,
+		)
+		clientCtx = clientCtx.WithChainID(cfg.ChainID)
+		return clientCtx, nil, nil, nil
+	}
+
+	clientCtx = clientCtx.WithNodeURI(cfg.CometRPC)
 
 	rpcClient, err := rpchttp.NewWithTimeout(cfg.CometRPC, 10)
 	if err != nil {
@@ -227,6 +234,17 @@ func buildClientContext(ctx context.Context, cfg *config.Config, dataDir string,
 	logger.Info("grpc client ready", "address", cfg.GRPCAddr)
 
 	return clientCtx, rpcClient, grpcConn, nil
+}
+
+func baseClientContext(ctx context.Context, dataDir string) (client.Context, error) {
+	clientCtx, err := chainclient.NewClientContext("", "", nil)
+	if err != nil {
+		return client.Context{}, err
+	}
+	return clientCtx.
+		WithCmdContext(ctx).
+		WithBroadcastMode(flags.BroadcastSync).
+		WithHomeDir(dataDir), nil
 }
 
 func cometChainID(ctx context.Context, rpcClient cometStatusClient) (string, error) {

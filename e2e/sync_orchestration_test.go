@@ -412,19 +412,20 @@ func TestSyncOrchestration(t *testing.T) {
 }
 
 type gatewayStartConfig struct {
-	BinaryPath  string
-	DataDir     string
-	RPCPort     int
-	WSPort      int
-	Earliest    int64
-	FetchJobs   int
-	CometRPC    string
-	GRPCAddr    string
-	ChainID     string
-	EnableSync  bool
-	EnableRPC   bool
-	APIList     string
-	WaitTimeout time.Duration
+	BinaryPath     string
+	DataDir        string
+	RPCPort        int
+	WSPort         int
+	Earliest       int64
+	FetchJobs      int
+	CometRPC       string
+	GRPCAddr       string
+	ChainID        string
+	EnableSync     bool
+	EnableRPC      bool
+	OfflineRPCOnly bool
+	APIList        string
+	WaitTimeout    time.Duration
 }
 
 type gatewayProcess struct {
@@ -466,6 +467,7 @@ func startGateway(t *testing.T, cfg gatewayStartConfig) *gatewayProcess {
 		fmt.Sprintf("WEB3INJ_CHAIN_ID=%s", cfg.ChainID),
 		fmt.Sprintf("WEB3INJ_ENABLE_SYNC=%t", cfg.EnableSync),
 		fmt.Sprintf("WEB3INJ_JSONRPC_ENABLE=%t", cfg.EnableRPC),
+		fmt.Sprintf("WEB3INJ_OFFLINE_RPC_ONLY=%t", cfg.OfflineRPCOnly),
 		fmt.Sprintf("WEB3INJ_JSONRPC_ADDRESS=127.0.0.1:%d", cfg.RPCPort),
 		fmt.Sprintf("WEB3INJ_JSONRPC_WS_ADDRESS=127.0.0.1:%d", cfg.WSPort),
 		fmt.Sprintf("WEB3INJ_JSONRPC_API=%s", cfg.APIList),
