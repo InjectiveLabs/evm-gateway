@@ -19,6 +19,8 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 	"upd.dev/xlab/gotracer"
+
+	txindexer "github.com/InjectiveLabs/evm-gateway/internal/indexer"
 )
 
 // BlockNumber returns the current block number in abci app state. Because abci
@@ -33,6 +35,17 @@ func (b *Backend) BlockNumber() (hexutil.Uint64, error) {
 		defer gotracer.Traceless(&ctx, b.baseTraceTags)()
 	}
 	b = b.WithContext(ctx).(*Backend)
+
+	if b.cfg.OfflineRPCOnly && b.indexer != nil {
+		last, err := b.indexer.LastIndexedBlock()
+		if err != nil {
+			return hexutil.Uint64(0), err
+		}
+		if last < 0 {
+			return hexutil.Uint64(0), nil
+		}
+		return hexutil.Uint64(last), nil
+	}
 
 	// do any grpc query, ignore the response and use the returned block height
 	var header metadata.MD
@@ -65,6 +78,19 @@ func (b *Backend) GetBlockByNumber(blockNum rpctypes.BlockNumber, fullTx bool) (
 		defer gotracer.Traceless(&ctx, b.baseTraceTags)()
 	}
 	b = b.WithContext(ctx).(*Backend)
+
+	if meta, err := b.cachedBlockMetaByNumber(blockNum); err == nil && meta != nil {
+		block, cacheErr := b.rpcBlockFromCachedMeta(meta, fullTx)
+		if cacheErr == nil {
+			return block, nil
+		}
+		if b.cfg.OfflineRPCOnly {
+			return nil, cacheErr
+		}
+		b.logger.Debug("cached block-by-number reconstruction failed; falling back to live rpc", "height", meta.Height, "error", cacheErr.Error())
+	} else if b.cfg.OfflineRPCOnly {
+		return nil, nil
+	}
 
 	resBlock, err := b.TendermintBlockByNumber(blockNum)
 	if err != nil {
@@ -102,6 +128,19 @@ func (b *Backend) GetBlockByHash(hash common.Hash, fullTx bool) (map[string]inte
 	}
 	b = b.WithContext(ctx).(*Backend)
 
+	if meta, err := b.cachedBlockMetaByHash(hash); err == nil && meta != nil {
+		block, cacheErr := b.rpcBlockFromCachedMeta(meta, fullTx)
+		if cacheErr == nil {
+			return block, nil
+		}
+		if b.cfg.OfflineRPCOnly {
+			return nil, cacheErr
+		}
+		b.logger.Debug("cached block-by-hash reconstruction failed; falling back to live rpc", "hash", hash.Hex(), "error", cacheErr.Error())
+	} else if b.cfg.OfflineRPCOnly {
+		return nil, nil
+	}
+
 	resBlock, err := b.TendermintBlockByHash(hash)
 	if err != nil {
 		return nil, err
@@ -138,6 +177,11 @@ func (b *Backend) GetBlockTransactionCountByHash(hash common.Hash) *hexutil.Uint
 	}
 	b = b.WithContext(ctx).(*Backend)
 
+	if meta, err := b.cachedBlockMetaByHash(hash); err == nil && meta != nil {
+		n := hexutil.Uint(meta.EthTxCount)
+		return &n
+	}
+
 	sc, ok := b.clientCtx.Client.(cmrpcclient.SignClient)
 	if !ok {
 		b.logger.Error("invalid rpc client")
@@ -167,6 +211,11 @@ func (b *Backend) GetBlockTransactionCountByNumber(blockNum rpctypes.BlockNumber
 		defer gotracer.Traceless(&ctx, b.baseTraceTags)()
 	}
 	b = b.WithContext(ctx).(*Backend)
+
+	if meta, err := b.cachedBlockMetaByNumber(blockNum); err == nil && meta != nil {
+		n := hexutil.Uint(meta.EthTxCount)
+		return &n
+	}
 
 	block, err := b.TendermintBlockByNumber(blockNum)
 	if err != nil {
@@ -307,6 +356,10 @@ func (b *Backend) BlockNumberFromTendermintByHash(blockHash common.Hash) (*big.I
 	}
 	b = b.WithContext(ctx).(*Backend)
 
+	if meta, err := b.cachedBlockMetaByHash(blockHash); err == nil && meta != nil {
+		return big.NewInt(meta.Height), nil
+	}
+
 	resBlock, err := b.TendermintBlockByHash(blockHash)
 	if err != nil {
 		return nil, err
@@ -362,6 +415,10 @@ func (b *Backend) HeaderByNumber(blockNum rpctypes.BlockNumber) (*ethtypes.Heade
 	}
 	b = b.WithContext(ctx).(*Backend)
 
+	if meta, err := b.cachedBlockMetaByNumber(blockNum); err == nil && meta != nil {
+		return headerFromCachedBlockMeta(meta), nil
+	}
+
 	resBlock, err := b.TendermintBlockByNumber(blockNum)
 	if err != nil {
 		return nil, err
@@ -400,6 +457,10 @@ func (b *Backend) HeaderByHash(blockHash common.Hash) (*ethtypes.Header, error) 
 		defer gotracer.Traceless(&ctx, b.baseTraceTags)()
 	}
 	b = b.WithContext(ctx).(*Backend)
+
+	if meta, err := b.cachedBlockMetaByHash(blockHash); err == nil && meta != nil {
+		return headerFromCachedBlockMeta(meta), nil
+	}
 
 	resBlock, err := b.TendermintBlockByHash(blockHash)
 	if err != nil {
@@ -638,4 +699,136 @@ func (b *Backend) EthBlockFromTendermintBlock(
 	ethBlock := ethtypes.NewBlockWithHeader(ethHeader).WithBody(ethtypes.Body{Transactions: txs})
 
 	return ethBlock, nil
+}
+
+func (b *Backend) cachedBlockMetaByNumber(blockNum rpctypes.BlockNumber) (*txindexer.CachedBlockMeta, error) {
+	if b.indexer == nil {
+		return nil, nil
+	}
+
+	height, err := b.indexedBlockHeight(blockNum)
+	if err != nil || height < 1 {
+		return nil, err
+	}
+	return b.indexer.GetBlockMetaByHeight(height)
+}
+
+func (b *Backend) cachedBlockMetaByHash(hash common.Hash) (*txindexer.CachedBlockMeta, error) {
+	if b.indexer == nil {
+		return nil, nil
+	}
+	return b.indexer.GetBlockMetaByHash(hash)
+}
+
+func (b *Backend) indexedBlockHeight(blockNum rpctypes.BlockNumber) (int64, error) {
+	if b.indexer == nil {
+		return -1, nil
+	}
+	if blockNum < 0 {
+		return b.indexer.LastIndexedBlock()
+	}
+	return blockNum.Int64(), nil
+}
+
+func (b *Backend) rpcBlockFromCachedMeta(meta *txindexer.CachedBlockMeta, fullTx bool) (map[string]interface{}, error) {
+	transactions, err := b.cachedBlockTransactions(meta.Height, fullTx)
+	if err != nil {
+		return nil, err
+	}
+
+	bloom := ethtypes.BytesToBloom(common.FromHex(meta.Bloom))
+	gasUsed := new(big.Int).SetUint64(meta.GasUsed)
+	blockHash := common.HexToHash(meta.Hash)
+	parentHash := common.HexToHash(meta.ParentHash)
+	stateRoot := hexutil.Bytes(common.FromHex(meta.StateRoot))
+	miner := common.HexToAddress(meta.Miner)
+	transactionsRoot := ethtypes.EmptyRootHash
+	if meta.TransactionsRoot != "" {
+		transactionsRoot = common.HexToHash(meta.TransactionsRoot)
+	} else if len(transactions) > 0 {
+		transactionsRoot = common.Hash{}
+	}
+
+	block := map[string]interface{}{
+		"number":           hexutil.Uint64(meta.Height),
+		"hash":             hexutil.Bytes(blockHash.Bytes()),
+		"parentHash":       parentHash,
+		"nonce":            ethtypes.BlockNonce{},
+		"sha3Uncles":       ethtypes.EmptyUncleHash,
+		"logsBloom":        bloom,
+		"stateRoot":        stateRoot,
+		"miner":            miner,
+		"mixHash":          common.Hash{},
+		"difficulty":       (*hexutil.Big)(big.NewInt(0)),
+		"extraData":        "0x",
+		"size":             hexutil.Uint64(meta.Size),
+		"gasLimit":         hexutil.Uint64(meta.GasLimit),
+		"gasUsed":          (*hexutil.Big)(gasUsed),
+		"timestamp":        hexutil.Uint64(meta.Timestamp),
+		"transactionsRoot": transactionsRoot,
+		"receiptsRoot":     ethtypes.EmptyRootHash,
+		"uncles":           []common.Hash{},
+		"transactions":     transactions,
+		"totalDifficulty":  (*hexutil.Big)(big.NewInt(0)),
+	}
+
+	if meta.BaseFee != "" {
+		if baseFee, err := hexutil.DecodeBig(meta.BaseFee); err == nil {
+			block["baseFeePerGas"] = (*hexutil.Big)(baseFee)
+		}
+	}
+
+	return block, nil
+}
+
+func (b *Backend) cachedBlockTransactions(height int64, fullTx bool) ([]interface{}, error) {
+	hashes, err := b.indexer.GetRPCTransactionHashesByBlockHeight(height)
+	if err != nil {
+		return nil, err
+	}
+
+	transactions := make([]interface{}, 0, len(hashes))
+	for _, hash := range hashes {
+		if !fullTx {
+			transactions = append(transactions, hash)
+			continue
+		}
+
+		rpcTx, err := b.indexer.GetRPCTransactionByHash(hash)
+		if err != nil || rpcTx == nil {
+			b.logger.Debug("cached block tx missing", "height", height, "hash", hash.Hex(), "error", err)
+			continue
+		}
+		transactions = append(transactions, rpcTx)
+	}
+	return transactions, nil
+}
+
+func headerFromCachedBlockMeta(meta *txindexer.CachedBlockMeta) *ethtypes.Header {
+	header := &ethtypes.Header{
+		ParentHash:  common.HexToHash(meta.ParentHash),
+		UncleHash:   ethtypes.EmptyUncleHash,
+		Coinbase:    common.HexToAddress(meta.Miner),
+		Root:        common.BytesToHash(common.FromHex(meta.StateRoot)),
+		TxHash:      ethtypes.EmptyRootHash,
+		ReceiptHash: ethtypes.EmptyRootHash,
+		Bloom:       ethtypes.BytesToBloom(common.FromHex(meta.Bloom)),
+		Difficulty:  big.NewInt(0),
+		Number:      big.NewInt(meta.Height),
+		GasLimit:    meta.GasLimit,
+		GasUsed:     meta.GasUsed,
+		Time:        uint64(meta.Timestamp),
+		Extra:       []byte{},
+		MixDigest:   common.Hash{},
+		Nonce:       ethtypes.BlockNonce{},
+	}
+	if meta.TransactionsRoot != "" {
+		header.TxHash = common.HexToHash(meta.TransactionsRoot)
+	}
+	if meta.BaseFee != "" {
+		if baseFee, err := hexutil.DecodeBig(meta.BaseFee); err == nil {
+			header.BaseFee = baseFee
+		}
+	}
+	return header
 }

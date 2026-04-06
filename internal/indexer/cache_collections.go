@@ -27,15 +27,20 @@ const (
 )
 
 type CachedBlockMeta struct {
-	Height     int64  `json:"height"`
-	Hash       string `json:"hash"`
-	ParentHash string `json:"parent_hash"`
-	Timestamp  int64  `json:"timestamp"`
-	GasLimit   uint64 `json:"gas_limit"`
-	GasUsed    uint64 `json:"gas_used"`
-	EthTxCount int32  `json:"eth_tx_count"`
-	TxCount    int32  `json:"tx_count"`
-	Bloom      string `json:"bloom"`
+	Height           int64  `json:"height"`
+	Hash             string `json:"hash"`
+	ParentHash       string `json:"parent_hash"`
+	StateRoot        string `json:"state_root,omitempty"`
+	Miner            string `json:"miner,omitempty"`
+	Timestamp        int64  `json:"timestamp"`
+	Size             uint64 `json:"size"`
+	GasLimit         uint64 `json:"gas_limit"`
+	GasUsed          uint64 `json:"gas_used"`
+	EthTxCount       int32  `json:"eth_tx_count"`
+	TxCount          int32  `json:"tx_count"`
+	Bloom            string `json:"bloom"`
+	TransactionsRoot string `json:"transactions_root,omitempty"`
+	BaseFee          string `json:"base_fee,omitempty"`
 }
 
 type CachedReceipt struct {
@@ -187,6 +192,28 @@ func (kv *KVIndexer) GetRPCTransactionByBlockAndIndex(blockNumber int64, txIndex
 	return kv.GetRPCTransactionByHash(common.BytesToHash(hashBz))
 }
 
+func (kv *KVIndexer) GetRPCTransactionHashesByBlockHeight(height int64) ([]common.Hash, error) {
+	ctx := kv.operationContext()
+	if kv.ctx != nil {
+		defer gotracer.Trace(&ctx, kv.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, kv.baseTraceTags)()
+	}
+	kv = kv.WithContext(ctx).(*KVIndexer)
+
+	it, err := kv.db.Iterator(rpcTxIndexPrefixStart(height), rpcTxIndexPrefixEnd(height))
+	if err != nil {
+		return nil, errorsmod.Wrapf(err, "GetRPCTransactionHashesByBlockHeight %d", height)
+	}
+	defer it.Close()
+
+	hashes := make([]common.Hash, 0)
+	for ; it.Valid(); it.Next() {
+		hashes = append(hashes, common.BytesToHash(it.Value()))
+	}
+	return hashes, nil
+}
+
 func (kv *KVIndexer) GetReceiptByTxHash(hash common.Hash) (map[string]interface{}, error) {
 	ctx := kv.operationContext()
 	if kv.ctx != nil {
@@ -233,6 +260,26 @@ func (kv *KVIndexer) GetBlockMetaByHeight(height int64) (*CachedBlockMeta, error
 		return nil, errorsmod.Wrapf(err, "GetBlockMetaByHeight %d", height)
 	}
 	return &meta, nil
+}
+
+func (kv *KVIndexer) GetBlockMetaByHash(hash common.Hash) (*CachedBlockMeta, error) {
+	ctx := kv.operationContext()
+	if kv.ctx != nil {
+		defer gotracer.Trace(&ctx, kv.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, kv.baseTraceTags)()
+	}
+	kv = kv.WithContext(ctx).(*KVIndexer)
+
+	bz, err := kv.db.Get(BlockHashKey(hash))
+	if err != nil {
+		return nil, errorsmod.Wrapf(err, "GetBlockMetaByHash %s", hash.Hex())
+	}
+	if len(bz) == 0 {
+		return nil, fmt.Errorf("block hash not indexed: %s", hash.Hex())
+	}
+	height := int64(sdk.BigEndianToUint64(bz))
+	return kv.GetBlockMetaByHeight(height)
 }
 
 func (kv *KVIndexer) GetLogsByBlockHeight(height int64) ([][]*ethtypes.Log, error) {

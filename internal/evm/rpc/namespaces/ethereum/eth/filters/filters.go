@@ -105,17 +105,18 @@ func (f *Filter) Logs(ctx context.Context, logLimit int, blockLimit int64) ([]*e
 
 	// If we're doing singleton block filtering, execute and return
 	if f.criteria.BlockHash != nil && *f.criteria.BlockHash != (common.Hash{}) {
-		resBlock, err := backend.TendermintBlockByHash(*f.criteria.BlockHash)
+		header, err := backend.HeaderByHash(*f.criteria.BlockHash)
 		if err != nil {
 			return nil, errors.Wrapf(err, "failed to fetch header by hash %s", f.criteria.BlockHash)
 		}
-		if resBlock == nil || resBlock.Block == nil {
+		if header == nil || header.Number == nil {
 			return []*ethtypes.Log{}, nil
 		}
+		height := header.Number.Int64()
 
-		bloom, err := backend.GetBlockBloomByHeight(resBlock.Block.Height)
+		bloom, err := backend.GetBlockBloomByHeight(height)
 		if err != nil {
-			f.logger.Debug("failed to fetch block bloom", "height", resBlock.Block.Height, "error", err.Error())
+			f.logger.Debug("failed to fetch block bloom", "height", height, "error", err.Error())
 			return nil, nil
 		}
 		if !bloomFilter(bloom, f.criteria.Addresses, f.criteria.Topics) {

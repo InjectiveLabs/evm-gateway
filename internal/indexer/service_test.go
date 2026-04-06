@@ -480,8 +480,12 @@ func (stubTxIndexer) GetRPCTransactionByHash(common.Hash) (*rpctypes.RPCTransact
 func (stubTxIndexer) GetRPCTransactionByBlockAndIndex(int64, int32) (*rpctypes.RPCTransaction, error) {
 	return nil, nil
 }
+func (stubTxIndexer) GetRPCTransactionHashesByBlockHeight(int64) ([]common.Hash, error) {
+	return nil, nil
+}
 func (stubTxIndexer) GetReceiptByTxHash(common.Hash) (map[string]interface{}, error) { return nil, nil }
 func (stubTxIndexer) GetBlockMetaByHeight(int64) (*CachedBlockMeta, error)           { return nil, nil }
+func (stubTxIndexer) GetBlockMetaByHash(common.Hash) (*CachedBlockMeta, error)       { return nil, nil }
 func (stubTxIndexer) GetLogsByBlockHeight(int64) ([][]*ethtypes.Log, error)          { return nil, nil }
 func (stubTxIndexer) GetLogsByBlockHash(common.Hash) ([][]*ethtypes.Log, error)      { return nil, nil }
 func (stubTxIndexer) IsBlockIndexed(int64) (bool, error)                             { return false, nil }
@@ -567,10 +571,16 @@ func (r *recordingTxIndexer) GetRPCTransactionByHash(common.Hash) (*rpctypes.RPC
 func (r *recordingTxIndexer) GetRPCTransactionByBlockAndIndex(int64, int32) (*rpctypes.RPCTransaction, error) {
 	return nil, nil
 }
+func (r *recordingTxIndexer) GetRPCTransactionHashesByBlockHeight(int64) ([]common.Hash, error) {
+	return nil, nil
+}
 func (r *recordingTxIndexer) GetReceiptByTxHash(common.Hash) (map[string]interface{}, error) {
 	return nil, nil
 }
 func (r *recordingTxIndexer) GetBlockMetaByHeight(int64) (*CachedBlockMeta, error) { return nil, nil }
+func (r *recordingTxIndexer) GetBlockMetaByHash(common.Hash) (*CachedBlockMeta, error) {
+	return nil, nil
+}
 func (r *recordingTxIndexer) GetLogsByBlockHeight(int64) ([][]*ethtypes.Log, error) {
 	return nil, nil
 }
@@ -626,10 +636,16 @@ func (f *faultyTxIndexer) GetRPCTransactionByHash(common.Hash) (*rpctypes.RPCTra
 func (f *faultyTxIndexer) GetRPCTransactionByBlockAndIndex(int64, int32) (*rpctypes.RPCTransaction, error) {
 	return nil, nil
 }
+func (f *faultyTxIndexer) GetRPCTransactionHashesByBlockHeight(int64) ([]common.Hash, error) {
+	return nil, nil
+}
 func (f *faultyTxIndexer) GetReceiptByTxHash(common.Hash) (map[string]interface{}, error) {
 	return nil, nil
 }
 func (f *faultyTxIndexer) GetBlockMetaByHeight(int64) (*CachedBlockMeta, error) { return nil, nil }
+func (f *faultyTxIndexer) GetBlockMetaByHash(common.Hash) (*CachedBlockMeta, error) {
+	return nil, nil
+}
 func (f *faultyTxIndexer) GetLogsByBlockHeight(int64) ([][]*ethtypes.Log, error) {
 	return nil, nil
 }

@@ -111,6 +111,8 @@ func (kv *KVIndexer) IndexBlockWithStats(block *cmtypes.Block, txResults []*abci
 	blockResultGasUsedBeforeTx := uint64(0)
 	queryClient := rpctypes.NewQueryClient(kv.clientCtx)
 	blockBaseFee := queryBlockBaseFee(kv.contextWithHeight(block.Height), queryClient, block.Height)
+	blockMiner := queryBlockMiner(kv.contextWithHeight(block.Height), queryClient, block.Header.ProposerAddress)
+	blockGasLimit := queryBlockGasLimit(kv.contextWithHeight(block.Height), kv.clientCtx, block.Height)
 
 	normalizedTxResults, err := rpctypes.NormalizeTxResponseIndexes(txResults)
 	if err != nil {
@@ -295,16 +297,25 @@ func (kv *KVIndexer) IndexBlockWithStats(block *cmtypes.Block, txResults []*abci
 	}
 
 	blockBloom := evmtypes.LogsBloom(flatLogs)
+	transactionsRoot := ethtypes.EmptyRootHash.Hex()
+	if ethTxIndex > 0 {
+		transactionsRoot = common.BytesToHash(block.Header.DataHash).Hex()
+	}
 	meta := CachedBlockMeta{
-		Height:     block.Height,
-		Hash:       blockHash.Hex(),
-		ParentHash: common.BytesToHash(block.Header.LastBlockID.Hash).Hex(),
-		Timestamp:  block.Time.Unix(),
-		GasLimit:   0,
-		GasUsed:    blockGasUsed,
-		EthTxCount: ethTxIndex,
-		TxCount:    int32(len(block.Txs)),
-		Bloom:      hexutil.Encode(blockBloom),
+		Height:           block.Height,
+		Hash:             blockHash.Hex(),
+		ParentHash:       common.BytesToHash(block.Header.LastBlockID.Hash).Hex(),
+		StateRoot:        hexutil.Encode(block.Header.AppHash),
+		Miner:            blockMiner.Hex(),
+		Timestamp:        block.Time.Unix(),
+		Size:             uint64(block.Size()),
+		GasLimit:         blockGasLimit,
+		GasUsed:          blockGasUsed,
+		EthTxCount:       ethTxIndex,
+		TxCount:          int32(len(block.Txs)),
+		Bloom:            hexutil.Encode(blockBloom),
+		TransactionsRoot: transactionsRoot,
+		BaseFee:          encodeOptionalBig(blockBaseFee),
 	}
 
 	if err := batch.Set(BlockMetaKey(block.Height), mustJSON(meta)); err != nil {
@@ -529,6 +540,41 @@ func queryBlockBaseFee(ctx context.Context, queryClient *rpctypes.QueryClient, h
 		return nil
 	}
 	return res.BaseFee.BaseFee.RoundInt().BigInt()
+}
+
+func queryBlockMiner(ctx context.Context, queryClient *rpctypes.QueryClient, proposer []byte) common.Address {
+	defer gotracer.Trace(&ctx, txIndexerTraceTag)()
+
+	req := &evmtypes.QueryValidatorAccountRequest{
+		ConsAddress: sdk.ConsAddress(proposer).String(),
+	}
+	res, err := queryClient.ValidatorAccount(ctx, req)
+	if err != nil {
+		return common.Address{}
+	}
+
+	accAddr, err := sdk.AccAddressFromBech32(res.AccountAddress)
+	if err != nil {
+		return common.Address{}
+	}
+	return common.BytesToAddress(accAddr)
+}
+
+func queryBlockGasLimit(ctx context.Context, clientCtx client.Context, height int64) uint64 {
+	defer gotracer.Trace(&ctx, txIndexerTraceTag)()
+
+	gasLimit, err := rpctypes.BlockMaxGasFromConsensusParams(ctx, clientCtx, height)
+	if err != nil || gasLimit < 0 {
+		return 0
+	}
+	return uint64(gasLimit)
+}
+
+func encodeOptionalBig(v *big.Int) string {
+	if v == nil {
+		return ""
+	}
+	return hexutil.EncodeBig(v)
 }
 
 func (kv *KVIndexer) resetBlock(batch dbm.Batch, height int64) error {

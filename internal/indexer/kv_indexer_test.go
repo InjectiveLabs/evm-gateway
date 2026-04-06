@@ -89,3 +89,54 @@ func TestKVIndexerDeleteBlockRemovesIndexedDataForHeight(t *testing.T) {
 	assertPresent(TxIndexKey(otherHeight, 0))
 	assertPresent(TxHashKey(txHashOther))
 }
+
+func TestKVIndexerCachedBlockLookupsUseHashAndRPCIndexCollections(t *testing.T) {
+	db := dbm.NewMemDB()
+	kv := &KVIndexer{db: db, logger: testLogger()}
+
+	height := int64(42)
+	otherHeight := int64(43)
+	blockHash := common.HexToHash("0x42")
+	otherBlockHash := common.HexToHash("0x43")
+	txHashA := common.HexToHash("0xaa")
+	txHashB := common.HexToHash("0xbb")
+	txHashOther := common.HexToHash("0xcc")
+
+	mustSet := func(key, value []byte) {
+		t.Helper()
+		if err := db.Set(key, value); err != nil {
+			t.Fatalf("set %x: %v", key, err)
+		}
+	}
+
+	mustSet(BlockMetaKey(height), mustJSON(CachedBlockMeta{Height: height, Hash: blockHash.Hex(), GasLimit: 12345}))
+	mustSet(BlockHashKey(blockHash), sdk.Uint64ToBigEndian(uint64(height)))
+	mustSet(RPCtxIndexKey(height, 1), txHashB.Bytes())
+	mustSet(RPCtxIndexKey(height, 0), txHashA.Bytes())
+
+	mustSet(BlockMetaKey(otherHeight), mustJSON(CachedBlockMeta{Height: otherHeight, Hash: otherBlockHash.Hex()}))
+	mustSet(BlockHashKey(otherBlockHash), sdk.Uint64ToBigEndian(uint64(otherHeight)))
+	mustSet(RPCtxIndexKey(otherHeight, 0), txHashOther.Bytes())
+
+	meta, err := kv.GetBlockMetaByHash(blockHash)
+	if err != nil {
+		t.Fatalf("GetBlockMetaByHash returned error: %v", err)
+	}
+	if meta.Height != height {
+		t.Fatalf("unexpected meta height: got %d want %d", meta.Height, height)
+	}
+	if meta.Hash != blockHash.Hex() {
+		t.Fatalf("unexpected meta hash: got %s want %s", meta.Hash, blockHash.Hex())
+	}
+
+	hashes, err := kv.GetRPCTransactionHashesByBlockHeight(height)
+	if err != nil {
+		t.Fatalf("GetRPCTransactionHashesByBlockHeight returned error: %v", err)
+	}
+	if len(hashes) != 2 {
+		t.Fatalf("unexpected tx hash count: got %d want 2", len(hashes))
+	}
+	if hashes[0] != txHashA || hashes[1] != txHashB {
+		t.Fatalf("unexpected tx hashes order: got %v want [%s %s]", hashes, txHashA.Hex(), txHashB.Hex())
+	}
+}

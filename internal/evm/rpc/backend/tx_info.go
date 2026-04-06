@@ -343,6 +343,27 @@ func (b *Backend) GetTransactionByBlockHashAndIndex(hash common.Hash, idx hexuti
 
 	b.logger.Debug("eth_getTransactionByBlockHashAndIndex", "hash", hash.Hex(), "index", idx)
 
+	if b.indexer != nil {
+		meta, err := b.indexer.GetBlockMetaByHash(hash)
+		if err == nil {
+			rpcTx, err := b.indexer.GetRPCTransactionByBlockAndIndex(meta.Height, int32(idx))
+			if err == nil {
+				if b.syncStatus != nil {
+					b.syncStatus.RecordTxByIndexCacheHit()
+				}
+				return rpcTx, nil
+			}
+			if b.cfg.OfflineRPCOnly {
+				if b.syncStatus != nil {
+					b.syncStatus.RecordTxByIndexCacheMiss()
+				}
+				return nil, nil
+			}
+		} else if b.cfg.OfflineRPCOnly {
+			return nil, nil
+		}
+	}
+
 	sc, ok := b.clientCtx.Client.(cmrpcclient.SignClient)
 	if !ok {
 		return nil, errors.New("invalid rpc client")
@@ -373,6 +394,27 @@ func (b *Backend) GetTransactionByBlockNumberAndIndex(blockNum rpctypes.BlockNum
 	b = b.WithContext(ctx).(*Backend)
 
 	b.logger.Debug("eth_getTransactionByBlockNumberAndIndex", "number", blockNum, "index", idx)
+
+	if b.indexer != nil {
+		height, err := b.indexedBlockHeight(blockNum)
+		if err == nil && height >= 1 {
+			rpcTx, err := b.indexer.GetRPCTransactionByBlockAndIndex(height, int32(idx))
+			if err == nil {
+				if b.syncStatus != nil {
+					b.syncStatus.RecordTxByIndexCacheHit()
+				}
+				return rpcTx, nil
+			}
+			if b.cfg.OfflineRPCOnly {
+				if b.syncStatus != nil {
+					b.syncStatus.RecordTxByIndexCacheMiss()
+				}
+				return nil, nil
+			}
+		} else if b.cfg.OfflineRPCOnly {
+			return nil, nil
+		}
+	}
 
 	block, err := b.TendermintBlockByNumber(blockNum)
 	if err != nil {

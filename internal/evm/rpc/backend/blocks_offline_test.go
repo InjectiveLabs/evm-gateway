@@ -1,0 +1,217 @@
+package backend
+
+import (
+	"encoding/json"
+	"io"
+	"log/slog"
+	"math/big"
+	"testing"
+
+	dbm "github.com/cosmos/cosmos-db"
+	"github.com/cosmos/cosmos-sdk/client"
+	sdk "github.com/cosmos/cosmos-sdk/types"
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
+	ethtypes "github.com/ethereum/go-ethereum/core/types"
+
+	appconfig "github.com/InjectiveLabs/evm-gateway/internal/config"
+	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
+	"github.com/InjectiveLabs/evm-gateway/internal/indexer"
+)
+
+func TestOfflineCachedBlockAndTransactionLookups(t *testing.T) {
+	db := dbm.NewMemDB()
+	kv := indexer.NewKVIndexer(db, backendTestLogger(), client.Context{})
+
+	meta := indexer.CachedBlockMeta{
+		Height:           42,
+		Hash:             common.HexToHash("0x42").Hex(),
+		ParentHash:       common.HexToHash("0x41").Hex(),
+		StateRoot:        common.HexToHash("0x1234").Hex(),
+		Miner:            common.HexToAddress("0x0000000000000000000000000000000000000042").Hex(),
+		Timestamp:        1710000000,
+		Size:             512,
+		GasLimit:         30000000,
+		GasUsed:          42000,
+		EthTxCount:       2,
+		TxCount:          3,
+		Bloom:            hexutil.Encode(make([]byte, ethtypes.BloomByteLength)),
+		TransactionsRoot: common.HexToHash("0xbeef").Hex(),
+		BaseFee:          hexutil.EncodeBig(big.NewInt(12345)),
+	}
+	blockHash := common.HexToHash(meta.Hash)
+	txHashA := common.HexToHash("0xaa")
+	txHashB := common.HexToHash("0xbb")
+
+	txA := backendTestRPCTx(txHashA, blockHash, uint64(meta.Height), 0)
+	txB := backendTestRPCTx(txHashB, blockHash, uint64(meta.Height), 1)
+
+	backendTestSetJSON(t, db, indexer.BlockMetaKey(meta.Height), meta)
+	backendTestSetRaw(t, db, indexer.BlockHashKey(blockHash), sdk.Uint64ToBigEndian(uint64(meta.Height)))
+	backendTestSetJSON(t, db, indexer.RPCtxHashKey(txHashA), txA)
+	backendTestSetJSON(t, db, indexer.RPCtxHashKey(txHashB), txB)
+	backendTestSetRaw(t, db, indexer.RPCtxIndexKey(meta.Height, 0), txHashA.Bytes())
+	backendTestSetRaw(t, db, indexer.RPCtxIndexKey(meta.Height, 1), txHashB.Bytes())
+
+	b := &Backend{
+		logger:  backendTestLogger(),
+		cfg:     appconfig.Config{OfflineRPCOnly: true},
+		indexer: kv,
+	}
+
+	latest, err := b.BlockNumber()
+	if err != nil {
+		t.Fatalf("BlockNumber returned error: %v", err)
+	}
+	if uint64(latest) != uint64(meta.Height) {
+		t.Fatalf("unexpected latest block: got %d want %d", latest, meta.Height)
+	}
+
+	byNumber, err := b.GetBlockByNumber(rpctypes.EthLatestBlockNumber, false)
+	if err != nil {
+		t.Fatalf("GetBlockByNumber returned error: %v", err)
+	}
+	backendTestAssertBlockSummary(t, byNumber, meta, []common.Hash{txHashA, txHashB})
+
+	byHash, err := b.GetBlockByHash(blockHash, true)
+	if err != nil {
+		t.Fatalf("GetBlockByHash returned error: %v", err)
+	}
+	fullTxs, ok := byHash["transactions"].([]interface{})
+	if !ok {
+		t.Fatalf("unexpected full tx payload type: %T", byHash["transactions"])
+	}
+	if len(fullTxs) != 2 {
+		t.Fatalf("unexpected full tx count: got %d want 2", len(fullTxs))
+	}
+	firstTx, ok := fullTxs[0].(*rpctypes.RPCTransaction)
+	if !ok {
+		t.Fatalf("unexpected full tx entry type: %T", fullTxs[0])
+	}
+	if firstTx.Hash != txHashA {
+		t.Fatalf("unexpected first tx hash: got %s want %s", firstTx.Hash.Hex(), txHashA.Hex())
+	}
+
+	header, err := b.HeaderByHash(blockHash)
+	if err != nil {
+		t.Fatalf("HeaderByHash returned error: %v", err)
+	}
+	if header.Number == nil || header.Number.Int64() != meta.Height {
+		t.Fatalf("unexpected header number: got %v want %d", header.Number, meta.Height)
+	}
+	if header.TxHash != common.HexToHash(meta.TransactionsRoot) {
+		t.Fatalf("unexpected header tx root: got %s want %s", header.TxHash.Hex(), meta.TransactionsRoot)
+	}
+	if header.BaseFee == nil || header.BaseFee.Cmp(big.NewInt(12345)) != 0 {
+		t.Fatalf("unexpected header base fee: got %v want 12345", header.BaseFee)
+	}
+
+	txByNumber, err := b.GetTransactionByBlockNumberAndIndex(rpctypes.BlockNumber(meta.Height), 1)
+	if err != nil {
+		t.Fatalf("GetTransactionByBlockNumberAndIndex returned error: %v", err)
+	}
+	if txByNumber == nil || txByNumber.Hash != txHashB {
+		t.Fatalf("unexpected tx by block number/index: got %#v want %s", txByNumber, txHashB.Hex())
+	}
+
+	txByHash, err := b.GetTransactionByBlockHashAndIndex(blockHash, 0)
+	if err != nil {
+		t.Fatalf("GetTransactionByBlockHashAndIndex returned error: %v", err)
+	}
+	if txByHash == nil || txByHash.Hash != txHashA {
+		t.Fatalf("unexpected tx by block hash/index: got %#v want %s", txByHash, txHashA.Hex())
+	}
+}
+
+func backendTestAssertBlockSummary(t *testing.T, block map[string]interface{}, meta indexer.CachedBlockMeta, txHashes []common.Hash) {
+	t.Helper()
+
+	number, ok := block["number"].(hexutil.Uint64)
+	if !ok {
+		t.Fatalf("unexpected block number type: %T", block["number"])
+	}
+	if uint64(number) != uint64(meta.Height) {
+		t.Fatalf("unexpected block number: got %d want %d", number, meta.Height)
+	}
+
+	hashBytes, ok := block["hash"].(hexutil.Bytes)
+	if !ok {
+		t.Fatalf("unexpected block hash type: %T", block["hash"])
+	}
+	if common.BytesToHash(hashBytes) != common.HexToHash(meta.Hash) {
+		t.Fatalf("unexpected block hash: got %s want %s", common.BytesToHash(hashBytes).Hex(), meta.Hash)
+	}
+
+	if gotMiner, ok := block["miner"].(common.Address); !ok || gotMiner != common.HexToAddress(meta.Miner) {
+		t.Fatalf("unexpected miner: got %#v want %s", block["miner"], meta.Miner)
+	}
+	if gotRoot, ok := block["transactionsRoot"].(common.Hash); !ok || gotRoot != common.HexToHash(meta.TransactionsRoot) {
+		t.Fatalf("unexpected tx root: got %#v want %s", block["transactionsRoot"], meta.TransactionsRoot)
+	}
+	if gotBaseFee, ok := block["baseFeePerGas"].(*hexutil.Big); !ok || (*big.Int)(gotBaseFee).Cmp(big.NewInt(12345)) != 0 {
+		t.Fatalf("unexpected base fee: got %#v want 12345", block["baseFeePerGas"])
+	}
+
+	txs, ok := block["transactions"].([]interface{})
+	if !ok {
+		t.Fatalf("unexpected tx list type: %T", block["transactions"])
+	}
+	if len(txs) != len(txHashes) {
+		t.Fatalf("unexpected tx count: got %d want %d", len(txs), len(txHashes))
+	}
+	for i, want := range txHashes {
+		got, ok := txs[i].(common.Hash)
+		if !ok {
+			t.Fatalf("unexpected tx hash entry type at %d: %T", i, txs[i])
+		}
+		if got != want {
+			t.Fatalf("unexpected tx hash at %d: got %s want %s", i, got.Hex(), want.Hex())
+		}
+	}
+}
+
+func backendTestRPCTx(hash, blockHash common.Hash, blockNumber uint64, index uint64) rpctypes.RPCTransaction {
+	blockNum := (*hexutil.Big)(new(big.Int).SetUint64(blockNumber))
+	txIndex := hexutil.Uint64(index)
+	to := common.HexToAddress("0x00000000000000000000000000000000000000ff")
+
+	return rpctypes.RPCTransaction{
+		BlockHash:        &blockHash,
+		BlockNumber:      blockNum,
+		From:             common.HexToAddress("0x00000000000000000000000000000000000000aa"),
+		Gas:              hexutil.Uint64(21000),
+		GasPrice:         (*hexutil.Big)(big.NewInt(1)),
+		Hash:             hash,
+		Input:            hexutil.Bytes{},
+		Nonce:            hexutil.Uint64(index),
+		To:               &to,
+		TransactionIndex: &txIndex,
+		Value:            (*hexutil.Big)(big.NewInt(0)),
+		Type:             hexutil.Uint64(ethtypes.LegacyTxType),
+		ChainID:          (*hexutil.Big)(big.NewInt(1)),
+		V:                (*hexutil.Big)(big.NewInt(27)),
+		R:                (*hexutil.Big)(big.NewInt(1)),
+		S:                (*hexutil.Big)(big.NewInt(2)),
+	}
+}
+
+func backendTestSetJSON(t *testing.T, db dbm.DB, key []byte, value interface{}) {
+	t.Helper()
+
+	bz, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("marshal %T: %v", value, err)
+	}
+	backendTestSetRaw(t, db, key, bz)
+}
+
+func backendTestSetRaw(t *testing.T, db dbm.DB, key, value []byte) {
+	t.Helper()
+	if err := db.Set(key, value); err != nil {
+		t.Fatalf("set %x: %v", key, err)
+	}
+}
+
+func backendTestLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}

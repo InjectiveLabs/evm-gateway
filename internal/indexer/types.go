@@ -29,8 +29,10 @@ type TxIndexer interface {
 
 	GetRPCTransactionByHash(hash common.Hash) (*rpctypes.RPCTransaction, error)
 	GetRPCTransactionByBlockAndIndex(blockNumber int64, txIndex int32) (*rpctypes.RPCTransaction, error)
+	GetRPCTransactionHashesByBlockHeight(height int64) ([]common.Hash, error)
 	GetReceiptByTxHash(hash common.Hash) (map[string]interface{}, error)
 	GetBlockMetaByHeight(height int64) (*CachedBlockMeta, error)
+	GetBlockMetaByHash(hash common.Hash) (*CachedBlockMeta, error)
 	GetLogsByBlockHeight(height int64) ([][]*ethtypes.Log, error)
 	GetLogsByBlockHash(hash common.Hash) ([][]*ethtypes.Log, error)
 	IsBlockIndexed(height int64) (bool, error)

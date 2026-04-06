@@ -263,8 +263,8 @@ func TestHistoricalRPCBenchmarkSuite(t *testing.T) {
 			Workloads:                  seedWorkloads,
 		},
 		Fixtures: benchmarkFixtureReport{
-			HeaderBlocks: len(fixtures.HeaderBlockTags),
-			FullBlocks:   len(fixtures.FullBlockTags),
+			HeaderBlocks: len(fixtures.HeaderBlocks),
+			FullBlocks:   len(fixtures.FullBlocks),
 			RangeFilters: len(fixtures.RangeFilters),
 			Transactions: len(fixtures.TxLookups),
 			Batches:      len(fixtures.BatchRequests),
@@ -359,12 +359,17 @@ func loadBenchmarkConfig(t *testing.T) benchmarkConfig {
 }
 
 type benchmarkFixtures struct {
-	HeaderBlockTags []string
-	FullBlockTags   []string
-	RangeFilters    []map[string]interface{}
-	TxLookups       []benchmarkTxLookup
-	BatchRequests   [][]rpcEnvelope
-	TraceHashes     []string
+	HeaderBlocks  []benchmarkBlockLookup
+	FullBlocks    []benchmarkBlockLookup
+	RangeFilters  []map[string]interface{}
+	TxLookups     []benchmarkTxLookup
+	BatchRequests [][]rpcEnvelope
+	TraceHashes   []string
+}
+
+type benchmarkBlockLookup struct {
+	NumberTag string
+	Hash      string
 }
 
 type benchmarkTxLookup struct {
@@ -383,10 +388,7 @@ func prepareBenchmarkFixtures(
 ) benchmarkFixtures {
 	t.Helper()
 
-	headerTags := make([]string, 0, len(sampleHeights(generatedFrom, headAfter, 192)))
-	for _, height := range sampleHeights(generatedFrom, headAfter, 192) {
-		headerTags = append(headerTags, fmt.Sprintf("0x%x", height))
-	}
+	headerBlocks := buildBenchmarkBlockLookups(t, ctx, sourceRPC, sampleHeights(generatedFrom, headAfter, 192))
 
 	txLookups := make([]benchmarkTxLookup, 0, 96)
 	traceHashes := make([]string, 0, 64)
@@ -409,14 +411,11 @@ func prepareBenchmarkFixtures(
 		t.Fatal("unable to prepare benchmark tx lookups from seeded traffic")
 	}
 
-	fullBlockTags := make([]string, 0, 64)
 	fullBlockHeights := sampleInt64s(uniqueInt64s(txBlocks), 64)
 	if len(fullBlockHeights) == 0 {
 		fullBlockHeights = sampleHeights(generatedFrom, headAfter, 64)
 	}
-	for _, height := range fullBlockHeights {
-		fullBlockTags = append(fullBlockTags, fmt.Sprintf("0x%x", height))
-	}
+	fullBlocks := buildBenchmarkBlockLookups(t, ctx, sourceRPC, fullBlockHeights)
 
 	rangeFilters := make([]map[string]interface{}, 0, 96)
 	rangeHeights := sampleHeights(generatedFrom, headAfter, 96)
@@ -431,14 +430,40 @@ func prepareBenchmarkFixtures(
 	}
 
 	fixtures := benchmarkFixtures{
-		HeaderBlockTags: headerTags,
-		FullBlockTags:   fullBlockTags,
-		RangeFilters:    rangeFilters,
-		TxLookups:       txLookups,
-		TraceHashes:     sampleStrings(uniqueStrings(traceHashes), 64),
+		HeaderBlocks: headerBlocks,
+		FullBlocks:   fullBlocks,
+		RangeFilters: rangeFilters,
+		TxLookups:    txLookups,
+		TraceHashes:  sampleStrings(uniqueStrings(traceHashes), 64),
 	}
 	fixtures.BatchRequests = buildBenchmarkBatches(fixtures)
 	return fixtures
+}
+
+func buildBenchmarkBlockLookups(t *testing.T, ctx context.Context, sourceRPC string, heights []int64) []benchmarkBlockLookup {
+	t.Helper()
+
+	lookups := make([]benchmarkBlockLookup, 0, len(heights))
+	for _, height := range heights {
+		tag := fmt.Sprintf("0x%x", height)
+
+		var block parityBlock
+		if err := rpcCall(ctx, sourceRPC, "eth_getBlockByNumber", []interface{}{tag, false}, &block); err != nil {
+			t.Fatalf("fetch benchmark block %d: %v", height, err)
+		}
+		if strings.TrimSpace(block.Hash) == "" {
+			continue
+		}
+
+		lookups = append(lookups, benchmarkBlockLookup{
+			NumberTag: tag,
+			Hash:      block.Hash,
+		})
+	}
+	if len(lookups) == 0 {
+		t.Fatal("unable to prepare benchmark block lookups from seeded traffic")
+	}
+	return lookups
 }
 
 func selectSafeRangeFilter(ctx context.Context, sourceRPC string, start, headAfter int64, ordinal int) (map[string]interface{}, bool) {
@@ -485,18 +510,21 @@ func buildBenchmarkBatches(fixtures benchmarkFixtures) [][]rpcEnvelope {
 
 	batches := make([][]rpcEnvelope, 0, count)
 	for i := 0; i < count; i++ {
-		headerTag := fixtures.HeaderBlockTags[i%len(fixtures.HeaderBlockTags)]
-		fullTag := fixtures.FullBlockTags[i%len(fixtures.FullBlockTags)]
+		headerBlock := fixtures.HeaderBlocks[i%len(fixtures.HeaderBlocks)]
+		fullBlock := fixtures.FullBlocks[i%len(fixtures.FullBlocks)]
 		tx := fixtures.TxLookups[i%len(fixtures.TxLookups)]
 		filter := fixtures.RangeFilters[i%len(fixtures.RangeFilters)]
 		batches = append(batches, []rpcEnvelope{
 			{JSONRPC: "2.0", ID: 1000 + i*10 + 1, Method: "eth_chainId", Params: []interface{}{}},
-			{JSONRPC: "2.0", ID: 1000 + i*10 + 2, Method: "eth_getBlockByNumber", Params: []interface{}{headerTag, false}},
-			{JSONRPC: "2.0", ID: 1000 + i*10 + 3, Method: "eth_getBlockByNumber", Params: []interface{}{fullTag, true}},
-			{JSONRPC: "2.0", ID: 1000 + i*10 + 4, Method: "eth_getTransactionByHash", Params: []interface{}{tx.Hash}},
-			{JSONRPC: "2.0", ID: 1000 + i*10 + 5, Method: "eth_getTransactionReceipt", Params: []interface{}{tx.Hash}},
-			{JSONRPC: "2.0", ID: 1000 + i*10 + 6, Method: "eth_getTransactionByBlockNumberAndIndex", Params: []interface{}{tx.BlockNumber, tx.TransactionIndex}},
-			{JSONRPC: "2.0", ID: 1000 + i*10 + 7, Method: "eth_getLogs", Params: []interface{}{filter}},
+			{JSONRPC: "2.0", ID: 1000 + i*10 + 2, Method: "eth_getBlockByNumber", Params: []interface{}{headerBlock.NumberTag, false}},
+			{JSONRPC: "2.0", ID: 1000 + i*10 + 3, Method: "eth_getBlockByHash", Params: []interface{}{headerBlock.Hash, false}},
+			{JSONRPC: "2.0", ID: 1000 + i*10 + 4, Method: "eth_getBlockByNumber", Params: []interface{}{fullBlock.NumberTag, true}},
+			{JSONRPC: "2.0", ID: 1000 + i*10 + 5, Method: "eth_getBlockByHash", Params: []interface{}{fullBlock.Hash, true}},
+			{JSONRPC: "2.0", ID: 1000 + i*10 + 6, Method: "eth_getTransactionByHash", Params: []interface{}{tx.Hash}},
+			{JSONRPC: "2.0", ID: 1000 + i*10 + 7, Method: "eth_getTransactionReceipt", Params: []interface{}{tx.Hash}},
+			{JSONRPC: "2.0", ID: 1000 + i*10 + 8, Method: "eth_getTransactionByBlockNumberAndIndex", Params: []interface{}{tx.BlockNumber, tx.TransactionIndex}},
+			{JSONRPC: "2.0", ID: 1000 + i*10 + 9, Method: "eth_getTransactionByBlockHashAndIndex", Params: []interface{}{tx.BlockHash, tx.TransactionIndex}},
+			{JSONRPC: "2.0", ID: 1000 + i*10 + 10, Method: "eth_getLogs", Params: []interface{}{filter}},
 		})
 	}
 	return batches
@@ -545,19 +573,29 @@ func buildBenchmarkScenarios(cfg benchmarkConfig, fixtures benchmarkFixtures) []
 		return maxInt(1, base*cfg.WorkerScale)
 	}
 
-	headerInvocations := make([]benchmarkInvocation, 0, len(fixtures.HeaderBlockTags))
-	for _, tag := range fixtures.HeaderBlockTags {
+	headerInvocations := make([]benchmarkInvocation, 0, len(fixtures.HeaderBlocks))
+	headerByHashInvocations := make([]benchmarkInvocation, 0, len(fixtures.HeaderBlocks))
+	for _, block := range fixtures.HeaderBlocks {
 		headerInvocations = append(headerInvocations, benchmarkInvocation{
 			Method: "eth_getBlockByNumber",
-			Params: []interface{}{tag, false},
+			Params: []interface{}{block.NumberTag, false},
+		})
+		headerByHashInvocations = append(headerByHashInvocations, benchmarkInvocation{
+			Method: "eth_getBlockByHash",
+			Params: []interface{}{block.Hash, false},
 		})
 	}
 
-	fullBlockInvocations := make([]benchmarkInvocation, 0, len(fixtures.FullBlockTags))
-	for _, tag := range fixtures.FullBlockTags {
+	fullBlockInvocations := make([]benchmarkInvocation, 0, len(fixtures.FullBlocks))
+	fullBlockByHashInvocations := make([]benchmarkInvocation, 0, len(fixtures.FullBlocks))
+	for _, block := range fixtures.FullBlocks {
 		fullBlockInvocations = append(fullBlockInvocations, benchmarkInvocation{
 			Method: "eth_getBlockByNumber",
-			Params: []interface{}{tag, true},
+			Params: []interface{}{block.NumberTag, true},
+		})
+		fullBlockByHashInvocations = append(fullBlockByHashInvocations, benchmarkInvocation{
+			Method: "eth_getBlockByHash",
+			Params: []interface{}{block.Hash, true},
 		})
 	}
 
@@ -623,6 +661,20 @@ func buildBenchmarkScenarios(cfg benchmarkConfig, fixtures benchmarkFixtures) []
 			Invocations: fullBlockInvocations,
 		},
 		{
+			Name:        "eth_getBlockByHash_false",
+			Signature:   benchmarkInvocationSignature(headerByHashInvocations[0]),
+			Workers:     scaled(3),
+			Timeout:     10 * time.Second,
+			Invocations: headerByHashInvocations,
+		},
+		{
+			Name:        "eth_getBlockByHash_true",
+			Signature:   benchmarkInvocationSignature(fullBlockByHashInvocations[0]),
+			Workers:     scaled(2),
+			Timeout:     12 * time.Second,
+			Invocations: fullBlockByHashInvocations,
+		},
+		{
 			Name:        "eth_getLogs",
 			Signature:   benchmarkInvocationSignature(rangeInvocations[0]),
 			Workers:     scaled(3),
@@ -679,6 +731,41 @@ func buildBenchmarkScenarios(cfg benchmarkConfig, fixtures benchmarkFixtures) []
 
 	return []benchmarkScenarioSpec{
 		{
+			Name:        "eth_getBlockByNumber_false",
+			Signature:   benchmarkInvocationSignature(headerInvocations[0]),
+			Workers:     scaled(3),
+			Timeout:     10 * time.Second,
+			Invocations: headerInvocations,
+		},
+		{
+			Name:        "eth_getBlockByNumber_true",
+			Signature:   benchmarkInvocationSignature(fullBlockInvocations[0]),
+			Workers:     scaled(2),
+			Timeout:     12 * time.Second,
+			Invocations: fullBlockInvocations,
+		},
+		{
+			Name:        "eth_getBlockByHash_false",
+			Signature:   benchmarkInvocationSignature(headerByHashInvocations[0]),
+			Workers:     scaled(3),
+			Timeout:     10 * time.Second,
+			Invocations: headerByHashInvocations,
+		},
+		{
+			Name:        "eth_getBlockByHash_true",
+			Signature:   benchmarkInvocationSignature(fullBlockByHashInvocations[0]),
+			Workers:     scaled(2),
+			Timeout:     12 * time.Second,
+			Invocations: fullBlockByHashInvocations,
+		},
+		{
+			Name:        "eth_getLogs",
+			Signature:   benchmarkInvocationSignature(rangeInvocations[0]),
+			Workers:     scaled(3),
+			Timeout:     12 * time.Second,
+			Invocations: rangeInvocations,
+		},
+		{
 			Name:        "eth_getTransactionByHash",
 			Signature:   benchmarkInvocationSignature(txByHashInvocations[0]),
 			Workers:     scaled(12),
@@ -688,9 +775,30 @@ func buildBenchmarkScenarios(cfg benchmarkConfig, fixtures benchmarkFixtures) []
 		{
 			Name:        "eth_getTransactionReceipt",
 			Signature:   benchmarkInvocationSignature(receiptInvocations[0]),
-			Workers:     scaled(12),
+			Workers:     scaled(8),
 			Timeout:     10 * time.Second,
 			Invocations: receiptInvocations,
+		},
+		{
+			Name:        "eth_getTransactionByBlockNumberAndIndex",
+			Signature:   benchmarkInvocationSignature(txByBlockNumberInvocations[0]),
+			Workers:     scaled(4),
+			Timeout:     10 * time.Second,
+			Invocations: txByBlockNumberInvocations,
+		},
+		{
+			Name:        "eth_getTransactionByBlockHashAndIndex",
+			Signature:   benchmarkInvocationSignature(txByBlockHashInvocations[0]),
+			Workers:     scaled(4),
+			Timeout:     10 * time.Second,
+			Invocations: txByBlockHashInvocations,
+		},
+		{
+			Name:        "batch_mixed",
+			Signature:   benchmarkInvocationSignature(batchInvocations[0]),
+			Workers:     scaled(4),
+			Timeout:     15 * time.Second,
+			Invocations: batchInvocations,
 		},
 	}
 }
