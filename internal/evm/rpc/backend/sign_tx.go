@@ -1,13 +1,11 @@
 package backend
 
 import (
-	"errors"
-
 	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
-
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/signer/core/apitypes"
+	"github.com/pkg/errors"
 )
 
 // SendTransaction sends transaction based on received args using Node's key to sign it

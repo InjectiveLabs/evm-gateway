@@ -2,9 +2,10 @@ package blocksync
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
+
+	"github.com/pkg/errors"
 )
 
 func TestLowestAvailableHeight(t *testing.T) {

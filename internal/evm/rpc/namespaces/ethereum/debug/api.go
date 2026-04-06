@@ -3,7 +3,6 @@ package debug
 import (
 	"bytes"
 	"context"
-	"errors"
 	"io"
 	"os"
 	"runtime"
@@ -13,11 +12,10 @@ import (
 	"time"
 
 	"github.com/davecgh/go-spew/spew"
+	"github.com/pkg/errors"
 	"upd.dev/xlab/gotracer"
 
 	evmtypes "github.com/InjectiveLabs/sdk-go/chain/evm/types"
-
-	stderrors "github.com/pkg/errors"
 
 	"log/slog"
 
@@ -77,7 +75,7 @@ func (a *API) TraceBlockByNumber(ctx context.Context, height rpctypes.BlockNumbe
 	resBlock, err := backend.TendermintBlockByNumber(height)
 	if err != nil {
 		a.logger.Debug("get block failed", "height", height, "error", err.Error())
-		return nil, stderrors.Wrap(err, "block not found")
+		return nil, errors.Wrap(err, "block not found")
 	} else if resBlock == nil {
 		a.logger.Debug("block not found", "height", height)
 		return nil, errors.New("block not found")
@@ -214,7 +212,7 @@ func (a *API) StartCPUProfile(file string) error {
 			a.logger.Debug("cpu profiling already in use", "error", err.Error())
 			if err := f.Close(); err != nil {
 				a.logger.Debug("failed to close cpu profile file")
-				return stderrors.Wrap(err, "failed to close cpu profile file")
+				return errors.Wrap(err, "failed to close cpu profile file")
 			}
 			return err
 		}
@@ -241,7 +239,7 @@ func (a *API) StopCPUProfile() error {
 		pprof.StopCPUProfile()
 		if err := a.handler.cpuFile.Close(); err != nil {
 			a.logger.Debug("failed to close cpu file")
-			return stderrors.Wrap(err, "failed to close cpu file")
+			return errors.Wrap(err, "failed to close cpu file")
 		}
 		a.handler.cpuFile = nil
 		a.handler.cpuFilename = ""

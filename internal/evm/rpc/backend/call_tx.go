@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	stderrors "errors"
 	"fmt"
 	"math/big"
 
@@ -185,7 +184,7 @@ func (b *Backend) SendRawTransaction(data hexutil.Bytes) (common.Hash, error) {
 
 func unwrapBroadcastTxError(err error) error {
 	var rpcErr *cmtjsonrpctypes.RPCError
-	if !stderrors.As(err, &rpcErr) {
+	if !errors.As(err, &rpcErr) {
 		return err
 	}
 

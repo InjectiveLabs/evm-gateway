@@ -163,7 +163,7 @@ func (kv *KVIndexer) GetRPCTransactionByHash(hash common.Hash) (*rpctypes.RPCTra
 		return nil, errorsmod.Wrapf(err, "GetRPCTransactionByHash %s", hash.Hex())
 	}
 	if len(bz) == 0 {
-		return nil, fmt.Errorf("rpc tx not found, hash: %s", hash.Hex())
+		return nil, newCacheMiss("rpc tx not found, hash: %s", hash.Hex())
 	}
 
 	tx, err := unmarshalJSON[rpctypes.RPCTransaction](bz)
@@ -187,7 +187,7 @@ func (kv *KVIndexer) GetRPCTransactionByBlockAndIndex(blockNumber int64, txIndex
 		return nil, errorsmod.Wrapf(err, "GetRPCTransactionByBlockAndIndex %d %d", blockNumber, txIndex)
 	}
 	if len(hashBz) == 0 {
-		return nil, fmt.Errorf("rpc tx not found, block: %d, eth-index: %d", blockNumber, txIndex)
+		return nil, newCacheMiss("rpc tx not found, block: %d, eth-index: %d", blockNumber, txIndex)
 	}
 	return kv.GetRPCTransactionByHash(common.BytesToHash(hashBz))
 }
@@ -228,7 +228,7 @@ func (kv *KVIndexer) GetReceiptByTxHash(hash common.Hash) (map[string]interface{
 		return nil, errorsmod.Wrapf(err, "GetReceiptByTxHash %s", hash.Hex())
 	}
 	if len(bz) == 0 {
-		return nil, fmt.Errorf("receipt not found, hash: %s", hash.Hex())
+		return nil, newCacheMiss("receipt not found, hash: %s", hash.Hex())
 	}
 
 	receipt, err := unmarshalJSON[CachedReceipt](bz)
@@ -252,7 +252,7 @@ func (kv *KVIndexer) GetBlockMetaByHeight(height int64) (*CachedBlockMeta, error
 		return nil, errorsmod.Wrapf(err, "GetBlockMetaByHeight %d", height)
 	}
 	if len(bz) == 0 {
-		return nil, fmt.Errorf("block meta not found, height: %d", height)
+		return nil, newCacheMiss("block meta not found, height: %d", height)
 	}
 
 	meta, err := unmarshalJSON[CachedBlockMeta](bz)
@@ -276,7 +276,7 @@ func (kv *KVIndexer) GetBlockMetaByHash(hash common.Hash) (*CachedBlockMeta, err
 		return nil, errorsmod.Wrapf(err, "GetBlockMetaByHash %s", hash.Hex())
 	}
 	if len(bz) == 0 {
-		return nil, fmt.Errorf("block hash not indexed: %s", hash.Hex())
+		return nil, newCacheMiss("block hash not indexed: %s", hash.Hex())
 	}
 	height := int64(sdk.BigEndianToUint64(bz))
 	return kv.GetBlockMetaByHeight(height)
@@ -296,7 +296,7 @@ func (kv *KVIndexer) GetLogsByBlockHeight(height int64) ([][]*ethtypes.Log, erro
 		return nil, errorsmod.Wrapf(err, "GetLogsByBlockHeight %d", height)
 	}
 	if len(bz) == 0 {
-		return nil, fmt.Errorf("block logs not found, height: %d", height)
+		return nil, newCacheMiss("block logs not found, height: %d", height)
 	}
 	return unmarshalJSON[[][]*ethtypes.Log](bz)
 }
@@ -315,7 +315,7 @@ func (kv *KVIndexer) GetLogsByBlockHash(hash common.Hash) ([][]*ethtypes.Log, er
 		return nil, errorsmod.Wrapf(err, "GetLogsByBlockHash %s", hash.Hex())
 	}
 	if len(bz) == 0 {
-		return nil, fmt.Errorf("block hash not indexed: %s", hash.Hex())
+		return nil, newCacheMiss("block hash not indexed: %s", hash.Hex())
 	}
 	height := int64(sdk.BigEndianToUint64(bz))
 	return kv.GetLogsByBlockHeight(height)

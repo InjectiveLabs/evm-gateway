@@ -3,7 +3,6 @@ package types
 import (
 	"context"
 	"crypto/ecdsa"
-	"errors"
 	"math"
 	"math/big"
 	"testing"
@@ -24,6 +23,7 @@ import (
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/pkg/errors"
 	"github.com/stretchr/testify/mock"
 
 	rpcmocks "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/backend/mocks"

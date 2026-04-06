@@ -2,7 +2,6 @@ package indexer
 
 import (
 	"context"
-	"errors"
 	"io"
 	"log/slog"
 	"reflect"
@@ -14,6 +13,7 @@ import (
 	dbm "github.com/cosmos/cosmos-db"
 	"github.com/ethereum/go-ethereum/common"
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
+	"github.com/pkg/errors"
 
 	"github.com/InjectiveLabs/evm-gateway/internal/config"
 	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"

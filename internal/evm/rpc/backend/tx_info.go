@@ -353,14 +353,25 @@ func (b *Backend) GetTransactionByBlockHashAndIndex(hash common.Hash, idx hexuti
 				}
 				return rpcTx, nil
 			}
+			if b.syncStatus != nil {
+				b.syncStatus.RecordTxByIndexCacheMiss()
+			}
 			if b.cfg.OfflineRPCOnly {
-				if b.syncStatus != nil {
-					b.syncStatus.RecordTxByIndexCacheMiss()
+				if isIndexerCacheMiss(err) {
+					return nil, nil
 				}
-				return nil, nil
+				return nil, err
+			}
+			if !isIndexerCacheMiss(err) {
+				b.logger.Debug("cached tx-by-block-hash lookup failed; falling back to live rpc", "hash", hash.Hex(), "index", idx, "error", err.Error())
 			}
 		} else if b.cfg.OfflineRPCOnly {
-			return nil, nil
+			if isIndexerCacheMiss(err) {
+				return nil, nil
+			}
+			return nil, err
+		} else if !isIndexerCacheMiss(err) {
+			b.logger.Debug("cached block meta lookup by hash failed; falling back to live rpc", "hash", hash.Hex(), "error", err.Error())
 		}
 	}
 
@@ -405,14 +416,25 @@ func (b *Backend) GetTransactionByBlockNumberAndIndex(blockNum rpctypes.BlockNum
 				}
 				return rpcTx, nil
 			}
+			if b.syncStatus != nil {
+				b.syncStatus.RecordTxByIndexCacheMiss()
+			}
 			if b.cfg.OfflineRPCOnly {
-				if b.syncStatus != nil {
-					b.syncStatus.RecordTxByIndexCacheMiss()
+				if isIndexerCacheMiss(err) {
+					return nil, nil
 				}
-				return nil, nil
+				return nil, err
+			}
+			if !isIndexerCacheMiss(err) {
+				b.logger.Debug("cached tx-by-block-number lookup failed; falling back to live rpc", "height", height, "index", idx, "error", err.Error())
 			}
 		} else if b.cfg.OfflineRPCOnly {
-			return nil, nil
+			if isIndexerCacheMiss(err) {
+				return nil, nil
+			}
+			return nil, err
+		} else if err != nil && !isIndexerCacheMiss(err) {
+			b.logger.Debug("cached block height lookup failed; falling back to live rpc", "number", blockNum, "error", err.Error())
 		}
 	}
 

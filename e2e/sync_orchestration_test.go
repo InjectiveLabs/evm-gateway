@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -18,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	pkgerrors "github.com/pkg/errors"
+	"github.com/pkg/errors"
 )
 
 const (
@@ -496,7 +495,7 @@ func startGateway(t *testing.T, cfg gatewayStartConfig) *gatewayProcess {
 		select {
 		case err := <-done:
 			if err != nil {
-				return false, pkgerrors.Wrap(err, "gateway exited early")
+				return false, errors.Wrap(err, "gateway exited early")
 			}
 			return false, errors.New("gateway exited early")
 		default:

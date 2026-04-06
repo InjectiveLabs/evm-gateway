@@ -2,7 +2,6 @@ package indexer
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -12,7 +11,7 @@ import (
 	coretypes "github.com/cometbft/cometbft/rpc/core/types"
 	cmtypes "github.com/cometbft/cometbft/types"
 	dbm "github.com/cosmos/cosmos-db"
-	pkgerrors "github.com/pkg/errors"
+	"github.com/pkg/errors"
 
 	"github.com/InjectiveLabs/evm-gateway/internal/blocksync"
 	"github.com/InjectiveLabs/evm-gateway/internal/config"
@@ -208,9 +207,9 @@ func (s *Syncer) Resync(ctx context.Context, targets []BlockRange) (ResyncStats,
 			indexStats, err := s.indexBlockForResync(block.Block, block.BlockResults.TxResults)
 			if err != nil {
 				if cleanupErr := s.cleanupFailedBlock(block.Height); cleanupErr != nil {
-					return errors.Join(pkgerrors.Wrapf(err, "index block %d", block.Height), cleanupErr)
+					return joinErrors(errors.Wrapf(err, "index block %d", block.Height), cleanupErr)
 				}
-				return pkgerrors.Wrapf(err, "index block %d", block.Height)
+				return errors.Wrapf(err, "index block %d", block.Height)
 			}
 
 			stats.BlocksSynced++
@@ -240,7 +239,7 @@ func (s *Syncer) resolveEarliestBlock(ctx context.Context, requested int64) (int
 
 	chainEarliest, ok := blocksync.LowestAvailableHeight(err)
 	if !ok {
-		return 0, pkgerrors.Wrapf(err, "validate earliest block %d", requested)
+		return 0, errors.Wrapf(err, "validate earliest block %d", requested)
 	}
 	if !s.cfg.AllowGaps {
 		return 0, fmt.Errorf("earliest block %d before chain earliest %d", requested, chainEarliest)
@@ -274,7 +273,7 @@ func (s *Syncer) handleSyncedBlock(block blocksync.NewBlockData, pace *blocksync
 	}
 	if err := s.indexer.IndexBlock(block.Block, block.BlockResults.TxResults); err != nil {
 		if cleanupErr := s.cleanupFailedBlock(block.Height); cleanupErr != nil {
-			return errors.Join(fmt.Errorf("index block %d: %w", block.Height, err), cleanupErr)
+			return joinErrors(fmt.Errorf("index block %d: %w", block.Height, err), cleanupErr)
 		}
 		if s.status != nil {
 			s.status.MarkBlock(block.Height, false)
@@ -311,4 +310,27 @@ func (s *Syncer) cleanupFailedBlock(height int64) error {
 		return fmt.Errorf("delete failed block %d: %w", height, err)
 	}
 	return nil
+}
+
+type joinedError struct {
+	primary   error
+	secondary error
+}
+
+func (e *joinedError) Error() string {
+	return e.primary.Error() + ": " + e.secondary.Error()
+}
+
+func (e *joinedError) Unwrap() []error {
+	return []error{e.primary, e.secondary}
+}
+
+func joinErrors(primary, secondary error) error {
+	if primary == nil {
+		return secondary
+	}
+	if secondary == nil {
+		return primary
+	}
+	return &joinedError{primary: primary, secondary: secondary}
 }

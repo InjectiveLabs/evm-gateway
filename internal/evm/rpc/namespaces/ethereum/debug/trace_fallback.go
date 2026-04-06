@@ -22,7 +22,7 @@
 package debug
 
 import (
-	"errors"
+	"github.com/pkg/errors"
 )
 
 func (*API) StartGoTrace(string file) error {

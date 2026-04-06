@@ -2,7 +2,6 @@ package blocksync
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"regexp"
@@ -14,6 +13,7 @@ import (
 
 	ctypes "github.com/cometbft/cometbft/rpc/core/types"
 	tmtypes "github.com/cometbft/cometbft/types"
+	"github.com/pkg/errors"
 )
 
 const (

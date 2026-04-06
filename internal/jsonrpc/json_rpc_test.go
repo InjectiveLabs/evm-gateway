@@ -2,10 +2,10 @@ package jsonrpc
 
 import (
 	"context"
-	"errors"
 	"testing"
 
 	coretypes "github.com/cometbft/cometbft/rpc/core/types"
+	"github.com/pkg/errors"
 )
 
 type fakeEventClient struct {

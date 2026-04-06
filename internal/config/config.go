@@ -2,7 +2,6 @@ package config
 
 import (
 	"bufio"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,7 +10,7 @@ import (
 	"time"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
-	pkgerrors "github.com/pkg/errors"
+	"github.com/pkg/errors"
 )
 
 const envPrefix = "WEB3INJ_"
@@ -203,7 +202,7 @@ func loadEnvFileIfExists(path string) error {
 func loadEnvFile(path string) error {
 	file, err := os.Open(path)
 	if err != nil {
-		return pkgerrors.Wrap(err, "read env file")
+		return errors.Wrap(err, "read env file")
 	}
 	defer file.Close()
 
@@ -225,12 +224,12 @@ func loadEnvFile(path string) error {
 			continue
 		}
 		if err := os.Setenv(key, value); err != nil {
-			return pkgerrors.Wrapf(err, "set env %s", key)
+			return errors.Wrapf(err, "set env %s", key)
 		}
 	}
 
 	if err := scanner.Err(); err != nil {
-		return pkgerrors.Wrap(err, "scan env file")
+		return errors.Wrap(err, "scan env file")
 	}
 	return nil
 }

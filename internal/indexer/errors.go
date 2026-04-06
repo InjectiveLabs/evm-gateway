@@ -1,11 +1,13 @@
 package indexer
 
 import (
-	"errors"
 	"fmt"
+
+	"github.com/pkg/errors"
 )
 
 var ErrBlockParse = errors.New("block parse error")
+var ErrCacheMiss = errors.New("cache miss")
 
 type blockParseError struct {
 	msg string
@@ -32,4 +34,8 @@ func newBlockParseError(err error, format string, args ...interface{}) error {
 		msg: fmt.Sprintf(format, args...),
 		err: err,
 	}
+}
+
+func newCacheMiss(format string, args ...interface{}) error {
+	return fmt.Errorf("%w: %s", ErrCacheMiss, fmt.Sprintf(format, args...))
 }
