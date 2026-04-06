@@ -44,7 +44,7 @@ type EthereumAPI interface {
 	GetTransactionReceipt(ctx context.Context, hash common.Hash) (map[string]interface{}, error)
 	GetTransactionByBlockHashAndIndex(ctx context.Context, hash common.Hash, idx hexutil.Uint) (*rpctypes.RPCTransaction, error)
 	GetTransactionByBlockNumberAndIndex(ctx context.Context, blockNum rpctypes.BlockNumber, idx hexutil.Uint) (*rpctypes.RPCTransaction, error)
-	// eth_getBlockReceipts
+	GetBlockReceipts(ctx context.Context, blockNrOrHash rpctypes.BlockNumberOrHash) ([]map[string]interface{}, error)
 
 	// Writing Transactions
 	//
@@ -180,6 +180,13 @@ func (e *PublicAPI) GetTransactionReceipt(ctx context.Context, hash common.Hash)
 	hexTx := hash.Hex()
 	e.logger.Debug("eth_getTransactionReceipt", "hash", hexTx)
 	return e.backend.WithContext(ctx).GetTransactionReceipt(hash)
+}
+
+// GetBlockReceipts returns all transaction receipts for the provided block.
+func (e *PublicAPI) GetBlockReceipts(ctx context.Context, blockNrOrHash rpctypes.BlockNumberOrHash) ([]map[string]interface{}, error) {
+	defer gotracer.Trace(&ctx)()
+	e.logger.Debug("eth_getBlockReceipts", "block number or hash", blockNrOrHash)
+	return e.backend.WithContext(ctx).GetBlockReceipts(blockNrOrHash)
 }
 
 // GetBlockTransactionCountByHash returns the number of transactions in the block identified by hash.

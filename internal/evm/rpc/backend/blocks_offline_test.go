@@ -95,6 +95,38 @@ func TestOfflineCachedBlockAndTransactionLookups(t *testing.T) {
 	}
 }
 
+func TestOfflineCachedBlockReceiptLookups(t *testing.T) {
+	db := dbm.NewMemDB()
+	kv := indexer.NewKVIndexer(db, backendTestLogger(), client.Context{})
+	fixture := backendTestSeedCachedBlockFixture(t, db)
+
+	b := &Backend{
+		logger:  backendTestLogger(),
+		cfg:     appconfig.Config{OfflineRPCOnly: true},
+		indexer: kv,
+	}
+
+	blockNumber := rpctypes.BlockNumber(fixture.meta.Height)
+	byNumber, err := b.GetBlockReceipts(rpctypes.BlockNumberOrHash{BlockNumber: &blockNumber})
+	if err != nil {
+		t.Fatalf("GetBlockReceipts by number returned error: %v", err)
+	}
+	backendTestAssertReceiptSummary(t, byNumber, fixture.meta.Height, fixture.blockHash, []common.Hash{fixture.txHashA, fixture.txHashB})
+
+	latest := rpctypes.EthLatestBlockNumber
+	byLatest, err := b.GetBlockReceipts(rpctypes.BlockNumberOrHash{BlockNumber: &latest})
+	if err != nil {
+		t.Fatalf("GetBlockReceipts by latest returned error: %v", err)
+	}
+	backendTestAssertReceiptSummary(t, byLatest, fixture.meta.Height, fixture.blockHash, []common.Hash{fixture.txHashA, fixture.txHashB})
+
+	byHash, err := b.GetBlockReceipts(rpctypes.BlockNumberOrHash{BlockHash: &fixture.blockHash})
+	if err != nil {
+		t.Fatalf("GetBlockReceipts by hash returned error: %v", err)
+	}
+	backendTestAssertReceiptSummary(t, byHash, fixture.meta.Height, fixture.blockHash, []common.Hash{fixture.txHashA, fixture.txHashB})
+}
+
 func TestLiveModePrefersCachedBlockDataWhenAvailable(t *testing.T) {
 	db := dbm.NewMemDB()
 	kv := indexer.NewKVIndexer(db, backendTestLogger(), client.Context{})
@@ -209,6 +241,40 @@ func backendTestAssertBlockSummary(t *testing.T, block map[string]interface{}, m
 	}
 }
 
+func backendTestAssertReceiptSummary(t *testing.T, receipts []map[string]interface{}, blockHeight int64, blockHash common.Hash, txHashes []common.Hash) {
+	t.Helper()
+
+	if len(receipts) != len(txHashes) {
+		t.Fatalf("unexpected receipt count: got %d want %d", len(receipts), len(txHashes))
+	}
+
+	for i, want := range txHashes {
+		receipt := receipts[i]
+		gotHash, ok := receipt["transactionHash"].(common.Hash)
+		if !ok {
+			t.Fatalf("unexpected transactionHash type at %d: %T", i, receipt["transactionHash"])
+		}
+		if gotHash != want {
+			t.Fatalf("unexpected tx hash at %d: got %s want %s", i, gotHash.Hex(), want.Hex())
+		}
+
+		gotBlockHash, ok := receipt["blockHash"].(string)
+		if !ok || gotBlockHash != blockHash.Hex() {
+			t.Fatalf("unexpected block hash at %d: got %#v want %s", i, receipt["blockHash"], blockHash.Hex())
+		}
+
+		gotBlockNumber, ok := receipt["blockNumber"].(hexutil.Uint64)
+		if !ok || uint64(gotBlockNumber) != uint64(blockHeight) {
+			t.Fatalf("unexpected block number at %d: got %#v want %d", i, receipt["blockNumber"], blockHeight)
+		}
+
+		gotIndex, ok := receipt["transactionIndex"].(hexutil.Uint64)
+		if !ok || uint64(gotIndex) != uint64(i) {
+			t.Fatalf("unexpected transaction index at %d: got %#v want %d", i, receipt["transactionIndex"], i)
+		}
+	}
+}
+
 func backendTestRPCTx(hash, blockHash common.Hash, blockNumber uint64, index uint64) rpctypes.RPCTransaction {
 	blockNum := (*hexutil.Big)(new(big.Int).SetUint64(blockNumber))
 	txIndex := hexutil.Uint64(index)
@@ -294,6 +360,36 @@ func backendTestSeedCachedBlockFixture(t *testing.T, db dbm.DB) backendCachedBlo
 	backendTestSetJSON(t, db, indexer.RPCtxHashKey(txHashB), txB)
 	backendTestSetRaw(t, db, indexer.RPCtxIndexKey(meta.Height, 0), txHashA.Bytes())
 	backendTestSetRaw(t, db, indexer.RPCtxIndexKey(meta.Height, 1), txHashB.Bytes())
+	backendTestSetJSON(t, db, indexer.ReceiptKey(txHashA), indexer.CachedReceipt{
+		Status:            uint64(ethtypes.ReceiptStatusSuccessful),
+		CumulativeGasUsed: 21000,
+		GasUsed:           21000,
+		LogsBloom:         hexutil.Encode(make([]byte, ethtypes.BloomByteLength)),
+		Logs:              []*ethtypes.Log{},
+		TransactionHash:   txHashA.Hex(),
+		BlockHash:         blockHash.Hex(),
+		BlockNumber:       uint64(meta.Height),
+		TransactionIndex:  0,
+		EffectiveGasPrice: hexutil.EncodeBig(big.NewInt(1)),
+		From:              txA.From.Hex(),
+		To:                stringPtr(txA.To.Hex()),
+		Type:              uint64(ethtypes.LegacyTxType),
+	})
+	backendTestSetJSON(t, db, indexer.ReceiptKey(txHashB), indexer.CachedReceipt{
+		Status:            uint64(ethtypes.ReceiptStatusSuccessful),
+		CumulativeGasUsed: 42000,
+		GasUsed:           21000,
+		LogsBloom:         hexutil.Encode(make([]byte, ethtypes.BloomByteLength)),
+		Logs:              []*ethtypes.Log{},
+		TransactionHash:   txHashB.Hex(),
+		BlockHash:         blockHash.Hex(),
+		BlockNumber:       uint64(meta.Height),
+		TransactionIndex:  1,
+		EffectiveGasPrice: hexutil.EncodeBig(big.NewInt(1)),
+		From:              txB.From.Hex(),
+		To:                stringPtr(txB.To.Hex()),
+		Type:              uint64(ethtypes.LegacyTxType),
+	})
 
 	return backendCachedBlockFixture{
 		meta:      meta,
@@ -301,4 +397,8 @@ func backendTestSeedCachedBlockFixture(t *testing.T, db dbm.DB) backendCachedBlo
 		txHashA:   txHashA,
 		txHashB:   txHashB,
 	}
+}
+
+func stringPtr(v string) *string {
+	return &v
 }

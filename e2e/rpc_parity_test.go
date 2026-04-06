@@ -175,6 +175,8 @@ func TestRPCParityAgainstLiveSource(t *testing.T) {
 
 		compareRPCParity(t, sourceRPC, proc.RPCURL(), "eth_getBlockByHash", []interface{}{block.Hash, false})
 		if len(block.Transactions) > 0 {
+			compareRPCParity(t, sourceRPC, proc.RPCURL(), "eth_getBlockReceipts", []interface{}{tag})
+			compareRPCParity(t, sourceRPC, proc.RPCURL(), "eth_getBlockReceipts", []interface{}{block.Hash})
 			txBlockHeights = append(txBlockHeights, height)
 		}
 	}
@@ -416,6 +418,8 @@ func runExtendedNamespaceParity(
 		{method: "eth_protocolVersion", params: []interface{}{}},
 		{method: "eth_getBlockTransactionCountByHash", params: []interface{}{state.SampleTx.BlockHash}},
 		{method: "eth_getBlockTransactionCountByNumber", params: []interface{}{state.SampleBlockTag}},
+		{method: "eth_getBlockReceipts", params: []interface{}{state.SampleBlockTag}},
+		{method: "eth_getBlockReceipts", params: []interface{}{state.SampleTx.BlockHash}},
 		{method: "eth_getBalance", params: []interface{}{state.SampleTx.From, state.SampleBlockTag}},
 		{method: "eth_getTransactionCount", params: []interface{}{state.SampleTx.From, state.SampleBlockTag}},
 		{method: "eth_getStorageAt", params: []interface{}{state.ContractAddr, state.StorageKey, "latest"}},
