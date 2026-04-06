@@ -156,6 +156,8 @@ func (kv *KVIndexer) IndexBlockWithStats(block *cmtypes.Block, txResults []*abci
 			}
 
 			var txHash common.Hash
+			var txReason string
+			var txVMError string
 
 			txResult := chaintypes.TxResult{
 				Height:     block.Height,
@@ -190,6 +192,8 @@ func (kv *KVIndexer) IndexBlockWithStats(block *cmtypes.Block, txResults []*abci
 				txResult.GasUsed = parsedTx.GasUsed
 				txResult.Failed = parsedTx.Failed
 				txHash = parsedTx.Hash
+				txReason = parsedTx.Reason
+				txVMError = parsedTx.VMError
 			}
 
 			cumulativeTxEthGasUsed += txResult.GasUsed
@@ -204,9 +208,14 @@ func (kv *KVIndexer) IndexBlockWithStats(block *cmtypes.Block, txResults []*abci
 				return stats, newBlockParseError(nil, "block %d txIndex %d msgIndex %d: failed to unpack eth tx data", block.Height, txIndex, msgIndex)
 			}
 
-			logs, err := evmtypes.DecodeMsgLogs(result.Data, msgIndex, uint64(block.Height))
-			if err != nil {
-				return stats, newBlockParseError(err, "block %d txIndex %d msgIndex %d: failed to decode msg logs", block.Height, txIndex, msgIndex)
+			var logs []*ethtypes.Log
+			if len(result.Data) > 0 {
+				logs, err = evmtypes.DecodeMsgLogs(result.Data, msgIndex, uint64(block.Height))
+				if err != nil {
+					return stats, newBlockParseError(err, "block %d txIndex %d msgIndex %d: failed to decode msg logs", block.Height, txIndex, msgIndex)
+				}
+			} else if !txResult.Failed {
+				return stats, newBlockParseError(nil, "block %d txIndex %d msgIndex %d: missing tx response data", block.Height, txIndex, msgIndex)
 			}
 
 			status := uint64(ethtypes.ReceiptStatusSuccessful)
@@ -235,6 +244,8 @@ func (kv *KVIndexer) IndexBlockWithStats(block *cmtypes.Block, txResults []*abci
 				status,
 				blockResultGasUsedBeforeTx+cumulativeTxEthGasUsed,
 				txResult.GasUsed,
+				txReason,
+				txVMError,
 				logs,
 				txHash,
 				contractAddress,

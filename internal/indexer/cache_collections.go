@@ -42,6 +42,8 @@ type CachedReceipt struct {
 	Status            uint64          `json:"status"`
 	CumulativeGasUsed uint64          `json:"cumulative_gas_used"`
 	GasUsed           uint64          `json:"gas_used"`
+	Reason            *string         `json:"reason,omitempty"`
+	VMError           *string         `json:"vm_error,omitempty"`
 	LogsBloom         string          `json:"logs_bloom"`
 	Logs              []*ethtypes.Log `json:"logs"`
 	TransactionHash   string          `json:"transaction_hash"`
@@ -72,6 +74,12 @@ func (r CachedReceipt) ToMap() map[string]interface{} {
 		"type":              hexutil.Uint(r.Type),
 	}
 
+	if r.Reason != nil {
+		receipt["reason"] = *r.Reason
+	}
+	if r.VMError != nil {
+		receipt["vmError"] = *r.VMError
+	}
 	if r.EffectiveGasPrice != "" {
 		if p, err := hexutil.DecodeBig(r.EffectiveGasPrice); err == nil {
 			receipt["effectiveGasPrice"] = (*hexutil.Big)(p)
@@ -286,6 +294,8 @@ func buildCachedReceipt(
 	status uint64,
 	cumulativeGasUsed uint64,
 	gasUsed uint64,
+	reason string,
+	vmError string,
 	logs []*ethtypes.Log,
 	txHash common.Hash,
 	contractAddress *common.Address,
@@ -309,10 +319,22 @@ func buildCachedReceipt(
 		toStr = &v
 	}
 
+	var reasonStr *string
+	if reason != "" {
+		reasonStr = &reason
+	}
+
+	var vmErrorStr *string
+	if vmError != "" {
+		vmErrorStr = &vmError
+	}
+
 	return CachedReceipt{
 		Status:            status,
 		CumulativeGasUsed: cumulativeGasUsed,
 		GasUsed:           gasUsed,
+		Reason:            reasonStr,
+		VMError:           vmErrorStr,
 		LogsBloom:         hexutil.Encode(evmLogsBloom(logs)),
 		Logs:              logs,
 		TransactionHash:   txHash.Hex(),

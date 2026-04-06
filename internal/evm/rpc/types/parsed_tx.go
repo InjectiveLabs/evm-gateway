@@ -25,6 +25,8 @@ type ParsedTx struct {
 	EthTxIndex int32
 	GasUsed    uint64
 	Failed     bool
+	Reason     string
+	VMError    string
 }
 
 const EthTxIndexUnitialized int32 = -1
@@ -68,7 +70,7 @@ func ParseTxResult(result *abci.ExecTxResult, tx sdk.Tx) (*ParsedTxs, error) {
 			p.Txs[i].Failed = true
 		}
 
-		if err := p.parseFromLog(result.Log); err != nil {
+		if err := p.parseFromLog(result, tx); err != nil {
 			return nil, err
 		}
 
@@ -141,9 +143,10 @@ type abciLogVMError struct {
 var msgErrJSONRx = regexp.MustCompile(`failed to execute message; message index: (\d+): (.*)`)
 
 // newTx parse a new tx from events, called during parsing.
-func (p *ParsedTxs) parseFromLog(logText string) error {
+func (p *ParsedTxs) parseFromLog(result *abci.ExecTxResult, tx sdk.Tx) error {
 	var vmErr abciLogVMError
 
+	logText := result.Log
 	parts := msgErrJSONRx.FindStringSubmatch(logText)
 	if len(parts) != 3 {
 		return errors.New("failed to locate message error in abci log")
@@ -158,8 +161,14 @@ func (p *ParsedTxs) parseFromLog(logText string) error {
 
 	logJSON := parts[2]
 	if err := json.Unmarshal([]byte(logJSON), &vmErr); err != nil {
-		err = errorsmod.Wrap(err, "failed to parse abci log as JSON")
-		return err
+		failedTx, fallbackErr := failedTxFromTextLog(tx, result, msgIndex, logJSON)
+		if fallbackErr != nil {
+			return errorsmod.Wrap(err, "failed to parse abci log as JSON")
+		}
+
+		p.Txs = append(p.Txs, failedTx)
+		p.TxHashes[failedTx.Hash] = msgIndex
+		return nil
 	}
 
 	txHash := common.HexToHash(vmErr.Hash)
@@ -169,11 +178,45 @@ func (p *ParsedTxs) parseFromLog(logText string) error {
 		EthTxIndex: EthTxIndexUnitialized,
 		GasUsed:    vmErr.GasUsed,
 		Failed:     true,
+		Reason:     vmErr.Reason,
+		VMError:    vmErr.VMError,
 	}
 
 	p.Txs = append(p.Txs, parsedTx)
 	p.TxHashes[txHash] = msgIndex
 	return nil
+}
+
+func failedTxFromTextLog(tx sdk.Tx, result *abci.ExecTxResult, msgIndex int, vmError string) (ParsedTx, error) {
+	if tx == nil {
+		return ParsedTx{}, errors.New("failed tx fallback requires decoded tx")
+	}
+
+	msgs := tx.GetMsgs()
+	if msgIndex < 0 || msgIndex >= len(msgs) {
+		return ParsedTx{}, fmt.Errorf("message index %d out of bounds", msgIndex)
+	}
+
+	ethMsg, ok := msgs[msgIndex].(*evmtypes.MsgEthereumTx)
+	if !ok {
+		return ParsedTx{}, fmt.Errorf("message index %d is not an ethereum tx", msgIndex)
+	}
+
+	gasUsed := uint64(result.GasUsed)
+	if gasUsed == 0 {
+		// Some pre-execution EVM failures return plain-text logs with zero gas used,
+		// but the full gas limit has already been charged by ante handling.
+		gasUsed = ethMsg.GetGas()
+	}
+
+	return ParsedTx{
+		MsgIndex:   msgIndex,
+		Hash:       ethMsg.Hash(),
+		EthTxIndex: EthTxIndexUnitialized,
+		GasUsed:    gasUsed,
+		Failed:     true,
+		VMError:    vmError,
+	}, nil
 }
 
 // GetTxByHash find ParsedTx by tx hash, returns nil if not exists.
