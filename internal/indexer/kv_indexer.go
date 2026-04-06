@@ -112,20 +112,25 @@ func (kv *KVIndexer) IndexBlockWithStats(block *cmtypes.Block, txResults []*abci
 	queryClient := rpctypes.NewQueryClient(kv.clientCtx)
 	blockBaseFee := queryBlockBaseFee(kv.contextWithHeight(block.Height), queryClient, block.Height)
 
+	normalizedTxResults, err := rpctypes.NormalizeTxResponseIndexes(txResults)
+	if err != nil {
+		return stats, newBlockParseError(err, "block %d: failed to normalize tx response indexes", block.Height)
+	}
+
 	// record index of valid eth tx during the iteration
 	var ethTxIndex int32
 	for txIndex, tx := range block.Txs {
-		if txIndex >= len(txResults) {
+		if txIndex >= len(normalizedTxResults) {
 			return stats, newBlockParseError(
 				nil,
 				"block %d txIndex %d: tx results shorter than block tx list (txCount=%d txResultCount=%d)",
 				block.Height,
 				txIndex,
 				len(block.Txs),
-				len(txResults),
+				len(normalizedTxResults),
 			)
 		}
-		result := txResults[txIndex]
+		result := normalizedTxResults[txIndex]
 		if result == nil {
 			return stats, newBlockParseError(nil, "block %d txIndex %d: missing tx result", block.Height, txIndex)
 		}

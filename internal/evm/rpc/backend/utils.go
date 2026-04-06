@@ -227,7 +227,12 @@ func ShouldIgnoreGasUsed(res *abci.ExecTxResult) bool {
 // GetLogsFromBlockResults returns the list of event logs from the comet block result response
 func GetLogsFromBlockResults(blockRes *cmrpctypes.ResultBlockResults) ([][]*ethtypes.Log, error) {
 	blockLogs := [][]*ethtypes.Log{}
-	for _, txResult := range blockRes.TxResults {
+	normalizedTxResults, err := types.NormalizeTxResponseIndexes(blockRes.TxResults)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, txResult := range normalizedTxResults {
 		logs, err := evmtypes.DecodeTxLogs(txResult.Data, uint64(blockRes.Height))
 		if err != nil {
 			return nil, err

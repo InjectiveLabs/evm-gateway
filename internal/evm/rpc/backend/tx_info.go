@@ -238,6 +238,11 @@ func (b *Backend) GetTransactionReceipt(hash common.Hash) (map[string]interface{
 		b.logger.Warn("failed to retrieve block results", "height", res.Height, "error", err.Error())
 		return nil, nil
 	}
+	normalizedTxResults, err := rpctypes.NormalizeTxResponseIndexes(blockRes.TxResults)
+	if err != nil {
+		b.logger.Warn("failed to normalize tx response indexes", "height", res.Height, "error", err.Error())
+		normalizedTxResults = blockRes.TxResults
+	}
 	for _, txResult := range blockRes.TxResults[0:res.TxIndex] {
 		cumulativeGasUsed += uint64(txResult.GasUsed)
 	}
@@ -257,7 +262,7 @@ func (b *Backend) GetTransactionReceipt(hash common.Hash) (map[string]interface{
 
 	// parse tx logs from events
 	logs, err := evmtypes.DecodeMsgLogs(
-		blockRes.TxResults[res.TxIndex].Data,
+		normalizedTxResults[res.TxIndex].Data,
 		int(res.MsgIndex),
 		uint64(blockRes.Height),
 	)
