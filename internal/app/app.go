@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"log/slog"
 	"net"
@@ -26,6 +27,7 @@ import (
 	"github.com/pkg/errors"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 
 	chainclient "github.com/InjectiveLabs/sdk-go/client/chain"
@@ -274,13 +276,35 @@ func validateCometChainID(cfg *config.Config, cometChainID string) error {
 func dialGRPC(ctx context.Context, addr string, registry codectypes.InterfaceRegistry) (*grpc.ClientConn, error) {
 	defer gotracer.Trace(&ctx, appTraceTag)()
 
+	dialTarget := normalizedGRPCTarget(addr)
+	transportCreds := grpcTransportCredentials(addr)
+
 	return grpc.DialContext(
 		ctx,
-		addr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		dialTarget,
+		grpc.WithTransportCredentials(transportCreds),
 		grpc.WithContextDialer(dialer),
 		grpc.WithDefaultCallOptions(grpc.ForceCodec(codec.NewProtoCodec(registry).GRPCCodec())),
 	)
+}
+
+func grpcTransportCredentials(addr string) credentials.TransportCredentials {
+	proto, address := protocolAndAddress(addr)
+	switch proto {
+	case "https", "grpcs":
+		serverName := address
+		if host, _, err := net.SplitHostPort(address); err == nil {
+			serverName = host
+		}
+		return credentials.NewTLS(&tls.Config{ServerName: serverName})
+	default:
+		return insecure.NewCredentials()
+	}
+}
+
+func normalizedGRPCTarget(addr string) string {
+	_, address := protocolAndAddress(addr)
+	return address
 }
 
 func dialer(_ context.Context, addr string) (net.Conn, error) {
