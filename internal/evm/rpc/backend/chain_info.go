@@ -359,25 +359,9 @@ func (b *Backend) BaseFee(blockRes *cmtrpctypes.ResultBlockResults) (*big.Int, e
 	// return BaseFee if London hard fork is activated and feemarket is enabled
 	res, err := b.queryClient.TxFeesQueryClient.GetEipBaseFee(b.contextWithHeight(blockRes.Height), &txfeestypes.QueryEipBaseFeeRequest{})
 	if err != nil || res.BaseFee == nil {
-		// we can't tell if it's london HF not enabled or the state is pruned,
-		// in either case, we'll fallback to parsing from begin blocker event,
-		// faster to iterate reversely
-		for i := len(blockRes.FinalizeBlockEvents) - 1; i >= 0; i-- {
-			evt := blockRes.FinalizeBlockEvents[i]
-			if evt.Type != "txfees" {
-				continue
-			}
-			for _, attr := range evt.Attributes {
-				if attr.Key == "basefee" {
-					dec, err := sdkmath.LegacyNewDecFromStr(attr.Value)
-					if err == nil {
-						return dec.RoundInt().BigInt(), nil
-					}
-					// malformed value—break to fall back
-					break
-				}
-			}
-			// no matching attribute found—keep searching older events
+		baseFee := rpctypes.BaseFeeFromEvents(blockRes.FinalizeBlockEvents)
+		if baseFee != nil {
+			return baseFee, nil
 		}
 		return nil, err
 	}

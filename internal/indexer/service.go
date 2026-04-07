@@ -42,6 +42,14 @@ type txIndexerWithStats interface {
 	IndexBlockWithStats(block *cmtypes.Block, txResults []*abci.ExecTxResult) (BlockIndexStats, error)
 }
 
+type txIndexerWithResults interface {
+	IndexBlockWithResults(block *cmtypes.Block, blockResults *coretypes.ResultBlockResults) error
+}
+
+type txIndexerWithStatsAndResults interface {
+	IndexBlockWithStatsAndResults(block *cmtypes.Block, blockResults *coretypes.ResultBlockResults) (BlockIndexStats, error)
+}
+
 const paceInterval = 10 * time.Second
 
 var txIndexerSyncerTraceTag = gotracer.NewTag("component", "tx_indexer_syncer")
@@ -204,7 +212,7 @@ func (s *Syncer) Resync(ctx context.Context, targets []BlockRange) (ResyncStats,
 			if block.Skipped {
 				return fmt.Errorf("block %d was skipped during resync", block.Height)
 			}
-			indexStats, err := s.indexBlockForResync(block.Block, block.BlockResults.TxResults)
+			indexStats, err := s.indexBlockForResync(block.Block, block.BlockResults)
 			if err != nil {
 				if cleanupErr := s.cleanupFailedBlock(block.Height); cleanupErr != nil {
 					return joinErrors(errors.Wrapf(err, "index block %d", block.Height), cleanupErr)
@@ -271,7 +279,7 @@ func (s *Syncer) handleSyncedBlock(block blocksync.NewBlockData, pace *blocksync
 		pace.Add(1)
 		return nil
 	}
-	if err := s.indexer.IndexBlock(block.Block, block.BlockResults.TxResults); err != nil {
+	if err := s.indexBlock(block.Block, block.BlockResults); err != nil {
 		if cleanupErr := s.cleanupFailedBlock(block.Height); cleanupErr != nil {
 			return joinErrors(fmt.Errorf("index block %d: %w", block.Height, err), cleanupErr)
 		}
@@ -292,17 +300,34 @@ func (s *Syncer) handleSyncedBlock(block blocksync.NewBlockData, pace *blocksync
 	return nil
 }
 
-func (s *Syncer) indexBlockForResync(block *cmtypes.Block, txResults []*abci.ExecTxResult) (BlockIndexStats, error) {
+func (s *Syncer) indexBlockForResync(block *cmtypes.Block, blockResults *coretypes.ResultBlockResults) (BlockIndexStats, error) {
 	ctx := context.Background()
 	defer gotracer.Traceless(&ctx, txIndexerSyncerTraceTag)()
 
-	if withStats, ok := s.indexer.(txIndexerWithStats); ok {
-		return withStats.IndexBlockWithStats(block, txResults)
+	if withStatsAndResults, ok := s.indexer.(txIndexerWithStatsAndResults); ok {
+		return withStatsAndResults.IndexBlockWithStatsAndResults(block, blockResults)
 	}
-	if err := s.indexer.IndexBlock(block, txResults); err != nil {
+	if withStats, ok := s.indexer.(txIndexerWithStats); ok {
+		return withStats.IndexBlockWithStats(block, txResultsFromBlockResults(blockResults))
+	}
+	if err := s.indexBlock(block, blockResults); err != nil {
 		return BlockIndexStats{}, err
 	}
 	return BlockIndexStats{}, nil
+}
+
+func (s *Syncer) indexBlock(block *cmtypes.Block, blockResults *coretypes.ResultBlockResults) error {
+	if withResults, ok := s.indexer.(txIndexerWithResults); ok {
+		return withResults.IndexBlockWithResults(block, blockResults)
+	}
+	return s.indexer.IndexBlock(block, txResultsFromBlockResults(blockResults))
+}
+
+func txResultsFromBlockResults(blockResults *coretypes.ResultBlockResults) []*abci.ExecTxResult {
+	if blockResults == nil {
+		return nil
+	}
+	return blockResults.TxResults
 }
 
 func (s *Syncer) cleanupFailedBlock(height int64) error {

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/pprof"
 	"strings"
 	"sync"
 	"syscall"
@@ -17,6 +18,7 @@ import (
 
 	"upd.dev/xlab/gotracer"
 
+	cmrpcclient "github.com/cometbft/cometbft/rpc/client"
 	rpchttp "github.com/cometbft/cometbft/rpc/client/http"
 	cmtrpctypes "github.com/cometbft/cometbft/rpc/core/types"
 	dbm "github.com/cosmos/cosmos-db"
@@ -32,13 +34,17 @@ import (
 
 	chainclient "github.com/InjectiveLabs/sdk-go/client/chain"
 
+	"github.com/InjectiveLabs/evm-gateway/internal/blocksync"
 	"github.com/InjectiveLabs/evm-gateway/internal/config"
+	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
 	txindexer "github.com/InjectiveLabs/evm-gateway/internal/indexer"
 	"github.com/InjectiveLabs/evm-gateway/internal/jsonrpc"
 	"github.com/InjectiveLabs/evm-gateway/internal/syncstatus"
 )
 
 var appTraceTag = gotracer.NewTag("component", "app")
+
+const cpuProfileEnvVar = "WEB3INJ_DEBUG_CPU_PROFILE_PATH"
 
 // Run starts the evm-gateway services and blocks until shutdown.
 func Run(cfg config.Config, logger *slog.Logger) error {
@@ -49,6 +55,16 @@ func Run(cfg config.Config, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	stopCPUProfile, err := startCPUProfileFromEnv(logger)
+	if err != nil {
+		return err
+	}
+	defer stopCPUProfile()
+	defer func() {
+		if err := blocksync.CloseFetchTimingRecorder(); err != nil {
+			logger.Warn("failed to close blocksync timing recorder", "error", err)
+		}
+	}()
 
 	clientCtx, rpcClient, grpcConn, err := buildClientContext(ctx, &cfg, dataDir, logger)
 	if err != nil {
@@ -77,7 +93,7 @@ func Run(cfg config.Config, logger *slog.Logger) error {
 			}
 		}()
 		idxLogger := logger.With("indexer", "evm")
-		txIndexer = txindexer.NewKVIndexer(idxDB, idxLogger, clientCtx)
+		txIndexer = txindexer.NewKVIndexer(idxDB, idxLogger, clientCtx, buildKVIndexerOptions(ctx, clientCtx, logger)...)
 		statusTracker = syncstatus.NewTracker(cfg.FetchJobs, cfg.Earliest)
 	}
 
@@ -147,6 +163,16 @@ func RunResync(cfg config.Config, logger *slog.Logger, targets []txindexer.Block
 	if err != nil {
 		return err
 	}
+	stopCPUProfile, err := startCPUProfileFromEnv(logger)
+	if err != nil {
+		return err
+	}
+	defer stopCPUProfile()
+	defer func() {
+		if err := blocksync.CloseFetchTimingRecorder(); err != nil {
+			logger.Warn("failed to close blocksync timing recorder", "error", err)
+		}
+	}()
 
 	clientCtx, rpcClient, grpcConn, err := buildClientContext(ctx, &cfg, dataDir, logger)
 	if err != nil {
@@ -170,7 +196,7 @@ func RunResync(cfg config.Config, logger *slog.Logger, targets []txindexer.Block
 	}()
 
 	idxLogger := logger.With("indexer", "evm")
-	txIndexer := txindexer.NewKVIndexer(idxDB, idxLogger, clientCtx)
+	txIndexer := txindexer.NewKVIndexer(idxDB, idxLogger, clientCtx, buildKVIndexerOptions(ctx, clientCtx, logger)...)
 	syncer := txindexer.NewSyncer(cfg, logger, rpcClient, idxDB, txIndexer, nil)
 
 	startedAt := time.Now()
@@ -190,6 +216,75 @@ func RunResync(cfg config.Config, logger *slog.Logger, targets []txindexer.Block
 
 type cometStatusClient interface {
 	Status(context.Context) (*cmtrpctypes.ResultStatus, error)
+}
+
+func buildKVIndexerOptions(ctx context.Context, clientCtx client.Context, logger *slog.Logger) []txindexer.KVIndexerOption {
+	gasLimit, ok, err := fetchStartupBlockGasLimit(ctx, clientCtx)
+	if err != nil {
+		logger.Warn("failed to cache startup block gas limit", "error", err)
+		return nil
+	}
+	if !ok {
+		return nil
+	}
+	logger.Info("cached startup block gas limit", "gas_limit", gasLimit)
+	return []txindexer.KVIndexerOption{txindexer.WithCachedBlockGasLimit(gasLimit)}
+}
+
+func fetchStartupBlockGasLimit(ctx context.Context, clientCtx client.Context) (uint64, bool, error) {
+	if clientCtx.Client == nil {
+		return 0, false, nil
+	}
+
+	statusClient, ok := clientCtx.Client.(cometStatusClient)
+	if !ok {
+		return 0, false, nil
+	}
+	if _, ok := clientCtx.Client.(cmrpcclient.Client); !ok {
+		return 0, false, nil
+	}
+
+	status, err := statusClient.Status(ctx)
+	if err != nil {
+		return 0, false, errors.Wrap(err, "fetch latest block height")
+	}
+	height := status.SyncInfo.LatestBlockHeight
+	if height <= 0 {
+		return 0, false, nil
+	}
+
+	gasLimit, err := rpctypes.BlockMaxGasFromConsensusParams(ctx, clientCtx, height)
+	if err != nil {
+		return 0, false, errors.Wrap(err, "fetch consensus params")
+	}
+	if gasLimit < 0 {
+		return 0, false, nil
+	}
+
+	return uint64(gasLimit), true, nil
+}
+
+func startCPUProfileFromEnv(logger *slog.Logger) (func(), error) {
+	path := os.Getenv(cpuProfileEnvVar)
+	if path == "" {
+		return func() {}, nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, errors.Wrap(err, "create cpu profile directory")
+	}
+	file, err := os.Create(path)
+	if err != nil {
+		return nil, errors.Wrap(err, "create cpu profile file")
+	}
+	if err := pprof.StartCPUProfile(file); err != nil {
+		_ = file.Close()
+		return nil, errors.Wrap(err, "start cpu profile")
+	}
+	logger.Info("cpu profiling enabled", "path", path)
+	return func() {
+		pprof.StopCPUProfile()
+		_ = file.Close()
+	}, nil
 }
 
 func buildClientContext(ctx context.Context, cfg *config.Config, dataDir string, logger *slog.Logger) (client.Context, *rpchttp.HTTP, *grpc.ClientConn, error) {

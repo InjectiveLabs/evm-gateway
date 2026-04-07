@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"strings"
 
+	sdkmath "cosmossdk.io/math"
 	abci "github.com/cometbft/cometbft/abci/types"
 	cmtypes "github.com/cometbft/cometbft/types"
 
@@ -221,8 +222,23 @@ func NewRPCTransaction(
 }
 
 // BaseFeeFromEvents parses the feemarket basefee from cosmos events
-// Stubbed out for now, because we don't use the FeeMarket module.
 func BaseFeeFromEvents(events []abci.Event) *big.Int {
+	for i := len(events) - 1; i >= 0; i-- {
+		evt := events[i]
+		if evt.Type != "txfees" {
+			continue
+		}
+		for _, attr := range evt.Attributes {
+			if attr.Key != "basefee" {
+				continue
+			}
+			dec, err := sdkmath.LegacyNewDecFromStr(attr.Value)
+			if err == nil {
+				return dec.RoundInt().BigInt()
+			}
+			break
+		}
+	}
 	return nil
 }
 

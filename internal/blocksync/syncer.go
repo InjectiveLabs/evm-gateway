@@ -169,7 +169,8 @@ type blockGetter struct {
 	closeC       chan struct{}
 	closeOnce    sync.Once
 
-	logger *slog.Logger
+	logger         *slog.Logger
+	timingRecorder *fetchTimingRecorder
 }
 
 func newBlockGetter(
@@ -196,6 +197,7 @@ func newBlockGetter(
 		newBlocksMap:    make(map[uint64]NewBlockData, parallelJobs*100),
 		closeC:          make(chan struct{}),
 		logger:          logger,
+		timingRecorder:  getFetchTimingRecorder(),
 	}
 
 	logger.Debug("initBlockGetter ready to announce and pull blocks")
@@ -314,7 +316,7 @@ func (b *blockGetter) pullBlocks() {
 
 				jobLog := b.logger.With("job", jobID, "height", height)
 
-				newBlock, err := b.fetchBlockByNum(b.ctx, height)
+				newBlock, err := b.fetchBlockByNum(b.ctx, height, jobID)
 				if err != nil {
 					if errors.Is(err, context.Canceled) || b.isDone() {
 						return
@@ -351,9 +353,10 @@ func (b *blockGetter) pullBlocks() {
 	}
 }
 
-func (b *blockGetter) fetchBlockByNum(ctx context.Context, height uint64) (NewBlockData, error) {
+func (b *blockGetter) fetchBlockByNum(ctx context.Context, height uint64, jobID int) (NewBlockData, error) {
 	defer gotracer.Trace(&ctx, blockSyncTraceTag)()
 
+	fetchStarted := time.Now()
 	blockC := make(chan *ctypes.ResultBlock, 1)
 	blockResultsC := make(chan *ctypes.ResultBlockResults, 1)
 	validatorSetC := make(chan []*tmtypes.Validator, 1)
@@ -363,7 +366,7 @@ func (b *blockGetter) fetchBlockByNum(ctx context.Context, height uint64) (NewBl
 
 	go func() {
 		defer close(blockC)
-		if err := b.fetchWithRetry(ctx, func() error {
+		if err := b.fetchWithRetry(ctx, jobID, height64, "block", func() error {
 			block, err := b.client.Block(ctx, &height64)
 			if err != nil {
 				return err
@@ -380,7 +383,7 @@ func (b *blockGetter) fetchBlockByNum(ctx context.Context, height uint64) (NewBl
 
 	go func() {
 		defer close(blockResultsC)
-		if err := b.fetchWithRetry(ctx, func() error {
+		if err := b.fetchWithRetry(ctx, jobID, height64, "block_results", func() error {
 			blockResults, err := b.client.BlockResults(ctx, &height64)
 			if err != nil {
 				return err
@@ -400,7 +403,7 @@ func (b *blockGetter) fetchBlockByNum(ctx context.Context, height uint64) (NewBl
 		if !b.fetchValidators {
 			return
 		}
-		if err := b.fetchWithRetry(ctx, func() error {
+		if err := b.fetchWithRetry(ctx, jobID, height64, "validators", func() error {
 			perPage := 200
 			validatorSet, err := b.client.Validators(ctx, &height64, nil, &perPage)
 			if err != nil {
@@ -425,10 +428,12 @@ func (b *blockGetter) fetchBlockByNum(ctx context.Context, height uint64) (NewBl
 
 	select {
 	case err := <-errC:
+		b.recordFetchTiming("fetch_total", height64, jobID, 1, time.Since(fetchStarted), err)
 		return NewBlockData{}, err
 	default:
 	}
 
+	b.recordFetchTiming("fetch_total", height64, jobID, 1, time.Since(fetchStarted), nil)
 	return NewBlockData{
 		Height:       int64(height),
 		Block:        block.Block,
@@ -437,14 +442,16 @@ func (b *blockGetter) fetchBlockByNum(ctx context.Context, height uint64) (NewBl
 	}, nil
 }
 
-func (b *blockGetter) fetchWithRetry(ctx context.Context, fn func() error) error {
+func (b *blockGetter) fetchWithRetry(ctx context.Context, jobID int, height int64, kind string, fn func() error) error {
 	defer gotracer.Trace(&ctx, blockSyncTraceTag)()
 
 	for attempt := 0; attempt < retryAttempts; attempt++ {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		started := time.Now()
 		err := fn()
+		b.recordFetchTiming(kind, height, jobID, attempt+1, time.Since(started), err)
 		if err == nil {
 			return nil
 		}
@@ -470,6 +477,13 @@ func (b *blockGetter) fetchWithRetry(ctx context.Context, fn func() error) error
 		}
 	}
 	return nil
+}
+
+func (b *blockGetter) recordFetchTiming(kind string, height int64, jobID, attempt int, duration time.Duration, err error) {
+	if b.timingRecorder == nil {
+		return
+	}
+	b.timingRecorder.Record(kind, height, jobID, attempt, duration, err)
 }
 
 func (b *blockGetter) logFetchFailure(logger *slog.Logger, err error) {

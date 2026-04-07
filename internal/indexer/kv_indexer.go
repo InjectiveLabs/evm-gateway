@@ -8,6 +8,7 @@ import (
 
 	errorsmod "cosmossdk.io/errors"
 	abci "github.com/cometbft/cometbft/abci/types"
+	coretypes "github.com/cometbft/cometbft/rpc/core/types"
 	cmtypes "github.com/cometbft/cometbft/types"
 	dbm "github.com/cosmos/cosmos-db"
 	"github.com/cosmos/cosmos-sdk/client"
@@ -22,7 +23,6 @@ import (
 
 	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
 	evmtypes "github.com/InjectiveLabs/sdk-go/chain/evm/types"
-	txfeestypes "github.com/InjectiveLabs/sdk-go/chain/txfees/types"
 	chaintypes "github.com/InjectiveLabs/sdk-go/chain/types"
 )
 
@@ -37,24 +37,39 @@ const (
 
 var _ TxIndexer = &KVIndexer{}
 
+type KVIndexerOption func(*KVIndexer)
+
+func WithCachedBlockGasLimit(gasLimit uint64) KVIndexerOption {
+	return func(kv *KVIndexer) {
+		kv.cachedGasLimit = gasLimit
+	}
+}
+
 // KVIndexer implements a eth tx indexer on a KV db.
 type KVIndexer struct {
-	ctx           context.Context
-	db            dbm.DB
-	logger        *slog.Logger
-	clientCtx     client.Context
-	baseTraceTags gotracer.Tags
+	ctx            context.Context
+	db             dbm.DB
+	logger         *slog.Logger
+	clientCtx      client.Context
+	cachedGasLimit uint64
+	baseTraceTags  gotracer.Tags
 }
 
 // NewKVIndexer creates the KVIndexer
-func NewKVIndexer(db dbm.DB, logger *slog.Logger, clientCtx client.Context) *KVIndexer {
-	return &KVIndexer{
+func NewKVIndexer(db dbm.DB, logger *slog.Logger, clientCtx client.Context, opts ...KVIndexerOption) *KVIndexer {
+	kv := &KVIndexer{
 		ctx:           nil,
 		db:            db,
 		logger:        logger,
 		clientCtx:     clientCtx,
 		baseTraceTags: newIndexerTraceTags(),
 	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(kv)
+		}
+	}
+	return kv
 }
 
 // IndexBlock index all the eth txs in a block through the following steps:
@@ -71,11 +86,30 @@ func (kv *KVIndexer) IndexBlock(block *cmtypes.Block, txResults []*abci.ExecTxRe
 	}
 	kv = kv.WithContext(ctx).(*KVIndexer)
 
-	_, err = kv.IndexBlockWithStats(block, txResults)
+	_, err = kv.indexBlockWithStats(block, &coretypes.ResultBlockResults{
+		Height:    block.Height,
+		TxResults: txResults,
+	})
 	return err
 }
 
 func (kv *KVIndexer) IndexBlockWithStats(block *cmtypes.Block, txResults []*abci.ExecTxResult) (stats BlockIndexStats, err error) {
+	return kv.indexBlockWithStats(block, &coretypes.ResultBlockResults{
+		Height:    block.Height,
+		TxResults: txResults,
+	})
+}
+
+func (kv *KVIndexer) IndexBlockWithResults(block *cmtypes.Block, blockResults *coretypes.ResultBlockResults) error {
+	_, err := kv.indexBlockWithStats(block, blockResults)
+	return err
+}
+
+func (kv *KVIndexer) IndexBlockWithStatsAndResults(block *cmtypes.Block, blockResults *coretypes.ResultBlockResults) (BlockIndexStats, error) {
+	return kv.indexBlockWithStats(block, blockResults)
+}
+
+func (kv *KVIndexer) indexBlockWithStats(block *cmtypes.Block, blockResults *coretypes.ResultBlockResults) (stats BlockIndexStats, err error) {
 	ctx := kv.operationContext()
 	if kv.ctx != nil {
 		defer gotracer.Trace(&ctx, kv.baseTraceTags)()
@@ -109,10 +143,10 @@ func (kv *KVIndexer) IndexBlockWithStats(block *cmtypes.Block, txResults []*abci
 	blockLogs := make([][]*ethtypes.Log, 0)
 	blockGasUsed := uint64(0)
 	blockResultGasUsedBeforeTx := uint64(0)
-	queryClient := rpctypes.NewQueryClient(kv.clientCtx)
-	blockBaseFee := queryBlockBaseFee(kv.contextWithHeight(block.Height), queryClient, block.Height)
-	blockMiner := queryBlockMiner(kv.contextWithHeight(block.Height), queryClient, block.Header.ProposerAddress)
-	blockGasLimit := queryBlockGasLimit(kv.contextWithHeight(block.Height), kv.clientCtx, block.Height)
+	blockBaseFee := blockBaseFeeFromResults(blockResults)
+	blockMiner := blockMinerFromHeader(block)
+	blockGasLimit := kv.cachedGasLimit
+	txResults := blockTxResults(blockResults)
 
 	normalizedTxResults, err := rpctypes.NormalizeTxResponseIndexes(txResults)
 	if err != nil {
@@ -532,42 +566,27 @@ func parseHeightFromHeightKey(key []byte, prefix byte) (int64, error) {
 	return int64(sdk.BigEndianToUint64(key[1:])), nil
 }
 
-func queryBlockBaseFee(ctx context.Context, queryClient *rpctypes.QueryClient, height int64) *big.Int {
-	defer gotracer.Trace(&ctx, txIndexerTraceTag)()
-
-	res, err := queryClient.TxFeesQueryClient.GetEipBaseFee(rpctypes.ContextWithHeightFrom(ctx, height), &txfeestypes.QueryEipBaseFeeRequest{})
-	if err != nil || res == nil || res.BaseFee == nil {
+func blockBaseFeeFromResults(blockResults *coretypes.ResultBlockResults) *big.Int {
+	if blockResults == nil {
 		return nil
 	}
-	return res.BaseFee.BaseFee.RoundInt().BigInt()
+	return rpctypes.BaseFeeFromEvents(blockResults.FinalizeBlockEvents)
 }
 
-func queryBlockMiner(ctx context.Context, queryClient *rpctypes.QueryClient, proposer []byte) common.Address {
-	defer gotracer.Trace(&ctx, txIndexerTraceTag)()
-
-	req := &evmtypes.QueryValidatorAccountRequest{
-		ConsAddress: sdk.ConsAddress(proposer).String(),
+func blockTxResults(blockResults *coretypes.ResultBlockResults) []*abci.ExecTxResult {
+	if blockResults == nil {
+		return nil
 	}
-	res, err := queryClient.ValidatorAccount(ctx, req)
-	if err != nil {
-		return common.Address{}
-	}
-
-	accAddr, err := sdk.AccAddressFromBech32(res.AccountAddress)
-	if err != nil {
-		return common.Address{}
-	}
-	return common.BytesToAddress(accAddr)
+	return blockResults.TxResults
 }
 
-func queryBlockGasLimit(ctx context.Context, clientCtx client.Context, height int64) uint64 {
-	defer gotracer.Trace(&ctx, txIndexerTraceTag)()
-
-	gasLimit, err := rpctypes.BlockMaxGasFromConsensusParams(ctx, clientCtx, height)
-	if err != nil || gasLimit < 0 {
-		return 0
+func blockMinerFromHeader(block *cmtypes.Block) common.Address {
+	if block == nil {
+		return common.Address{}
 	}
-	return uint64(gasLimit)
+	// Header proposer bytes are available from the fetched block, so keep miner
+	// reconstruction entirely local during sync.
+	return common.BytesToAddress(block.Header.ProposerAddress)
 }
 
 func encodeOptionalBig(v *big.Int) string {

@@ -47,7 +47,7 @@ func TestFetchWithRetryKeepsWaitingForAheadOfHead(t *testing.T) {
 	defer cancel()
 
 	var calls int
-	err := getter.fetchWithRetry(ctx, func() error {
+	err := getter.fetchWithRetry(ctx, 0, 45445, "block", func() error {
 		calls++
 		if calls <= retryAttempts+1 {
 			return errors.New(`{"jsonrpc":"2.0","id":-1,"error":{"code":-32603,"message":"Internal error","data":"height 45445 must be less than or equal to the current blockchain height 45444"}}`)
