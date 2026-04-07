@@ -81,6 +81,10 @@ func TestBuildBenchmarkScenariosStrictCacheOnlyIncludesOfflineBlockAndBatchMix(t
 		BatchRequests: [][]rpcEnvelope{{
 			{JSONRPC: "2.0", ID: 1, Method: "eth_getBlockByNumber", Params: []interface{}{"0x10", false}},
 		}},
+		TraceBlocks: []benchmarkBlockLookup{{
+			NumberTag: "0x11",
+			Hash:      "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		}},
 		TraceHashes: []string{"0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},
 	}
 
@@ -96,11 +100,15 @@ func TestBuildBenchmarkScenariosStrictCacheOnlyIncludesOfflineBlockAndBatchMix(t
 		"eth_getBlockByHash_false",
 		"eth_getBlockByHash_true",
 		"eth_getLogs",
+		"eth_getBlockReceipts_number",
+		"eth_getBlockReceipts_hash",
 		"eth_getTransactionByHash",
 		"eth_getTransactionReceipt",
 		"eth_getTransactionByBlockNumberAndIndex",
 		"eth_getTransactionByBlockHashAndIndex",
 		"batch_mixed",
+		"debug_traceTransaction",
+		"debug_traceBlockByNumber",
 	}
 	if !reflect.DeepEqual(names, want) {
 		t.Fatalf("unexpected strict-cache scenarios: got %v want %v", names, want)

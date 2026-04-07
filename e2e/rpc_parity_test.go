@@ -248,6 +248,7 @@ func TestRPCParityAgainstLiveSource(t *testing.T) {
 	state := prepareExpandedParityState(t, ctx, sourceRPC, accountsPath, ethChainID, seedAccountsNum, txs, contractAddresses)
 	runExtendedNamespaceParity(t, sourceRPC, debugSourceRPC, proc.RPCURL(), state)
 	runGatewayOnlyDebugCoverage(t, proc.RPCURL())
+	warmOfflineParityFixtures(t, proc.RPCURL(), state)
 
 	st, err := proc.Status(ctx)
 	if err != nil {
@@ -269,6 +270,35 @@ func TestRPCParityAgainstLiveSource(t *testing.T) {
 		st.Cache.ReceiptByHash.LiveFallbacks != 0 || st.Cache.BlockLogs.LiveFallbacks != 0 {
 		t.Fatalf("expected zero cache live fallbacks for synced parity queries, cache=%+v", st.Cache)
 	}
+
+	t.Log("restarting parity gateway in offline rpc-only mode against the indexed data dir")
+	proc.Stop(t)
+	offlineProc := startGateway(t, gatewayStartConfig{
+		BinaryPath:     gatewayBin,
+		DataDir:        dataDir,
+		RPCPort:        defaultParityGatewayRPCPort,
+		WSPort:         defaultParityGatewayWSPort,
+		Earliest:       generatedFrom,
+		FetchJobs:      4,
+		CometRPC:       cometRPC,
+		GRPCAddr:       grpcAddr,
+		ChainID:        chainID,
+		EnableSync:     false,
+		EnableRPC:      true,
+		OfflineRPCOnly: true,
+		APIList:        "eth,debug",
+		WaitTimeout:    30 * time.Second,
+	})
+	defer offlineProc.Stop(t)
+
+	compareRPCParity(t, sourceRPC, offlineProc.RPCURL(), "eth_getBlockReceipts", []interface{}{state.SampleBlockTag})
+	compareRPCParity(t, sourceRPC, offlineProc.RPCURL(), "eth_getBlockReceipts", []interface{}{state.SampleTx.BlockHash})
+	compareRPCResponseParity(t, debugSourceRPC, offlineProc.RPCURL(), "debug_traceTransaction", []interface{}{
+		state.SampleTx.Hash, map[string]interface{}{"tracer": "callTracer"},
+	})
+	compareRPCResponseParity(t, debugSourceRPC, offlineProc.RPCURL(), "debug_traceBlockByNumber", []interface{}{
+		state.SampleBlockTag, map[string]interface{}{"tracer": "callTracer"},
+	})
 }
 
 type parityBlock struct {
@@ -480,6 +510,22 @@ func runExtendedNamespaceParity(
 		{JSONRPC: "2.0", ID: 303, Method: "debug_getBlockRlp", Params: []interface{}{state.SampleBlockTag}},
 	}
 	compareRPCBatchParity(t, debugSourceRPC, gatewayRPC, debugBatch)
+}
+
+func warmOfflineParityFixtures(t *testing.T, gatewayRPC string, state expandedParityState) {
+	t.Helper()
+
+	for _, tc := range []struct {
+		method string
+		params []interface{}
+	}{
+		{method: "eth_getBlockReceipts", params: []interface{}{state.SampleBlockTag}},
+		{method: "eth_getBlockReceipts", params: []interface{}{state.SampleTx.BlockHash}},
+		{method: "debug_traceTransaction", params: []interface{}{state.SampleTx.Hash, map[string]interface{}{"tracer": "callTracer"}}},
+		{method: "debug_traceBlockByNumber", params: []interface{}{state.SampleBlockTag, map[string]interface{}{"tracer": "callTracer"}}},
+	} {
+		expectRPCSuccess(t, gatewayRPC, tc.method, tc.params)
+	}
 }
 
 func runGatewayOnlyDebugCoverage(t *testing.T, gatewayRPC string) {
@@ -1031,6 +1077,9 @@ func rpcRawResult(ctx context.Context, rpcURL, method string, params interface{}
 }
 
 func rpcCallResponse(ctx context.Context, rpcURL, method string, params interface{}) (rpcResponse, error) {
+	reqCtx, cancel := withE2ERPCTimeout(ctx)
+	defer cancel()
+
 	reqBody, err := json.Marshal(rpcEnvelope{
 		JSONRPC: "2.0",
 		ID:      1,
@@ -1041,7 +1090,7 @@ func rpcCallResponse(ctx context.Context, rpcURL, method string, params interfac
 		return rpcResponse{}, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, rpcURL, bytes.NewReader(reqBody))
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, rpcURL, bytes.NewReader(reqBody))
 	if err != nil {
 		return rpcResponse{}, err
 	}
@@ -1066,12 +1115,15 @@ func rpcCallResponse(ctx context.Context, rpcURL, method string, params interfac
 }
 
 func rpcBatchCall(ctx context.Context, rpcURL string, requests []rpcEnvelope) ([]rpcResponse, error) {
+	reqCtx, cancel := withE2ERPCTimeout(ctx)
+	defer cancel()
+
 	reqBody, err := json.Marshal(requests)
 	if err != nil {
 		return nil, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, rpcURL, bytes.NewReader(reqBody))
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, rpcURL, bytes.NewReader(reqBody))
 	if err != nil {
 		return nil, err
 	}

@@ -608,8 +608,10 @@ func (kv *KVIndexer) resetBlock(batch dbm.Batch, height int64) error {
 	}
 	defer it.Close()
 
+	txHashes := make([]common.Hash, 0)
 	for ; it.Valid(); it.Next() {
 		txHash := common.BytesToHash(it.Value())
+		txHashes = append(txHashes, txHash)
 		if err := batch.Delete(it.Key()); err != nil {
 			return errorsmod.Wrapf(err, "reset block %d: delete tx index", height)
 		}
@@ -622,6 +624,10 @@ func (kv *KVIndexer) resetBlock(batch dbm.Batch, height int64) error {
 		if err := batch.Delete(RPCtxHashKey(txHash)); err != nil {
 			return errorsmod.Wrapf(err, "reset block %d: delete rpc tx hash", height)
 		}
+	}
+
+	if err := kv.deleteTraceKeysForBlock(batch, height, txHashes); err != nil {
+		return errorsmod.Wrapf(err, "reset block %d: delete trace cache", height)
 	}
 
 	rpcIndexStart := rpcTxIndexPrefixStart(height)

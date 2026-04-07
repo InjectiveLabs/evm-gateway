@@ -2,6 +2,7 @@ package indexer
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"reflect"
@@ -488,7 +489,19 @@ func (stubTxIndexer) GetBlockMetaByHeight(int64) (*CachedBlockMeta, error)      
 func (stubTxIndexer) GetBlockMetaByHash(common.Hash) (*CachedBlockMeta, error)       { return nil, nil }
 func (stubTxIndexer) GetLogsByBlockHeight(int64) ([][]*ethtypes.Log, error)          { return nil, nil }
 func (stubTxIndexer) GetLogsByBlockHash(common.Hash) ([][]*ethtypes.Log, error)      { return nil, nil }
-func (stubTxIndexer) IsBlockIndexed(int64) (bool, error)                             { return false, nil }
+func (stubTxIndexer) SetTraceTransaction(common.Hash, *rpctypes.TraceConfig, json.RawMessage) error {
+	return nil
+}
+func (stubTxIndexer) GetTraceTransaction(common.Hash, *rpctypes.TraceConfig) (json.RawMessage, error) {
+	return nil, nil
+}
+func (stubTxIndexer) SetTraceBlockByHeight(int64, *rpctypes.TraceConfig, json.RawMessage) error {
+	return nil
+}
+func (stubTxIndexer) GetTraceBlockByHeight(int64, *rpctypes.TraceConfig) (json.RawMessage, error) {
+	return nil, nil
+}
+func (stubTxIndexer) IsBlockIndexed(int64) (bool, error) { return false, nil }
 
 func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -587,6 +600,18 @@ func (r *recordingTxIndexer) GetLogsByBlockHeight(int64) ([][]*ethtypes.Log, err
 func (r *recordingTxIndexer) GetLogsByBlockHash(common.Hash) ([][]*ethtypes.Log, error) {
 	return nil, nil
 }
+func (r *recordingTxIndexer) SetTraceTransaction(common.Hash, *rpctypes.TraceConfig, json.RawMessage) error {
+	return nil
+}
+func (r *recordingTxIndexer) GetTraceTransaction(common.Hash, *rpctypes.TraceConfig) (json.RawMessage, error) {
+	return nil, nil
+}
+func (r *recordingTxIndexer) SetTraceBlockByHeight(int64, *rpctypes.TraceConfig, json.RawMessage) error {
+	return nil
+}
+func (r *recordingTxIndexer) GetTraceBlockByHeight(int64, *rpctypes.TraceConfig) (json.RawMessage, error) {
+	return nil, nil
+}
 func (r *recordingTxIndexer) IsBlockIndexed(int64) (bool, error) { return false, nil }
 
 type faultyTxIndexer struct {
@@ -650,6 +675,18 @@ func (f *faultyTxIndexer) GetLogsByBlockHeight(int64) ([][]*ethtypes.Log, error)
 	return nil, nil
 }
 func (f *faultyTxIndexer) GetLogsByBlockHash(common.Hash) ([][]*ethtypes.Log, error) {
+	return nil, nil
+}
+func (f *faultyTxIndexer) SetTraceTransaction(common.Hash, *rpctypes.TraceConfig, json.RawMessage) error {
+	return nil
+}
+func (f *faultyTxIndexer) GetTraceTransaction(common.Hash, *rpctypes.TraceConfig) (json.RawMessage, error) {
+	return nil, nil
+}
+func (f *faultyTxIndexer) SetTraceBlockByHeight(int64, *rpctypes.TraceConfig, json.RawMessage) error {
+	return nil
+}
+func (f *faultyTxIndexer) GetTraceBlockByHeight(int64, *rpctypes.TraceConfig) (json.RawMessage, error) {
 	return nil, nil
 }
 func (f *faultyTxIndexer) IsBlockIndexed(int64) (bool, error) { return false, nil }

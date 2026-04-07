@@ -21,9 +21,10 @@ import (
 )
 
 const (
-	defaultSourceRPC = "http://127.0.0.1:8545"
-	defaultCometRPC  = "http://127.0.0.1:26657"
-	defaultGRPCAddr  = "127.0.0.1:9090"
+	defaultSourceRPC     = "http://127.0.0.1:8545"
+	defaultCometRPC      = "http://127.0.0.1:26657"
+	defaultGRPCAddr      = "127.0.0.1:9090"
+	defaultE2ERPCTimeout = 20 * time.Second
 )
 
 func TestSyncOrchestration(t *testing.T) {
@@ -455,6 +456,7 @@ func startGateway(t *testing.T, cfg gatewayStartConfig) *gatewayProcess {
 	}
 
 	cmd := exec.Command(cfg.BinaryPath)
+	cmd.Dir = filepath.Dir(cfg.BinaryPath)
 	cmd.Env = append(os.Environ(),
 		"WEB3INJ_LOG_FORMAT=json",
 		"WEB3INJ_LOG_VERBOSE=false",
@@ -480,6 +482,7 @@ func startGateway(t *testing.T, cfg gatewayStartConfig) *gatewayProcess {
 
 	done := make(chan error, 1)
 	go func() {
+		defer close(done)
 		done <- cmd.Wait()
 	}()
 
@@ -537,6 +540,8 @@ func (p *gatewayProcess) Stop(t *testing.T) {
 		<-p.done
 	case <-p.done:
 	}
+
+	closeDefaultHTTPIdleConnections()
 }
 
 func (p *gatewayProcess) RPCURL() string {
@@ -544,7 +549,10 @@ func (p *gatewayProcess) RPCURL() string {
 }
 
 func (p *gatewayProcess) Status(ctx context.Context) (syncStatusResponse, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.statusURL, nil)
+	reqCtx, cancel := withE2ERPCTimeout(ctx)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, p.statusURL, nil)
 	if err != nil {
 		return syncStatusResponse{}, err
 	}
@@ -736,6 +744,9 @@ func isUnavailableErr(err error) bool {
 var errRPCNullResult = errors.New("rpc null result")
 
 func rpcCall(ctx context.Context, rpcURL, method string, params interface{}, out interface{}) error {
+	reqCtx, cancel := withE2ERPCTimeout(ctx)
+	defer cancel()
+
 	reqBody, err := json.Marshal(rpcEnvelope{
 		JSONRPC: "2.0",
 		ID:      1,
@@ -746,7 +757,7 @@ func rpcCall(ctx context.Context, rpcURL, method string, params interface{}, out
 		return err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, rpcURL, bytes.NewReader(reqBody))
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, rpcURL, bytes.NewReader(reqBody))
 	if err != nil {
 		return err
 	}
@@ -778,6 +789,21 @@ func rpcCall(ctx context.Context, rpcURL, method string, params interface{}, out
 		return nil
 	}
 	return json.Unmarshal(rpcResp.Result, out)
+}
+
+func withE2ERPCTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
+	if _, ok := ctx.Deadline(); ok {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeout(ctx, defaultE2ERPCTimeout)
+}
+
+func closeDefaultHTTPIdleConnections() {
+	transport, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		return
+	}
+	transport.CloseIdleConnections()
 }
 
 func buildGatewayBinary(t *testing.T) string {

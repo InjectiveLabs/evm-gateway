@@ -60,11 +60,16 @@ func TestKVIndexerDeleteBlockRemovesIndexedDataForHeight(t *testing.T) {
 	mustSet(RPCtxHashKey(txHashB), []byte("{}"))
 	mustSet(RPCtxIndexKey(height, 0), txHashA.Bytes())
 	mustSet(RPCtxIndexKey(height, 1), txHashB.Bytes())
+	mustSet(TraceTxKey(txHashA, nil), []byte(`{"type":"call"}`))
+	mustSet(TraceTxKey(txHashB, nil), []byte(`{"type":"call"}`))
+	mustSet(TraceBlockKey(height, nil), []byte(`[{"result":{"type":"call"}}]`))
 
 	mustSet(BlockMetaKey(otherHeight), mustJSON(CachedBlockMeta{Height: otherHeight, Hash: otherBlockHash.Hex()}))
 	mustSet(BlockHashKey(otherBlockHash), sdk.Uint64ToBigEndian(uint64(otherHeight)))
 	mustSet(TxIndexKey(otherHeight, 0), txHashOther.Bytes())
 	mustSet(TxHashKey(txHashOther), []byte("tx-other"))
+	mustSet(TraceTxKey(txHashOther, nil), []byte(`{"type":"call"}`))
+	mustSet(TraceBlockKey(otherHeight, nil), []byte(`[{"result":{"type":"call"}}]`))
 
 	if err := kv.DeleteBlock(height); err != nil {
 		t.Fatalf("DeleteBlock returned error: %v", err)
@@ -83,11 +88,16 @@ func TestKVIndexerDeleteBlockRemovesIndexedDataForHeight(t *testing.T) {
 	assertMissing(RPCtxHashKey(txHashB))
 	assertMissing(RPCtxIndexKey(height, 0))
 	assertMissing(RPCtxIndexKey(height, 1))
+	assertMissing(TraceTxKey(txHashA, nil))
+	assertMissing(TraceTxKey(txHashB, nil))
+	assertMissing(TraceBlockKey(height, nil))
 
 	assertPresent(BlockMetaKey(otherHeight))
 	assertPresent(BlockHashKey(otherBlockHash))
 	assertPresent(TxIndexKey(otherHeight, 0))
 	assertPresent(TxHashKey(txHashOther))
+	assertPresent(TraceTxKey(txHashOther, nil))
+	assertPresent(TraceBlockKey(otherHeight, nil))
 }
 
 func TestKVIndexerCachedBlockLookupsUseHashAndRPCIndexCollections(t *testing.T) {
@@ -138,5 +148,38 @@ func TestKVIndexerCachedBlockLookupsUseHashAndRPCIndexCollections(t *testing.T) 
 	}
 	if hashes[0] != txHashA || hashes[1] != txHashB {
 		t.Fatalf("unexpected tx hashes order: got %v want [%s %s]", hashes, txHashA.Hex(), txHashB.Hex())
+	}
+}
+
+func TestKVIndexerTraceCacheRoundTrip(t *testing.T) {
+	db := dbm.NewMemDB()
+	kv := &KVIndexer{db: db, logger: testLogger()}
+
+	txHash := common.HexToHash("0xaa")
+	height := int64(42)
+	txPayload := []byte(`{"type":"call","gasUsed":"0x0"}`)
+	blockPayload := []byte(`[{"result":{"type":"call"}}]`)
+
+	if err := kv.SetTraceTransaction(txHash, nil, txPayload); err != nil {
+		t.Fatalf("SetTraceTransaction returned error: %v", err)
+	}
+	if err := kv.SetTraceBlockByHeight(height, nil, blockPayload); err != nil {
+		t.Fatalf("SetTraceBlockByHeight returned error: %v", err)
+	}
+
+	gotTx, err := kv.GetTraceTransaction(txHash, nil)
+	if err != nil {
+		t.Fatalf("GetTraceTransaction returned error: %v", err)
+	}
+	if string(gotTx) != string(txPayload) {
+		t.Fatalf("unexpected tx trace payload: got %s want %s", gotTx, txPayload)
+	}
+
+	gotBlock, err := kv.GetTraceBlockByHeight(height, nil)
+	if err != nil {
+		t.Fatalf("GetTraceBlockByHeight returned error: %v", err)
+	}
+	if string(gotBlock) != string(blockPayload) {
+		t.Fatalf("unexpected block trace payload: got %s want %s", gotBlock, blockPayload)
 	}
 }

@@ -176,6 +176,14 @@ func TestHistoricalRPCBenchmarkSuite(t *testing.T) {
 		t.Logf("post-sync settle for %s", cfg.PostSyncSettle)
 		time.Sleep(cfg.PostSyncSettle)
 	}
+	if cfg.StrictCacheOnly {
+		t.Logf(
+			"warming trace caches for %d blocks and %d transactions before strict-cache benchmark",
+			len(fixtures.TraceBlocks),
+			len(fixtures.TraceHashes),
+		)
+		warmTraceBenchmarkFixtures(t, proc.RPCURL(), fixtures, cfg.RequestTimeout)
+	}
 	if cfg.OfflineAfterSync {
 		t.Log("restarting benchmark gateway in offline rpc-only mode against the indexed data dir")
 		proc.Stop(t)
@@ -192,7 +200,7 @@ func TestHistoricalRPCBenchmarkSuite(t *testing.T) {
 			EnableSync:     false,
 			EnableRPC:      true,
 			OfflineRPCOnly: true,
-			APIList:        "eth",
+			APIList:        "eth,debug",
 			WaitTimeout:    30 * time.Second,
 		})
 	}
@@ -268,6 +276,7 @@ func TestHistoricalRPCBenchmarkSuite(t *testing.T) {
 			RangeFilters: len(fixtures.RangeFilters),
 			Transactions: len(fixtures.TxLookups),
 			Batches:      len(fixtures.BatchRequests),
+			TraceBlocks:  len(fixtures.TraceBlocks),
 			TraceHashes:  len(fixtures.TraceHashes),
 		},
 		Gateway: benchmarkGatewayReport{
@@ -364,6 +373,7 @@ type benchmarkFixtures struct {
 	RangeFilters  []map[string]interface{}
 	TxLookups     []benchmarkTxLookup
 	BatchRequests [][]rpcEnvelope
+	TraceBlocks   []benchmarkBlockLookup
 	TraceHashes   []string
 }
 
@@ -416,6 +426,10 @@ func prepareBenchmarkFixtures(
 		fullBlockHeights = sampleHeights(generatedFrom, headAfter, 64)
 	}
 	fullBlocks := buildBenchmarkBlockLookups(t, ctx, sourceRPC, fullBlockHeights)
+	traceBlocks := buildBenchmarkBlockLookups(t, ctx, sourceRPC, sampleInt64s(uniqueInt64s(txBlocks), 64))
+	if len(traceBlocks) == 0 {
+		traceBlocks = append(traceBlocks, fullBlocks...)
+	}
 
 	rangeFilters := make([]map[string]interface{}, 0, 96)
 	rangeHeights := sampleHeights(generatedFrom, headAfter, 96)
@@ -434,6 +448,7 @@ func prepareBenchmarkFixtures(
 		FullBlocks:   fullBlocks,
 		RangeFilters: rangeFilters,
 		TxLookups:    txLookups,
+		TraceBlocks:  traceBlocks,
 		TraceHashes:  sampleStrings(uniqueStrings(traceHashes), 64),
 	}
 	fixtures.BatchRequests = buildBenchmarkBatches(fixtures)
@@ -530,6 +545,35 @@ func buildBenchmarkBatches(fixtures benchmarkFixtures) [][]rpcEnvelope {
 	return batches
 }
 
+func benchmarkTraceConfigParams() map[string]interface{} {
+	return map[string]interface{}{"tracer": "callTracer"}
+}
+
+func warmTraceBenchmarkFixtures(t *testing.T, rpcURL string, fixtures benchmarkFixtures, timeout time.Duration) {
+	t.Helper()
+
+	client, closeClient := newBenchmarkHTTPClient(1, timeout)
+	defer closeClient()
+
+	for _, block := range fixtures.TraceBlocks {
+		if err := (benchmarkInvocation{
+			Method: "debug_traceBlockByNumber",
+			Params: []interface{}{block.NumberTag, benchmarkTraceConfigParams()},
+		}).Execute(context.Background(), client, rpcURL); err != nil {
+			t.Fatalf("warm trace block %s: %v", block.NumberTag, err)
+		}
+	}
+
+	for _, hash := range fixtures.TraceHashes {
+		if err := (benchmarkInvocation{
+			Method: "debug_traceTransaction",
+			Params: []interface{}{hash, benchmarkTraceConfigParams()},
+		}).Execute(context.Background(), client, rpcURL); err != nil {
+			t.Fatalf("warm trace transaction %s: %v", hash, err)
+		}
+	}
+}
+
 type benchmarkScenarioSpec struct {
 	Name        string
 	Signature   string
@@ -599,6 +643,24 @@ func buildBenchmarkScenarios(cfg benchmarkConfig, fixtures benchmarkFixtures) []
 		})
 	}
 
+	blockReceiptsByNumberInvocations := make([]benchmarkInvocation, 0, len(fixtures.TraceBlocks))
+	blockReceiptsByHashInvocations := make([]benchmarkInvocation, 0, len(fixtures.TraceBlocks))
+	traceBlockInvocations := make([]benchmarkInvocation, 0, len(fixtures.TraceBlocks))
+	for _, block := range fixtures.TraceBlocks {
+		blockReceiptsByNumberInvocations = append(blockReceiptsByNumberInvocations, benchmarkInvocation{
+			Method: "eth_getBlockReceipts",
+			Params: []interface{}{block.NumberTag},
+		})
+		blockReceiptsByHashInvocations = append(blockReceiptsByHashInvocations, benchmarkInvocation{
+			Method: "eth_getBlockReceipts",
+			Params: []interface{}{block.Hash},
+		})
+		traceBlockInvocations = append(traceBlockInvocations, benchmarkInvocation{
+			Method: "debug_traceBlockByNumber",
+			Params: []interface{}{block.NumberTag, benchmarkTraceConfigParams()},
+		})
+	}
+
 	rangeInvocations := make([]benchmarkInvocation, 0, len(fixtures.RangeFilters))
 	for _, filter := range fixtures.RangeFilters {
 		rangeInvocations = append(rangeInvocations, benchmarkInvocation{
@@ -641,7 +703,7 @@ func buildBenchmarkScenarios(cfg benchmarkConfig, fixtures benchmarkFixtures) []
 	for _, hash := range fixtures.TraceHashes {
 		traceInvocations = append(traceInvocations, benchmarkInvocation{
 			Method: "debug_traceTransaction",
-			Params: []interface{}{hash, map[string]interface{}{"tracer": "callTracer"}},
+			Params: []interface{}{hash, benchmarkTraceConfigParams()},
 		})
 	}
 
@@ -680,6 +742,20 @@ func buildBenchmarkScenarios(cfg benchmarkConfig, fixtures benchmarkFixtures) []
 			Workers:     scaled(3),
 			Timeout:     12 * time.Second,
 			Invocations: rangeInvocations,
+		},
+		{
+			Name:        "eth_getBlockReceipts_number",
+			Signature:   benchmarkInvocationSignature(blockReceiptsByNumberInvocations[0]),
+			Workers:     scaled(3),
+			Timeout:     12 * time.Second,
+			Invocations: blockReceiptsByNumberInvocations,
+		},
+		{
+			Name:        "eth_getBlockReceipts_hash",
+			Signature:   benchmarkInvocationSignature(blockReceiptsByHashInvocations[0]),
+			Workers:     scaled(3),
+			Timeout:     12 * time.Second,
+			Invocations: blockReceiptsByHashInvocations,
 		},
 		{
 			Name:        "eth_getTransactionByHash",
@@ -722,6 +798,13 @@ func buildBenchmarkScenarios(cfg benchmarkConfig, fixtures benchmarkFixtures) []
 			Workers:     scaled(4),
 			Timeout:     20 * time.Second,
 			Invocations: traceInvocations,
+		},
+		{
+			Name:        "debug_traceBlockByNumber",
+			Signature:   benchmarkInvocationSignature(traceBlockInvocations[0]),
+			Workers:     scaled(2),
+			Timeout:     20 * time.Second,
+			Invocations: traceBlockInvocations,
 		},
 	}
 
@@ -766,6 +849,20 @@ func buildBenchmarkScenarios(cfg benchmarkConfig, fixtures benchmarkFixtures) []
 			Invocations: rangeInvocations,
 		},
 		{
+			Name:        "eth_getBlockReceipts_number",
+			Signature:   benchmarkInvocationSignature(blockReceiptsByNumberInvocations[0]),
+			Workers:     scaled(6),
+			Timeout:     12 * time.Second,
+			Invocations: blockReceiptsByNumberInvocations,
+		},
+		{
+			Name:        "eth_getBlockReceipts_hash",
+			Signature:   benchmarkInvocationSignature(blockReceiptsByHashInvocations[0]),
+			Workers:     scaled(6),
+			Timeout:     12 * time.Second,
+			Invocations: blockReceiptsByHashInvocations,
+		},
+		{
 			Name:        "eth_getTransactionByHash",
 			Signature:   benchmarkInvocationSignature(txByHashInvocations[0]),
 			Workers:     scaled(12),
@@ -799,6 +896,20 @@ func buildBenchmarkScenarios(cfg benchmarkConfig, fixtures benchmarkFixtures) []
 			Workers:     scaled(4),
 			Timeout:     15 * time.Second,
 			Invocations: batchInvocations,
+		},
+		{
+			Name:        "debug_traceTransaction",
+			Signature:   benchmarkInvocationSignature(traceInvocations[0]),
+			Workers:     scaled(4),
+			Timeout:     20 * time.Second,
+			Invocations: traceInvocations,
+		},
+		{
+			Name:        "debug_traceBlockByNumber",
+			Signature:   benchmarkInvocationSignature(traceBlockInvocations[0]),
+			Workers:     scaled(2),
+			Timeout:     20 * time.Second,
+			Invocations: traceBlockInvocations,
 		},
 	}
 }
@@ -1221,6 +1332,7 @@ type benchmarkFixtureReport struct {
 	RangeFilters int `json:"range_filters"`
 	Transactions int `json:"transactions"`
 	Batches      int `json:"batches"`
+	TraceBlocks  int `json:"trace_blocks"`
 	TraceHashes  int `json:"trace_hashes"`
 }
 

@@ -67,21 +67,10 @@ func (a *API) TraceTransaction(ctx context.Context, hash common.Hash, config *rp
 func (a *API) TraceBlockByNumber(ctx context.Context, height rpctypes.BlockNumber, config *rpctypes.TraceConfig) ([]*rpctypes.TxTraceResult, error) {
 	defer gotracer.Trace(&ctx)()
 	a.logger.Debug("debug_traceBlockByNumber", "height", height)
-	backend := a.backend.WithContext(ctx)
 	if height == 0 {
 		return nil, errors.New("genesis is not traceable")
 	}
-	// Get Tendermint Block
-	resBlock, err := backend.TendermintBlockByNumber(height)
-	if err != nil {
-		a.logger.Debug("get block failed", "height", height, "error", err.Error())
-		return nil, errors.Wrap(err, "block not found")
-	} else if resBlock == nil {
-		a.logger.Debug("block not found", "height", height)
-		return nil, errors.New("block not found")
-	}
-
-	return backend.TraceBlock(rpctypes.BlockNumber(resBlock.Block.Height), config, resBlock)
+	return a.backend.WithContext(ctx).TraceBlock(height, config, nil)
 }
 
 // TraceBlockByHash returns the structured logs created during the execution of
@@ -90,17 +79,12 @@ func (a *API) TraceBlockByHash(ctx context.Context, hash common.Hash, config *rp
 	defer gotracer.Trace(&ctx)()
 	a.logger.Debug("debug_traceBlockByHash", "hash", hash)
 	backend := a.backend.WithContext(ctx)
-	// Get Tendermint Block
-	resBlock, err := backend.TendermintBlockByHash(hash)
+	height, err := backend.BlockNumberFromTendermintByHash(hash)
 	if err != nil {
 		a.logger.Debug("get block failed", "hash", hash.Hex(), "error", err.Error())
-		return nil, err
-	} else if resBlock == nil || resBlock.Block == nil {
-		a.logger.Debug("block not found", "hash", hash.Hex())
 		return nil, errors.New("block not found")
 	}
-
-	return backend.TraceBlock(rpctypes.BlockNumber(resBlock.Block.Height), config, resBlock)
+	return backend.TraceBlock(rpctypes.NewBlockNumber(height), config, nil)
 }
 
 // TraceCall returns the structured logs created during the execution of EVM call

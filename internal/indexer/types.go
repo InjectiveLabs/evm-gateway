@@ -2,6 +2,7 @@ package indexer
 
 import (
 	"context"
+	"encoding/json"
 
 	abci "github.com/cometbft/cometbft/abci/types"
 	cmtypes "github.com/cometbft/cometbft/types"
@@ -35,5 +36,9 @@ type TxIndexer interface {
 	GetBlockMetaByHash(hash common.Hash) (*CachedBlockMeta, error)
 	GetLogsByBlockHeight(height int64) ([][]*ethtypes.Log, error)
 	GetLogsByBlockHash(hash common.Hash) ([][]*ethtypes.Log, error)
+	SetTraceTransaction(hash common.Hash, config *rpctypes.TraceConfig, raw json.RawMessage) error
+	GetTraceTransaction(hash common.Hash, config *rpctypes.TraceConfig) (json.RawMessage, error)
+	SetTraceBlockByHeight(height int64, config *rpctypes.TraceConfig, raw json.RawMessage) error
+	GetTraceBlockByHeight(height int64, config *rpctypes.TraceConfig) (json.RawMessage, error)
 	IsBlockIndexed(height int64) (bool, error)
 }

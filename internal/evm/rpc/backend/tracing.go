@@ -24,6 +24,25 @@ func (b *Backend) TraceTransaction(hash common.Hash, config *rpctypes.TraceConfi
 	}
 	b = b.WithContext(ctx).(*Backend)
 
+	if b.indexer != nil {
+		cached, err := b.indexer.GetTraceTransaction(hash, config)
+		if err == nil {
+			return decodeCachedTraceTransaction(cached)
+		}
+		if !isIndexerCacheMiss(err) {
+			if b.cfg.OfflineRPCOnly {
+				return nil, err
+			}
+			b.logger.Debug("cached tx trace lookup failed; falling back to live rpc", "hash", hash.Hex(), "error", err.Error())
+		}
+		if derived, derr := b.traceTransactionFromCachedBlock(hash, config); derr == nil {
+			return derived, nil
+		}
+	}
+	if b.cfg.OfflineRPCOnly {
+		return nil, errors.New("transaction trace not available in offline rpc-only mode")
+	}
+
 	// Get transaction by hash
 	transaction, err := b.GetTxByEthHash(hash)
 	if err != nil {
@@ -122,6 +141,11 @@ func (b *Backend) TraceTransaction(hash common.Hash, config *rpctypes.TraceConfi
 	if err != nil {
 		return nil, err
 	}
+	if b.indexer != nil {
+		if err := b.indexer.SetTraceTransaction(hash, config, traceResult.Data); err != nil {
+			b.logger.Debug("failed to cache tx trace", "hash", hash.Hex(), "error", err.Error())
+		}
+	}
 
 	return decodedResult, nil
 }
@@ -152,11 +176,45 @@ func (b *Backend) TraceBlock(height rpctypes.BlockNumber,
 	}
 	b = b.WithContext(ctx).(*Backend)
 
+	cacheHeight, cacheable := b.traceCacheHeight(height, block)
+	if b.indexer != nil && cacheable {
+		cached, err := b.indexer.GetTraceBlockByHeight(cacheHeight, config)
+		if err == nil {
+			return decodeCachedTraceBlock(cached)
+		}
+		if !isIndexerCacheMiss(err) {
+			if b.cfg.OfflineRPCOnly {
+				return nil, err
+			}
+			b.logger.Debug("cached block trace lookup failed; falling back to live rpc", "height", cacheHeight, "error", err.Error())
+		}
+	}
+	if b.cfg.OfflineRPCOnly {
+		return nil, errors.New("block trace not available in offline rpc-only mode")
+	}
+	if block == nil {
+		var err error
+		block, err = b.TendermintBlockByNumber(height)
+		if err != nil {
+			return nil, errors.Wrap(err, "block not found")
+		}
+		if block == nil || block.Block == nil {
+			return nil, errors.New("block not found")
+		}
+		cacheHeight = block.Block.Height
+		cacheable = true
+	}
+
 	txs := block.Block.Txs
 	txsLength := len(txs)
 
 	if txsLength == 0 {
 		// If there are no transactions return empty array
+		if b.indexer != nil && cacheable {
+			if err := b.indexer.SetTraceBlockByHeight(cacheHeight, config, json.RawMessage("[]")); err != nil {
+				b.logger.Debug("failed to cache empty block trace", "height", cacheHeight, "error", err.Error())
+			}
+		}
 		return []*rpctypes.TxTraceResult{}, nil
 	}
 
@@ -206,6 +264,11 @@ func (b *Backend) TraceBlock(height rpctypes.BlockNumber,
 	decodedResults := make([]*rpctypes.TxTraceResult, txsLength)
 	if err := json.Unmarshal(res.Data, &decodedResults); err != nil {
 		return nil, err
+	}
+	if b.indexer != nil && cacheable {
+		if err := b.indexer.SetTraceBlockByHeight(cacheHeight, config, res.Data); err != nil {
+			b.logger.Debug("failed to cache block trace", "height", cacheHeight, "error", err.Error())
+		}
 	}
 
 	return decodedResults, nil
@@ -272,4 +335,86 @@ func (b *Backend) TraceCall(
 	}
 
 	return decodedResult, nil
+}
+
+func decodeCachedTraceTransaction(raw json.RawMessage) (interface{}, error) {
+	var decoded interface{}
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return nil, err
+	}
+	return decoded, nil
+}
+
+func decodeCachedTraceBlock(raw json.RawMessage) ([]*rpctypes.TxTraceResult, error) {
+	var decoded []*rpctypes.TxTraceResult
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return nil, err
+	}
+	if decoded == nil {
+		return []*rpctypes.TxTraceResult{}, nil
+	}
+	return decoded, nil
+}
+
+func (b *Backend) traceCacheHeight(height rpctypes.BlockNumber, block *cmrpctypes.ResultBlock) (int64, bool) {
+	if block != nil && block.Block != nil {
+		return block.Block.Height, true
+	}
+	if height > 0 {
+		return height.Int64(), true
+	}
+	if !b.cfg.OfflineRPCOnly {
+		return 0, false
+	}
+	h, err := b.indexedBlockHeight(height)
+	if err != nil || h < 1 {
+		return 0, false
+	}
+	return h, true
+}
+
+func (b *Backend) traceTransactionFromCachedBlock(hash common.Hash, config *rpctypes.TraceConfig) (interface{}, error) {
+	if b.indexer == nil {
+		return nil, errors.New("trace cache unavailable")
+	}
+
+	tx, err := b.GetTxByEthHash(hash)
+	if err != nil {
+		return nil, err
+	}
+
+	raw, err := b.indexer.GetTraceBlockByHeight(tx.Height, config)
+	if err != nil {
+		return nil, err
+	}
+
+	blockTrace, err := decodeCachedTraceBlock(raw)
+	if err != nil {
+		return nil, err
+	}
+
+	txIndex := int(tx.EthTxIndex)
+	if txIndex < 0 {
+		hashes, err := b.indexer.GetRPCTransactionHashesByBlockHeight(tx.Height)
+		if err != nil {
+			return nil, err
+		}
+		for i, candidate := range hashes {
+			if candidate == hash {
+				txIndex = i
+				break
+			}
+		}
+	}
+	if txIndex < 0 || txIndex >= len(blockTrace) {
+		return nil, errors.New("transaction trace not found in cached block trace")
+	}
+
+	if blockTrace[txIndex] == nil {
+		return nil, errors.New("transaction trace entry missing from cached block trace")
+	}
+	if blockTrace[txIndex].Error != "" {
+		return nil, errors.New(blockTrace[txIndex].Error)
+	}
+	return blockTrace[txIndex].Result, nil
 }
