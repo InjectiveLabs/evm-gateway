@@ -70,6 +70,10 @@ func (b *Backend) GetTransactionByHash(txHash common.Hash) (*rpctypes.RPCTransac
 
 	res, err := b.GetTxByEthHash(txHash)
 	if err != nil {
+		if b.cfg.OfflineRPCOnly {
+			b.logger.Debug("tx not found in offline cache", "hash", txHash.Hex(), "error", err.Error())
+			return nil, nil
+		}
 		return b.getTransactionByHashPending(txHash)
 	}
 
@@ -207,6 +211,9 @@ func (b *Backend) GetTransactionReceipt(hash common.Hash) (map[string]interface{
 	res, err := b.GetTxByEthHash(hash)
 	if err != nil {
 		b.logger.Debug("tx not found", "hash", hash, "error", err.Error())
+		if b.cfg.OfflineRPCOnly {
+			return nil, nil
+		}
 		return nil, nil
 	}
 	resBlock, err := b.TendermintBlockByNumber(rpctypes.BlockNumber(res.Height))
@@ -480,6 +487,9 @@ func (b *Backend) GetTxByEthHash(hash common.Hash) (*chaintypes.TxResult, error)
 	if b.syncStatus != nil {
 		b.syncStatus.RecordTxByHashLiveFallback()
 	}
+	if b.cfg.OfflineRPCOnly {
+		return nil, errors.New("ethereum tx not found in offline cache")
+	}
 
 	// fallback to tendermint tx indexer
 	b.logger.Warn("fallback to tendermint tx indexer! failed txns will not be available", "tx", hash.Hex())
@@ -519,6 +529,9 @@ func (b *Backend) GetTxByTxIndex(height int64, index uint) (*chaintypes.TxResult
 	if b.syncStatus != nil {
 		b.syncStatus.RecordTxByIndexLiveFallback()
 	}
+	if b.cfg.OfflineRPCOnly {
+		return nil, errors.New("ethereum tx not found in offline cache")
+	}
 
 	// fallback to tendermint tx indexer
 	b.logger.Warn("fallback to tendermint tx indexer! failed txns will not be available", "height", height, "txIndex", index)
@@ -544,6 +557,10 @@ func (b *Backend) queryTendermintTxIndexer(query string, txGetter func(*rpctypes
 		defer gotracer.Traceless(&ctx, b.baseTraceTags)()
 	}
 	b = b.WithContext(ctx).(*Backend)
+
+	if b.clientCtx.Client == nil {
+		return nil, errors.New("tendermint tx indexer unavailable without rpc client")
+	}
 
 	resTxs, err := b.clientCtx.Client.TxSearch(b.ctx, query, false, nil, nil, "")
 	if err != nil {

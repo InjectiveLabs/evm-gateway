@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -387,7 +388,7 @@ func grpcTransportCredentials(addr string) credentials.TransportCredentials {
 	proto, address := protocolAndAddress(addr)
 	switch proto {
 	case "https", "grpcs":
-		serverName := address
+		serverName := hostWithoutPort(address)
 		if host, _, err := net.SplitHostPort(address); err == nil {
 			serverName = host
 		}
@@ -413,7 +414,43 @@ func protocolAndAddress(listenAddr string) (string, string) {
 	if len(parts) == 2 {
 		protocol, address = parts[0], parts[1]
 	}
+	address = withDefaultPort(protocol, address)
 	return protocol, address
+}
+
+func withDefaultPort(protocol, address string) string {
+	if address == "" {
+		return address
+	}
+	if _, _, err := net.SplitHostPort(address); err == nil {
+		return address
+	}
+	host := hostWithoutPort(address)
+	if host == "" {
+		return address
+	}
+
+	switch protocol {
+	case "https", "grpcs":
+		return net.JoinHostPort(host, "443")
+	case "http":
+		return net.JoinHostPort(host, "80")
+	default:
+		return address
+	}
+}
+
+func hostWithoutPort(address string) string {
+	if host, _, err := net.SplitHostPort(address); err == nil {
+		return host
+	}
+	if strings.HasPrefix(address, "[") && strings.HasSuffix(address, "]") {
+		return strings.TrimSuffix(strings.TrimPrefix(address, "["), "]")
+	}
+	if parsed, err := url.Parse("scheme://" + address); err == nil && parsed.Hostname() != "" {
+		return parsed.Hostname()
+	}
+	return address
 }
 
 func openIndexerDB(rootDir string, backend string) (dbm.DB, error) {

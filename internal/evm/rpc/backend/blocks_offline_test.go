@@ -127,6 +127,89 @@ func TestOfflineCachedBlockReceiptLookups(t *testing.T) {
 	backendTestAssertReceiptSummary(t, byHash, fixture.meta.Height, fixture.blockHash, []common.Hash{fixture.txHashA, fixture.txHashB})
 }
 
+func TestOfflineCachedBlockLegacyMetaCompatibility(t *testing.T) {
+	db := dbm.NewMemDB()
+	kv := indexer.NewKVIndexer(db, backendTestLogger(), client.Context{})
+	fixture := backendTestSeedCachedBlockFixture(t, db)
+
+	fixture.meta.StateRoot = ""
+	fixture.meta.TransactionsRoot = ""
+	fixture.meta.Miner = ""
+	backendTestSetJSON(t, db, indexer.BlockMetaKey(fixture.meta.Height), fixture.meta)
+
+	b := &Backend{
+		logger:  backendTestLogger(),
+		cfg:     appconfig.Config{OfflineRPCOnly: true},
+		indexer: kv,
+	}
+
+	byNumber, err := b.GetBlockByNumber(rpctypes.BlockNumber(fixture.meta.Height), false)
+	if err != nil {
+		t.Fatalf("GetBlockByNumber returned error: %v", err)
+	}
+	if gotRoot, ok := byNumber["stateRoot"].(hexutil.Bytes); !ok || common.BytesToHash(gotRoot) != (common.Hash{}) {
+		t.Fatalf("unexpected state root: got %#v want zero hash", byNumber["stateRoot"])
+	}
+	if gotRoot, ok := byNumber["transactionsRoot"].(common.Hash); !ok || gotRoot != (common.Hash{}) {
+		t.Fatalf("unexpected tx root: got %#v want zero hash", byNumber["transactionsRoot"])
+	}
+	if gotMiner, ok := byNumber["miner"].(common.Address); !ok || gotMiner != (common.Address{}) {
+		t.Fatalf("unexpected miner: got %#v want zero address", byNumber["miner"])
+	}
+
+	header, err := b.HeaderByHash(fixture.blockHash)
+	if err != nil {
+		t.Fatalf("HeaderByHash returned error: %v", err)
+	}
+	if header.Root != (common.Hash{}) {
+		t.Fatalf("unexpected header state root: got %s want zero hash", header.Root.Hex())
+	}
+	if header.TxHash != (common.Hash{}) {
+		t.Fatalf("unexpected header tx root: got %s want zero hash", header.TxHash.Hex())
+	}
+	if header.Coinbase != (common.Address{}) {
+		t.Fatalf("unexpected header miner: got %s want zero address", header.Coinbase.Hex())
+	}
+}
+
+func TestOfflineMissingTransactionCacheReturnsNil(t *testing.T) {
+	db := dbm.NewMemDB()
+	kv := indexer.NewKVIndexer(db, backendTestLogger(), client.Context{})
+	fixture := backendTestSeedCachedBlockFixture(t, db)
+
+	if err := db.Delete(indexer.RPCtxHashKey(fixture.txHashA)); err != nil {
+		t.Fatalf("delete cached rpc tx: %v", err)
+	}
+	if err := db.Delete(indexer.TxHashKey(fixture.txHashA)); err != nil {
+		t.Fatalf("delete tx hash mapping: %v", err)
+	}
+	if err := db.Delete(indexer.ReceiptKey(fixture.txHashA)); err != nil {
+		t.Fatalf("delete receipt cache: %v", err)
+	}
+
+	b := &Backend{
+		logger:  backendTestLogger(),
+		cfg:     appconfig.Config{OfflineRPCOnly: true},
+		indexer: kv,
+	}
+
+	tx, err := b.GetTransactionByHash(fixture.txHashA)
+	if err != nil {
+		t.Fatalf("GetTransactionByHash returned error: %v", err)
+	}
+	if tx != nil {
+		t.Fatalf("expected nil tx, got %#v", tx)
+	}
+
+	receipt, err := b.GetTransactionReceipt(fixture.txHashA)
+	if err != nil {
+		t.Fatalf("GetTransactionReceipt returned error: %v", err)
+	}
+	if receipt != nil {
+		t.Fatalf("expected nil receipt, got %#v", receipt)
+	}
+}
+
 func TestLiveModePrefersCachedBlockDataWhenAvailable(t *testing.T) {
 	db := dbm.NewMemDB()
 	kv := indexer.NewKVIndexer(db, backendTestLogger(), client.Context{})

@@ -116,7 +116,7 @@ func (b *Backend) TraceTransaction(hash common.Hash, config *rpctypes.TraceConfi
 		BlockTime:       block.Block.Time,
 		BlockHash:       common.Bytes2Hex(block.BlockID.Hash),
 		ProposerAddress: sdk.ConsAddress(block.Block.ProposerAddress),
-		ChainId:         b.ChainID().ToInt().Int64(),
+		ChainId:         traceChainID(b.ChainID().ToInt(), ethMessage),
 	}
 
 	if config != nil {
@@ -253,7 +253,7 @@ func (b *Backend) TraceBlock(height rpctypes.BlockNumber,
 		BlockTime:       block.Block.Time,
 		BlockHash:       common.Bytes2Hex(block.BlockID.Hash),
 		ProposerAddress: sdk.ConsAddress(block.Block.ProposerAddress),
-		ChainId:         b.ChainID().ToInt().Int64(),
+		ChainId:         traceChainID(b.ChainID().ToInt(), txsMessages...),
 	}
 
 	res, err := b.queryClient.TraceBlock(ctxWithHeight, traceBlockRequest)

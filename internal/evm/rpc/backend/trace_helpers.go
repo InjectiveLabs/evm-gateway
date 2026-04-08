@@ -2,8 +2,10 @@ package backend
 
 import (
 	"context"
+	"math/big"
 
 	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
+	evmtypes "github.com/InjectiveLabs/sdk-go/chain/evm/types"
 	"upd.dev/xlab/gotracer"
 )
 
@@ -29,4 +31,21 @@ func (b *Backend) WithContext(ctx context.Context) EVMBackend {
 		clone.indexer = clone.indexer.WithContext(ctx)
 	}
 	return &clone
+}
+
+func traceChainID(fallback *big.Int, msgs ...*evmtypes.MsgEthereumTx) int64 {
+	for _, msg := range msgs {
+		if msg == nil {
+			continue
+		}
+		tx := msg.AsTransaction()
+		if tx == nil || tx.ChainId() == nil || tx.ChainId().Sign() <= 0 {
+			continue
+		}
+		return tx.ChainId().Int64()
+	}
+	if fallback == nil {
+		return 0
+	}
+	return fallback.Int64()
 }

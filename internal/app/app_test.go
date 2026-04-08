@@ -34,3 +34,20 @@ func TestBuildClientContextOfflineRPCOnly(t *testing.T) {
 		t.Fatalf("unexpected chain id: got %q want %q", clientCtx.ChainID, cfg.ChainID)
 	}
 }
+
+func TestProtocolAndAddressAddsDefaultPorts(t *testing.T) {
+	tcpProto, tcpAddr := protocolAndAddress("localhost:9090")
+	if tcpProto != "tcp" || tcpAddr != "localhost:9090" {
+		t.Fatalf("unexpected tcp normalization: %q %q", tcpProto, tcpAddr)
+	}
+
+	httpsProto, httpsAddr := protocolAndAddress("https://evm.archival.chain.grpc.injective.network")
+	if httpsProto != "https" || httpsAddr != "evm.archival.chain.grpc.injective.network:443" {
+		t.Fatalf("unexpected https normalization: %q %q", httpsProto, httpsAddr)
+	}
+
+	httpProto, httpAddr := protocolAndAddress("http://example.com")
+	if httpProto != "http" || httpAddr != "example.com:80" {
+		t.Fatalf("unexpected http normalization: %q %q", httpProto, httpAddr)
+	}
+}

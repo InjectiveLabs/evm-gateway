@@ -26,10 +26,11 @@ func NewPublicAPI(clientCtx client.Context) *PublicAPI {
 		panic(err)
 	}
 
-	return &PublicAPI{
-		networkVersion: chainIDEpoch.Uint64(),
-		tmRPCClient:    clientCtx.Client.(cmrpcclient.Client),
+	api := &PublicAPI{networkVersion: chainIDEpoch.Uint64()}
+	if client, ok := clientCtx.Client.(cmrpcclient.Client); ok {
+		api.tmRPCClient = client
 	}
+	return api
 }
 
 // Version returns the current ethereum protocol version.
@@ -42,6 +43,9 @@ func (s *PublicAPI) Listening() bool {
 	ctx := context.Background()
 	defer gotracer.Traceless(&ctx, netTraceTag)()
 
+	if s.tmRPCClient == nil {
+		return false
+	}
 	netInfo, err := s.tmRPCClient.NetInfo(ctx)
 	if err != nil {
 		return false
@@ -54,6 +58,9 @@ func (s *PublicAPI) PeerCount() int {
 	ctx := context.Background()
 	defer gotracer.Traceless(&ctx, netTraceTag)()
 
+	if s.tmRPCClient == nil {
+		return 0
+	}
 	netInfo, err := s.tmRPCClient.NetInfo(ctx)
 	if err != nil {
 		return 0

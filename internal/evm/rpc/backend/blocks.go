@@ -815,14 +815,9 @@ func (b *Backend) rpcBlockFromCachedMeta(meta *txindexer.CachedBlockMeta, fullTx
 	gasUsed := new(big.Int).SetUint64(meta.GasUsed)
 	blockHash := common.HexToHash(meta.Hash)
 	parentHash := common.HexToHash(meta.ParentHash)
-	stateRoot := hexutil.Bytes(common.FromHex(meta.StateRoot))
-	miner := common.HexToAddress(meta.Miner)
-	transactionsRoot := ethtypes.EmptyRootHash
-	if meta.TransactionsRoot != "" {
-		transactionsRoot = common.HexToHash(meta.TransactionsRoot)
-	} else if len(transactions) > 0 {
-		transactionsRoot = common.Hash{}
-	}
+	stateRoot := cachedStateRoot(meta)
+	miner := cachedMiner(meta)
+	transactionsRoot := cachedTransactionsRoot(meta, len(transactions) > 0)
 
 	block := map[string]interface{}{
 		"number":           hexutil.Uint64(meta.Height),
@@ -934,9 +929,9 @@ func headerFromCachedBlockMeta(meta *txindexer.CachedBlockMeta) (*ethtypes.Heade
 	header := &ethtypes.Header{
 		ParentHash:  common.HexToHash(meta.ParentHash),
 		UncleHash:   ethtypes.EmptyUncleHash,
-		Coinbase:    common.HexToAddress(meta.Miner),
-		Root:        common.BytesToHash(common.FromHex(meta.StateRoot)),
-		TxHash:      ethtypes.EmptyRootHash,
+		Coinbase:    cachedMiner(meta),
+		Root:        common.BytesToHash(cachedStateRoot(meta)),
+		TxHash:      cachedTransactionsRoot(meta, meta.EthTxCount > 0),
 		ReceiptHash: ethtypes.EmptyRootHash,
 		Bloom:       ethtypes.BytesToBloom(common.FromHex(meta.Bloom)),
 		Difficulty:  big.NewInt(0),
@@ -947,9 +942,6 @@ func headerFromCachedBlockMeta(meta *txindexer.CachedBlockMeta) (*ethtypes.Heade
 		Extra:       []byte{},
 		MixDigest:   common.Hash{},
 		Nonce:       ethtypes.BlockNonce{},
-	}
-	if meta.TransactionsRoot != "" {
-		header.TxHash = common.HexToHash(meta.TransactionsRoot)
 	}
 	if meta.BaseFee != "" {
 		baseFee, err := hexutil.DecodeBig(meta.BaseFee)
@@ -984,14 +976,11 @@ func validateCachedBlockMeta(meta *txindexer.CachedBlockMeta) error {
 	if meta.ParentHash != "" && !isHexHashString(meta.ParentHash) {
 		return fmt.Errorf("cached block meta has invalid parent hash for height %d: %q", meta.Height, meta.ParentHash)
 	}
-	if meta.StateRoot == "" || !isHexHashString(meta.StateRoot) {
+	if meta.StateRoot != "" && !isHexHashString(meta.StateRoot) {
 		return fmt.Errorf("cached block meta has invalid state root for height %d: %q", meta.Height, meta.StateRoot)
 	}
-	if meta.Miner == "" || !common.IsHexAddress(meta.Miner) {
+	if meta.Miner != "" && !common.IsHexAddress(meta.Miner) {
 		return fmt.Errorf("cached block meta has invalid miner for height %d: %q", meta.Height, meta.Miner)
-	}
-	if meta.TransactionsRoot == "" && meta.EthTxCount > 0 {
-		return fmt.Errorf("cached block meta missing transactions root for height %d", meta.Height)
 	}
 	if meta.TransactionsRoot != "" && !isHexHashString(meta.TransactionsRoot) {
 		return fmt.Errorf("cached block meta has invalid transactions root for height %d: %q", meta.Height, meta.TransactionsRoot)
@@ -1013,4 +1002,28 @@ func validateCachedBlockMeta(meta *txindexer.CachedBlockMeta) error {
 func isHexHashString(value string) bool {
 	bz, err := hexutil.Decode(value)
 	return err == nil && len(bz) == common.HashLength
+}
+
+func cachedStateRoot(meta *txindexer.CachedBlockMeta) hexutil.Bytes {
+	if meta == nil || meta.StateRoot == "" {
+		return hexutil.Bytes(common.Hash{}.Bytes())
+	}
+	return hexutil.Bytes(common.FromHex(meta.StateRoot))
+}
+
+func cachedTransactionsRoot(meta *txindexer.CachedBlockMeta, hasTransactions bool) common.Hash {
+	if meta != nil && meta.TransactionsRoot != "" {
+		return common.HexToHash(meta.TransactionsRoot)
+	}
+	if hasTransactions {
+		return common.Hash{}
+	}
+	return ethtypes.EmptyRootHash
+}
+
+func cachedMiner(meta *txindexer.CachedBlockMeta) common.Address {
+	if meta == nil || meta.Miner == "" {
+		return common.Address{}
+	}
+	return common.HexToAddress(meta.Miner)
 }
