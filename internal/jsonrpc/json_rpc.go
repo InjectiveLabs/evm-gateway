@@ -51,6 +51,24 @@ func eventClientForStreams(client any) (rpcclient.EventsClient, error) {
 	return evtClient, nil
 }
 
+func handleHTTPServerExit(logger *slog.Logger, done chan struct{}, err error) error {
+	if err == nil {
+		return nil
+	}
+
+	if errors.Is(err, http.ErrServerClosed) {
+		if done != nil {
+			close(done)
+		}
+
+		logger.Info("JSON-RPC server stopped")
+		return nil
+	}
+
+	logger.Error("failed to start JSON-RPC server", "error", err.Error())
+	return err
+}
+
 // Start starts the JSON-RPC server
 func Start(
 	logger *slog.Logger,
@@ -161,15 +179,7 @@ func Start(
 
 	g.Go(func() error {
 		logger.Info("Starting JSON-RPC server", "address", jsonRPCConfig.Address)
-		if err := httpSrv.Serve(ln); err != nil {
-			if errors.Is(err, http.ErrServerClosed) {
-				close(httpSrvDone)
-			}
-
-			logger.Error("failed to start JSON-RPC server", "error", err.Error())
-			return err
-		}
-		return nil
+		return handleHTTPServerExit(logger, httpSrvDone, httpSrv.Serve(ln))
 	})
 
 	if jsonRPCConfig.WsAddress != "" {

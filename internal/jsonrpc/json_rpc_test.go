@@ -1,7 +1,11 @@
 package jsonrpc
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"net/http"
+	"strings"
 	"testing"
 
 	coretypes "github.com/cometbft/cometbft/rpc/core/types"
@@ -122,5 +126,59 @@ func TestEventClientForStreamsReturnsNilForNonEventClient(t *testing.T) {
 	}
 	if evtClient != nil {
 		t.Fatalf("expected nil event client, got %T", evtClient)
+	}
+}
+
+func TestHandleHTTPServerExitTreatsServerClosedAsGraceful(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	done := make(chan struct{})
+
+	err := handleHTTPServerExit(logger, done, http.ErrServerClosed)
+	if err != nil {
+		t.Fatalf("expected nil error for graceful shutdown, got %v", err)
+	}
+
+	select {
+	case <-done:
+	default:
+		t.Fatal("expected done channel to be closed")
+	}
+
+	output := logs.String()
+	if !strings.Contains(output, "level=INFO") {
+		t.Fatalf("expected info log, got %q", output)
+	}
+	if !strings.Contains(output, "JSON-RPC server stopped") {
+		t.Fatalf("expected graceful shutdown message, got %q", output)
+	}
+	if strings.Contains(output, "failed to start JSON-RPC server") {
+		t.Fatalf("unexpected startup error log: %q", output)
+	}
+}
+
+func TestHandleHTTPServerExitReturnsServeError(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	done := make(chan struct{})
+	expectedErr := errors.New("listen tcp: address already in use")
+
+	err := handleHTTPServerExit(logger, done, expectedErr)
+	if !errors.Is(err, expectedErr) {
+		t.Fatalf("expected error %v, got %v", expectedErr, err)
+	}
+
+	select {
+	case <-done:
+		t.Fatal("did not expect done channel to be closed")
+	default:
+	}
+
+	output := logs.String()
+	if !strings.Contains(output, "level=ERROR") {
+		t.Fatalf("expected error log, got %q", output)
+	}
+	if !strings.Contains(output, "failed to start JSON-RPC server") {
+		t.Fatalf("expected startup error message, got %q", output)
 	}
 }
