@@ -77,9 +77,10 @@ This benchmark is intentionally heavier than parity checks. It:
 1. seeds deterministic EVM traffic with `chain-stresser`
 2. starts a fresh standalone `evm-gateway`
 3. waits for the gateway to fully sync the generated historical range
-4. warms caches
-5. runs a sustained mixed historical workload for a measured window
-6. writes JSON and HTML artifacts
+4. optionally settles after sync, warms trace fixtures for strict-cache runs, and restarts in offline cache-only mode
+5. warms caches
+6. runs a sustained mixed historical workload for a measured window
+7. writes JSON and HTML artifacts
 
 Default measured duration is `4m`, with a `15s` warmup and `20s` per seed workload.
 
@@ -114,6 +115,7 @@ The HTML report uses Plotly from a CDN and loads `timeseries.csv` at runtime.
 Each chart is keyed by the raw RPC signature for the measured request shape, including:
 
 - `eth_getBlockByNumber([...])`
+- `eth_getBlockReceipts([...])`
 - `eth_getLogs([...])`
 - `eth_getTransactionByHash([...])`
 - `eth_getTransactionReceipt([...])`
@@ -145,10 +147,17 @@ These env vars tune the benchmark runner:
 - `WEB3INJ_BENCH_TX_CANDIDATE_LIMIT`
 - `WEB3INJ_BENCH_WORKER_SCALE`
 - `WEB3INJ_BENCH_BUCKET_SEC`
+- `WEB3INJ_BENCH_POST_SYNC_SETTLE_SEC`
 - `WEB3INJ_BENCH_GATEWAY_RPC_PORT`
 - `WEB3INJ_BENCH_GATEWAY_WS_PORT`
 - `WEB3INJ_BENCH_MIN_NOFILE`
+- `WEB3INJ_BENCH_STRICT_CACHE_ONLY`
+- `WEB3INJ_BENCH_OFFLINE_AFTER_SYNC`
 - `WEB3INJ_BENCH_OUTPUT_DIR`
+
+`WEB3INJ_BENCH_STRICT_CACHE_ONLY=1` fails the benchmark if cache lookups fall back to live RPC/gRPC during the measured phase.
+
+`WEB3INJ_BENCH_OFFLINE_AFTER_SYNC=1` implies strict-cache mode, restarts the benchmark gateway with `WEB3INJ_OFFLINE_RPC_ONLY=true` after historical sync completes, and measures only what can be served from indexed KV state. If you use this mode with debug trace scenarios, warm the trace cache first.
 
 Useful overrides for a faster smoke run:
 
@@ -195,7 +204,9 @@ Then open `http://127.0.0.1:8000/report.html`.
 3. Starts a fresh standalone `evm-gateway` with an empty temp DB.
 4. Waits until the gateway fully syncs to the source head.
 5. Queries both endpoints and compares normalized JSON-RPC responses.
-6. Verifies cache-hit counters after synced queries.
+6. Verifies cache-hit counters and zero live fallbacks after synced queries.
+7. Restarts the gateway in offline RPC-only mode against the indexed data dir.
+8. Re-runs cache-backed parity checks such as `eth_getBlockReceipts` and warmed debug traces.
 
 The seeding uses the `chain-stresser` deployment accounts file:
 
@@ -218,6 +229,7 @@ These env vars tune parity seeding:
 - `WEB3INJ_E2E_SEED_DURATION_SEC`
 - `WEB3INJ_E2E_SEED_ACCOUNTS_NUM`
 - `WEB3INJ_E2E_INTERNAL_CALL_ITERATIONS`
+- `WEB3INJ_E2E_SEED_SETTLE_SEC`
 - `WEB3INJ_E2E_SEED_SETTLE_SEC`
 - `WEB3INJ_E2E_CHAIN_STRESSER_DIR`
 
