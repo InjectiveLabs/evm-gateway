@@ -421,6 +421,7 @@ type gatewayStartConfig struct {
 	CometRPC       string
 	GRPCAddr       string
 	ChainID        string
+	EVMChainID     string
 	EnableSync     bool
 	EnableRPC      bool
 	OfflineRPCOnly bool
@@ -457,7 +458,7 @@ func startGateway(t *testing.T, cfg gatewayStartConfig) *gatewayProcess {
 
 	cmd := exec.Command(cfg.BinaryPath)
 	cmd.Dir = filepath.Dir(cfg.BinaryPath)
-	cmd.Env = append(os.Environ(),
+	cmdEnv := append(os.Environ(),
 		"WEB3INJ_LOG_FORMAT=json",
 		"WEB3INJ_LOG_VERBOSE=false",
 		fmt.Sprintf("WEB3INJ_DATA_DIR=%s", cfg.DataDir),
@@ -473,6 +474,10 @@ func startGateway(t *testing.T, cfg gatewayStartConfig) *gatewayProcess {
 		fmt.Sprintf("WEB3INJ_JSONRPC_WS_ADDRESS=127.0.0.1:%d", cfg.WSPort),
 		fmt.Sprintf("WEB3INJ_JSONRPC_API=%s", cfg.APIList),
 	)
+	if cfg.EVMChainID != "" {
+		cmdEnv = append(cmdEnv, fmt.Sprintf("WEB3INJ_EVM_CHAIN_ID=%s", cfg.EVMChainID))
+	}
+	cmd.Env = cmdEnv
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 

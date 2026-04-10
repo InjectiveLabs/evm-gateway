@@ -23,3 +23,12 @@ func TestValidateOfflineRPCOnlyRejectsSync(t *testing.T) {
 		t.Fatal("expected enable-sync validation error")
 	}
 }
+
+func TestValidateRejectsInvalidEVMChainID(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.EVMChainID = "injective-1"
+
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected invalid evm-chain-id validation error")
+	}
+}

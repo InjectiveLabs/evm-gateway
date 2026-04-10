@@ -3,6 +3,7 @@ package config
 import (
 	"bufio"
 	"fmt"
+	"math/big"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -22,6 +23,7 @@ type Config struct {
 	LogVerbose bool
 
 	ChainID        string
+	EVMChainID     string
 	CometRPC       string
 	GRPCAddr       string
 	Earliest       int64
@@ -78,6 +80,7 @@ func DefaultConfig() Config {
 		LogVerbose: false,
 
 		ChainID:        "",
+		EVMChainID:     "",
 		CometRPC:       "http://localhost:26657",
 		GRPCAddr:       "localhost:9090",
 		Earliest:       1,
@@ -164,6 +167,12 @@ func (c Config) Validate() error {
 	if c.Shutdown.Timeout <= 0 {
 		return errors.New("shutdown timeout must be positive")
 	}
+	if strings.TrimSpace(c.EVMChainID) != "" {
+		evmChainID, ok := new(big.Int).SetString(strings.TrimSpace(c.EVMChainID), 10)
+		if !ok || evmChainID.Sign() <= 0 {
+			return errors.New("evm-chain-id must be a positive base-10 integer")
+		}
+	}
 	if c.OfflineRPCOnly {
 		if c.EnableSync {
 			return errors.New("offline-rpc-only mode requires enable-sync=false")
@@ -240,6 +249,7 @@ func applyEnvOverrides(cfg *Config) {
 	cfg.LogVerbose = getEnvBool("LOG_VERBOSE", cfg.LogVerbose)
 
 	cfg.ChainID = getEnvString("CHAIN_ID", cfg.ChainID)
+	cfg.EVMChainID = getEnvString("EVM_CHAIN_ID", cfg.EVMChainID)
 	cfg.CometRPC = getEnvString("COMET_RPC", cfg.CometRPC)
 	cfg.GRPCAddr = getEnvString("GRPC_ADDR", cfg.GRPCAddr)
 	cfg.Earliest = getEnvInt64("EARLIEST_BLOCK", cfg.Earliest)

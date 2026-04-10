@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"math/big"
+	"strings"
 	"time"
 
 	"log/slog"
@@ -167,9 +168,10 @@ func NewBackend(
 	indexer txindexer.TxIndexer,
 	syncStatus *syncstatus.Tracker,
 ) *Backend {
-	chainID, err := chaintypes.ParseChainID(clientCtx.ChainID)
-	if err != nil {
-		panic("parse backend chain id: " + err.Error())
+	chainID := new(big.Int)
+	rawChainID := strings.TrimSpace(cfg.EVMChainID)
+	if _, ok := chainID.SetString(rawChainID, 10); !ok || chainID.Sign() <= 0 {
+		panic("parse backend evm chain id: " + rawChainID)
 	}
 
 	b := &Backend{
@@ -179,7 +181,7 @@ func NewBackend(
 		logger:              logger.With("module", "backend"),
 		cfg:                 cfg,
 		baseTraceTags:       newBackendTraceTags(),
-		chainID:             new(big.Int).Set(chainID),
+		chainID:             chainID,
 		allowUnprotectedTxs: allowUnprotectedTxs,
 		indexer:             indexer,
 		syncStatus:          syncStatus,

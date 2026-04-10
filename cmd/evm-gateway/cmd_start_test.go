@@ -7,6 +7,7 @@ import (
 func TestBuildConfigCarriesSyncAndOfflineFlags(t *testing.T) {
 	opts := &gatewayCLIOptions{
 		chainID:                           stringPtr("stressinj-1337"),
+		evmChainID:                        stringPtr("1337"),
 		cometRPC:                          stringPtr("http://localhost:26657"),
 		grpcAddr:                          stringPtr("127.0.0.1:9900"),
 		earliest:                          intPtr(123),

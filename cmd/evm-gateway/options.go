@@ -7,6 +7,7 @@ type gatewayCLIOptions struct {
 	printVersion *bool
 
 	chainID        *string
+	evmChainID     *string
 	cometRPC       *string
 	grpcAddr       *string
 	earliest       *int

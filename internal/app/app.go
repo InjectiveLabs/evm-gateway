@@ -33,6 +33,7 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 
+	chaintypes "github.com/InjectiveLabs/sdk-go/chain/types"
 	chainclient "github.com/InjectiveLabs/sdk-go/client/chain"
 
 	"github.com/InjectiveLabs/evm-gateway/internal/blocksync"
@@ -41,6 +42,7 @@ import (
 	txindexer "github.com/InjectiveLabs/evm-gateway/internal/indexer"
 	"github.com/InjectiveLabs/evm-gateway/internal/jsonrpc"
 	"github.com/InjectiveLabs/evm-gateway/internal/syncstatus"
+	evmtypes "github.com/InjectiveLabs/sdk-go/chain/evm/types"
 )
 
 var appTraceTag = gotracer.NewTag("component", "app")
@@ -219,6 +221,10 @@ type cometStatusClient interface {
 	Status(context.Context) (*cmtrpctypes.ResultStatus, error)
 }
 
+type evmParamsClient interface {
+	Params(context.Context, *evmtypes.QueryParamsRequest, ...grpc.CallOption) (*evmtypes.QueryParamsResponse, error)
+}
+
 func buildKVIndexerOptions(ctx context.Context, clientCtx client.Context, logger *slog.Logger) []txindexer.KVIndexerOption {
 	gasLimit, ok, err := fetchStartupBlockGasLimit(ctx, clientCtx)
 	if err != nil {
@@ -297,9 +303,22 @@ func buildClientContext(ctx context.Context, cfg *config.Config, dataDir string,
 	}
 
 	if cfg.OfflineRPCOnly {
+		if strings.TrimSpace(cfg.EVMChainID) == "" {
+			evmChainID, err := inferEVMChainIDFromCosmosChainID(cfg.ChainID)
+			if err != nil {
+				return client.Context{}, nil, nil, err
+			}
+			cfg.EVMChainID = evmChainID
+			logger.Warn(
+				"offline rpc-only mode falling back to evm chain id derived from cosmos chain id; set evm-chain-id to override",
+				"chain_id", cfg.ChainID,
+				"evm_chain_id", cfg.EVMChainID,
+			)
+		}
 		logger.Warn(
 			"starting in offline rpc-only mode; live comet/grpc clients are disabled",
 			"chain_id", cfg.ChainID,
+			"evm_chain_id", cfg.EVMChainID,
 			"enable_sync", cfg.EnableSync,
 		)
 		clientCtx = clientCtx.WithChainID(cfg.ChainID)
@@ -329,6 +348,17 @@ func buildClientContext(ctx context.Context, cfg *config.Config, dataDir string,
 	}
 	clientCtx = clientCtx.WithGRPCClient(grpcConn)
 	logger.Info("grpc client ready", "address", cfg.GRPCAddr)
+
+	evmChainID, err := fetchEVMChainID(ctx, rpctypes.NewQueryClient(clientCtx))
+	if err != nil {
+		_ = grpcConn.Close()
+		return client.Context{}, nil, nil, err
+	}
+	if err := validateEVMChainID(cfg, evmChainID); err != nil {
+		_ = grpcConn.Close()
+		return client.Context{}, nil, nil, err
+	}
+	logger.Info("resolved startup chain ids", "chain_id", cfg.ChainID, "evm_chain_id", cfg.EVMChainID)
 
 	return clientCtx, rpcClient, grpcConn, nil
 }
@@ -367,6 +397,43 @@ func validateCometChainID(cfg *config.Config, cometChainID string) error {
 
 	cfg.ChainID = cometChainID
 	return nil
+}
+
+func fetchEVMChainID(ctx context.Context, queryClient evmParamsClient) (string, error) {
+	defer gotracer.Trace(&ctx, appTraceTag)()
+
+	res, err := queryClient.Params(ctx, &evmtypes.QueryParamsRequest{})
+	if err != nil {
+		return "", errors.Wrap(err, "fetch evm params")
+	}
+	if res == nil || res.Params.ChainConfig.EIP155ChainID == nil {
+		return "", errors.New("empty evm chain id from params")
+	}
+
+	chainID := strings.TrimSpace(res.Params.ChainConfig.EIP155ChainID.String())
+	if chainID == "" || chainID == "0" {
+		return "", errors.New("empty evm chain id from params")
+	}
+
+	return chainID, nil
+}
+
+func validateEVMChainID(cfg *config.Config, evmChainID string) error {
+	evmChainID = strings.TrimSpace(evmChainID)
+	if cfg.EVMChainID != "" && cfg.EVMChainID != evmChainID {
+		return fmt.Errorf("evm chain id mismatch: expected %s, got %s", cfg.EVMChainID, evmChainID)
+	}
+
+	cfg.EVMChainID = evmChainID
+	return nil
+}
+
+func inferEVMChainIDFromCosmosChainID(chainID string) (string, error) {
+	parsed, err := chaintypes.ParseChainID(strings.TrimSpace(chainID))
+	if err != nil {
+		return "", errors.Wrap(err, "derive evm chain id from cosmos chain id")
+	}
+	return parsed.String(), nil
 }
 
 func dialGRPC(ctx context.Context, addr string, registry codectypes.InterfaceRegistry) (*grpc.ClientConn, error) {

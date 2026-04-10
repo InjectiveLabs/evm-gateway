@@ -88,12 +88,12 @@ func init() {
 				},
 			}
 		},
-		NetNamespace: func(_ *slog.Logger, _ config.Config, clientCtx client.Context, _ *stream.RPCStream, _ bool, _ txindexer.TxIndexer, _ *syncstatus.Tracker) []rpc.API {
+		NetNamespace: func(_ *slog.Logger, cfg config.Config, clientCtx client.Context, _ *stream.RPCStream, _ bool, _ txindexer.TxIndexer, _ *syncstatus.Tracker) []rpc.API {
 			return []rpc.API{
 				{
 					Namespace: NetNamespace,
 					Version:   apiVersion,
-					Service:   net.NewPublicAPI(clientCtx),
+					Service:   net.NewPublicAPI(clientCtx, cfg.EVMChainID),
 				},
 			}
 		},

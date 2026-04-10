@@ -9,9 +9,16 @@ import (
 func initChainOptions(app *cli.Cli, opts *gatewayCLIOptions, defaults config.Config) {
 	opts.chainID = app.String(cli.StringOpt{
 		Name:   "chain-id",
-		Desc:   "Expected chain ID.",
+		Desc:   "Expected Cosmos / CometBFT chain ID.",
 		EnvVar: "WEB3INJ_CHAIN_ID",
 		Value:  defaults.ChainID,
+	})
+
+	opts.evmChainID = app.String(cli.StringOpt{
+		Name:   "evm-chain-id",
+		Desc:   "Expected EVM chain ID. Optional online; recommended for offline RPC-only mode.",
+		EnvVar: "WEB3INJ_EVM_CHAIN_ID",
+		Value:  defaults.EVMChainID,
 	})
 
 	opts.cometRPC = app.String(cli.StringOpt{

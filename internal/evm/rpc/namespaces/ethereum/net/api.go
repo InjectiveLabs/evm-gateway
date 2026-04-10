@@ -2,7 +2,7 @@ package net
 
 import (
 	"context"
-	"fmt"
+	"strings"
 
 	chaintypes "github.com/InjectiveLabs/sdk-go/chain/types"
 	cmrpcclient "github.com/cometbft/cometbft/rpc/client"
@@ -14,19 +14,22 @@ var netTraceTag = gotracer.NewTag("component", "eth_net")
 
 // PublicAPI is the eth_ prefixed set of APIs in the Web3 JSON-RPC spec.
 type PublicAPI struct {
-	networkVersion uint64
+	networkVersion string
 	tmRPCClient    cmrpcclient.Client
 }
 
 // NewPublicAPI creates an instance of the public Net Web3 API.
-func NewPublicAPI(clientCtx client.Context) *PublicAPI {
-	// parse the chainID from a integer string
-	chainIDEpoch, err := chaintypes.ParseChainID(clientCtx.ChainID)
-	if err != nil {
-		panic(err)
+func NewPublicAPI(clientCtx client.Context, evmChainID string) *PublicAPI {
+	networkVersion := strings.TrimSpace(evmChainID)
+	if networkVersion == "" {
+		chainIDEpoch, err := chaintypes.ParseChainID(clientCtx.ChainID)
+		if err != nil {
+			panic(err)
+		}
+		networkVersion = chainIDEpoch.String()
 	}
 
-	api := &PublicAPI{networkVersion: chainIDEpoch.Uint64()}
+	api := &PublicAPI{networkVersion: networkVersion}
 	if client, ok := clientCtx.Client.(cmrpcclient.Client); ok {
 		api.tmRPCClient = client
 	}
@@ -35,7 +38,7 @@ func NewPublicAPI(clientCtx client.Context) *PublicAPI {
 
 // Version returns the current ethereum protocol version.
 func (s *PublicAPI) Version() string {
-	return fmt.Sprintf("%d", s.networkVersion)
+	return s.networkVersion
 }
 
 // Listening returns if client is actively listening for network connections.

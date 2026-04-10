@@ -46,6 +46,7 @@ func buildConfig(opts *gatewayCLIOptions) (config.Config, error) {
 	cfg := config.DefaultConfig()
 
 	cfg.ChainID = *opts.chainID
+	cfg.EVMChainID = *opts.evmChainID
 	cfg.CometRPC = *opts.cometRPC
 	cfg.GRPCAddr = *opts.grpcAddr
 	cfg.Earliest = int64(*opts.earliest)
