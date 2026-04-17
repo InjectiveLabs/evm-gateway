@@ -24,7 +24,7 @@ Configuration still comes from `WEB3INJ_*` environment variables, typically thro
 
 ## Online Mode
 
-The default mode starts live CometBFT and gRPC clients, runs the historical gap sync plus forward sync loop, and serves JSON-RPC from a cache-first backend.
+The default mode starts live CometBFT and gRPC clients, runs the historical gap sync plus forward tip sync loop, and serves JSON-RPC from a cache-first backend. By default, `WEB3INJ_PARALLEL_SYNC_TIP_AND_GAPS=true` starts the forward tip queue at startup head + 1 immediately, even while older indexed gaps are still being filled.
 
 Typical configuration:
 
@@ -32,10 +32,13 @@ Typical configuration:
 WEB3INJ_COMET_RPC=http://localhost:26657
 WEB3INJ_GRPC_ADDR=127.0.0.1:9090
 WEB3INJ_ENABLE_SYNC=true
+WEB3INJ_PARALLEL_SYNC_TIP_AND_GAPS=true
 WEB3INJ_JSONRPC_ENABLE=true
 ```
 
 In this mode the gateway prefers local KV reads for indexed heights and falls back to live chain queries on cache misses.
+
+Set `WEB3INJ_PARALLEL_SYNC_TIP_AND_GAPS=false` to keep the legacy behavior: the gateway fills detected startup gaps first, then starts forward tip sync only after those gaps have completed or errored.
 
 ## Offline RPC-Only Mode
 

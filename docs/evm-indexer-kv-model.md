@@ -6,6 +6,7 @@ The gateway now stores the EVM data needed for cache-first JSON-RPC reads and se
 
 - Persist the block, tx, receipt, log, and trace data required by the cache-backed RPC paths.
 - Prefer local KV reads in normal online mode and fall back to live CometBFT or gRPC only on cache misses.
+- Keep the forward tip index current during large historical backfills when `WEB3INJ_PARALLEL_SYNC_TIP_AND_GAPS=true` (the default).
 - Allow `WEB3INJ_OFFLINE_RPC_ONLY=true` to serve indexed data without creating live CometBFT or gRPC clients.
 - Keep reindexing deterministic by deleting every cached collection for a height before rewriting that block.
 
@@ -42,6 +43,13 @@ The implementation uses numeric key prefixes internally. The logical collections
 - In offline RPC-only mode, the gateway does not create live CometBFT or gRPC clients. Cache misses return `nil` for ordinary read paths or an explicit trace error when the required trace cache was never warmed.
 - `eth_blockNumber` in offline mode is derived from the last indexed height.
 - `debug_traceTransaction` can reuse a cached block trace when a dedicated tx trace entry is missing but the block trace for that config already exists.
+
+## Sync Semantics
+
+- On startup, the indexer loads indexed ranges and computes gaps between `WEB3INJ_EARLIEST_BLOCK` and the current CometBFT head.
+- With `WEB3INJ_PARALLEL_SYNC_TIP_AND_GAPS=true`, historical gaps are filled in one queue while a forward tip queue starts immediately at startup head + 1.
+- With `WEB3INJ_PARALLEL_SYNC_TIP_AND_GAPS=false`, the gateway keeps the legacy ordering: fill or error all startup gaps first, then start forward tip sync.
+- If either queue stops on a non-cancellation error, the other queue continues. If both queues stop, the gateway keeps serving JSON-RPC from existing indexed data and live fallback paths.
 
 ## Resync Semantics
 

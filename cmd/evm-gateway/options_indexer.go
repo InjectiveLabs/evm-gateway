@@ -35,6 +35,13 @@ func initIndexerOptions(app *cli.Cli, opts *gatewayCLIOptions, defaults config.C
 		Value:  defaults.EnableSync,
 	})
 
+	opts.parallelSyncTipAndGaps = app.Bool(cli.BoolOpt{
+		Name:   "parallel-sync-tip-and-gaps",
+		Desc:   "Run forward tip sync in parallel with historical gap sync.",
+		EnvVar: "WEB3INJ_PARALLEL_SYNC_TIP_AND_GAPS",
+		Value:  defaults.ParallelSyncTipAndGaps,
+	})
+
 	opts.offlineRPCOnly = app.Bool(cli.BoolOpt{
 		Name:   "offline-rpc-only",
 		Desc:   "Start JSON-RPC with no live comet/grpc clients; requires --enable-sync=false and a chain ID.",

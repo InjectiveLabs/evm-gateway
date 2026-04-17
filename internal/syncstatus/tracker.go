@@ -154,13 +154,32 @@ func (t *Tracker) CompleteCurrentSegment() {
 	t.updatedAt = time.Now().UTC()
 }
 
+func (t *Tracker) CompleteGap(start, end int64) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	segmentEnd := end
+	t.lastSyncedSegment = &Segment{
+		Type:   "gap",
+		Start:  start,
+		End:    &segmentEnd,
+		Cursor: end,
+	}
+	if t.gapsRemaining > 0 {
+		t.gapsRemaining--
+	}
+	t.updatedAt = time.Now().UTC()
+}
+
 func (t *Tracker) MarkBlock(height int64, indexed bool) {
 	now := time.Now().UTC()
 
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	t.lastSyncedBlock = height
+	if height > t.lastSyncedBlock {
+		t.lastSyncedBlock = height
+	}
 	if height > t.chainHead {
 		t.chainHead = height
 	}

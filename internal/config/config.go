@@ -22,18 +22,19 @@ type Config struct {
 	LogFormat  string
 	LogVerbose bool
 
-	ChainID        string
-	EVMChainID     string
-	CometRPC       string
-	GRPCAddr       string
-	Earliest       int64
-	FetchJobs      int
-	DataDir        string
-	DBBackend      string
-	AllowGaps      bool
-	EnableSync     bool
-	OfflineRPCOnly bool
-	MinGasPrices   string
+	ChainID                string
+	EVMChainID             string
+	CometRPC               string
+	GRPCAddr               string
+	Earliest               int64
+	FetchJobs              int
+	DataDir                string
+	DBBackend              string
+	AllowGaps              bool
+	EnableSync             bool
+	ParallelSyncTipAndGaps bool
+	OfflineRPCOnly         bool
+	MinGasPrices           string
 
 	JSONRPC  JSONRPCConfig
 	Tracing  TracingConfig
@@ -79,18 +80,19 @@ func DefaultConfig() Config {
 		LogFormat:  "json",
 		LogVerbose: false,
 
-		ChainID:        "",
-		EVMChainID:     "",
-		CometRPC:       "http://localhost:26657",
-		GRPCAddr:       "localhost:9090",
-		Earliest:       1,
-		FetchJobs:      4,
-		DataDir:        "~/.evm-gateway",
-		DBBackend:      "goleveldb",
-		AllowGaps:      true,
-		EnableSync:     true,
-		OfflineRPCOnly: false,
-		MinGasPrices:   "160000000inj",
+		ChainID:                "",
+		EVMChainID:             "",
+		CometRPC:               "http://localhost:26657",
+		GRPCAddr:               "localhost:9090",
+		Earliest:               1,
+		FetchJobs:              4,
+		DataDir:                "~/.evm-gateway",
+		DBBackend:              "goleveldb",
+		AllowGaps:              true,
+		EnableSync:             true,
+		ParallelSyncTipAndGaps: true,
+		OfflineRPCOnly:         false,
+		MinGasPrices:           "160000000inj",
 
 		JSONRPC: JSONRPCConfig{
 			Enable:             true,
@@ -258,6 +260,7 @@ func applyEnvOverrides(cfg *Config) {
 	cfg.DBBackend = getEnvString("DB_BACKEND", cfg.DBBackend)
 	cfg.AllowGaps = getEnvBool("ALLOW_GAPS", cfg.AllowGaps)
 	cfg.EnableSync = getEnvBool("ENABLE_SYNC", cfg.EnableSync)
+	cfg.ParallelSyncTipAndGaps = getEnvBool("PARALLEL_SYNC_TIP_AND_GAPS", cfg.ParallelSyncTipAndGaps)
 	cfg.OfflineRPCOnly = getEnvBool("OFFLINE_RPC_ONLY", cfg.OfflineRPCOnly)
 	cfg.MinGasPrices = getEnvString("MIN_GAS_PRICES", cfg.MinGasPrices)
 	cfg.Shutdown.Timeout = getEnvDuration("SHUTDOWN_TIMEOUT", cfg.Shutdown.Timeout)

@@ -53,6 +53,7 @@ func buildConfig(opts *gatewayCLIOptions) (config.Config, error) {
 	cfg.FetchJobs = *opts.fetchJobs
 	cfg.DataDir = *opts.dataDir
 	cfg.EnableSync = *opts.enableSync
+	cfg.ParallelSyncTipAndGaps = *opts.parallelSyncTipAndGaps
 	cfg.OfflineRPCOnly = *opts.offlineRPCOnly
 	cfg.LogFormat = *opts.logFormat
 	cfg.LogVerbose = *opts.logVerbose

@@ -6,7 +6,10 @@ import (
 	"io"
 	"log/slog"
 	"reflect"
+	"sort"
+	"sync"
 	"testing"
+	"time"
 
 	abci "github.com/cometbft/cometbft/abci/types"
 	coretypes "github.com/cometbft/cometbft/rpc/core/types"
@@ -436,6 +439,231 @@ func TestSyncerRunStopsForwardSyncOnParseErrorAndReturnsNil(t *testing.T) {
 	}
 }
 
+func TestSyncerRunParallelStartsTipBeforeGapCompletes(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	gapStarted := make(chan struct{})
+	releaseGap := make(chan struct{})
+	tipIndexed := make(chan struct{})
+	var gapStartedOnce sync.Once
+	var releaseGapOnce sync.Once
+	var tipIndexedOnce sync.Once
+	defer releaseGapOnce.Do(func() { close(releaseGap) })
+
+	indexer := &concurrentTxIndexer{
+		blockTxs: make(map[int64][]string),
+		onIndex: func(height int64) {
+			switch height {
+			case 1:
+				gapStartedOnce.Do(func() { close(gapStarted) })
+				<-releaseGap
+			case 4:
+				tipIndexedOnce.Do(func() { close(tipIndexed) })
+			}
+		},
+	}
+	client := testSyncClientWithHead(3, nil)
+
+	syncer := NewSyncer(
+		config.Config{
+			EnableSync:             true,
+			Earliest:               1,
+			FetchJobs:              1,
+			AllowGaps:              false,
+			ParallelSyncTipAndGaps: true,
+		},
+		testLogger(),
+		client,
+		dbm.NewMemDB(),
+		indexer,
+		nil,
+	)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- syncer.Run(ctx)
+	}()
+
+	waitForSignal(t, gapStarted, time.Second, "gap sync to start")
+	waitForSignal(t, tipIndexed, time.Second, "tip sync to index startup head + 1 while gap is still blocked")
+
+	releaseGapOnce.Do(func() { close(releaseGap) })
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected syncer to stop on context cancel, got %v", err)
+	}
+}
+
+func TestSyncerRunSerialDoesNotStartTipUntilGapsComplete(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	gapStarted := make(chan struct{})
+	releaseGap := make(chan struct{})
+	tipIndexed := make(chan struct{})
+	var gapStartedOnce sync.Once
+	var releaseGapOnce sync.Once
+	var tipIndexedOnce sync.Once
+	defer releaseGapOnce.Do(func() { close(releaseGap) })
+
+	indexer := &concurrentTxIndexer{
+		blockTxs: make(map[int64][]string),
+		onIndex: func(height int64) {
+			switch height {
+			case 1:
+				gapStartedOnce.Do(func() { close(gapStarted) })
+				<-releaseGap
+			case 4:
+				tipIndexedOnce.Do(func() { close(tipIndexed) })
+			}
+		},
+	}
+	client := testSyncClientWithHead(3, nil)
+
+	syncer := NewSyncer(
+		config.Config{
+			EnableSync:             true,
+			Earliest:               1,
+			FetchJobs:              1,
+			AllowGaps:              false,
+			ParallelSyncTipAndGaps: false,
+		},
+		testLogger(),
+		client,
+		dbm.NewMemDB(),
+		indexer,
+		nil,
+	)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- syncer.Run(ctx)
+	}()
+
+	waitForSignal(t, gapStarted, time.Second, "gap sync to start")
+	select {
+	case <-tipIndexed:
+		t.Fatal("tip sync indexed a block before serial gap sync was released")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	releaseGapOnce.Do(func() { close(releaseGap) })
+	waitForSignal(t, tipIndexed, time.Second, "tip sync to index after gaps complete")
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected syncer to stop on context cancel, got %v", err)
+	}
+
+	if got, want := indexer.SuccessesPrefix(3), []int64{1, 2, 3}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("expected gaps to be indexed before tip sync starts, got prefix %v want %v", got, want)
+	}
+}
+
+func TestSyncerRunParallelGapErrorDoesNotStopTipSync(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	indexer := &concurrentTxIndexer{
+		blockTxs:    make(map[int64][]string),
+		failHeights: map[int64]error{1: errors.New("gap failed")},
+		onIndex: func(height int64) {
+			if height == 2 {
+				cancel()
+			}
+		},
+	}
+
+	syncer := NewSyncer(
+		config.Config{
+			EnableSync:             true,
+			Earliest:               1,
+			FetchJobs:              1,
+			AllowGaps:              false,
+			ParallelSyncTipAndGaps: true,
+		},
+		testLogger(),
+		testSyncClientWithHead(1, nil),
+		dbm.NewMemDB(),
+		indexer,
+		nil,
+	)
+
+	if err := syncer.Run(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected syncer to stop on context cancel after tip continued, got %v", err)
+	}
+	if !indexer.HasSuccess(2) {
+		t.Fatalf("expected tip block 2 to be indexed after gap failure, got %v", indexer.Successes())
+	}
+	if got, want := indexer.Deleted(), []int64{1}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected deleted heights: got %v want %v", got, want)
+	}
+}
+
+func TestSyncerRunParallelTipErrorDoesNotStopGapSync(t *testing.T) {
+	indexer := &concurrentTxIndexer{
+		blockTxs:    make(map[int64][]string),
+		failHeights: map[int64]error{4: errors.New("tip failed")},
+	}
+
+	syncer := NewSyncer(
+		config.Config{
+			EnableSync:             true,
+			Earliest:               1,
+			FetchJobs:              1,
+			AllowGaps:              false,
+			ParallelSyncTipAndGaps: true,
+		},
+		testLogger(),
+		testSyncClientWithHead(3, nil),
+		dbm.NewMemDB(),
+		indexer,
+		nil,
+	)
+
+	if err := syncer.Run(context.Background()); err != nil {
+		t.Fatalf("expected tip failure to stop only the tip queue, got %v", err)
+	}
+	if got, want := indexer.Successes(), []int64{1, 2, 3}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected indexed heights after tip failure: got %v want %v", got, want)
+	}
+	if got, want := indexer.Deleted(), []int64{4}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected deleted heights: got %v want %v", got, want)
+	}
+}
+
+func TestSyncerRunParallelReturnsNilWhenTipAndGapQueuesError(t *testing.T) {
+	indexer := &concurrentTxIndexer{
+		blockTxs: make(map[int64][]string),
+		failHeights: map[int64]error{
+			1: errors.New("gap failed"),
+			2: errors.New("tip failed"),
+		},
+	}
+
+	syncer := NewSyncer(
+		config.Config{
+			EnableSync:             true,
+			Earliest:               1,
+			FetchJobs:              1,
+			AllowGaps:              false,
+			ParallelSyncTipAndGaps: true,
+		},
+		testLogger(),
+		testSyncClientWithHead(1, nil),
+		dbm.NewMemDB(),
+		indexer,
+		nil,
+	)
+
+	if err := syncer.Run(context.Background()); err != nil {
+		t.Fatalf("expected both queue failures to leave gateway running, got %v", err)
+	}
+	if got, want := indexer.Deleted(), []int64{1, 2}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected deleted heights: got %v want %v", got, want)
+	}
+}
+
 type stubSyncClient struct {
 	status         *coretypes.ResultStatus
 	blockFn        func(context.Context, *int64) (*coretypes.ResultBlock, error)
@@ -505,6 +733,52 @@ func (stubTxIndexer) IsBlockIndexed(int64) (bool, error) { return false, nil }
 
 func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+func testSyncClientWithHead(head int64, observeHeight func(int64)) *stubSyncClient {
+	return &stubSyncClient{
+		status: &coretypes.ResultStatus{
+			SyncInfo: coretypes.SyncInfo{
+				LatestBlockHeight:   head,
+				EarliestBlockHeight: 1,
+			},
+		},
+		blockFn: func(_ context.Context, height *int64) (*coretypes.ResultBlock, error) {
+			if height == nil {
+				return nil, errors.New("nil height")
+			}
+			if observeHeight != nil {
+				observeHeight(*height)
+			}
+			return &coretypes.ResultBlock{Block: testBlock(*height)}, nil
+		},
+		blockResultsFn: func(_ context.Context, height *int64) (*coretypes.ResultBlockResults, error) {
+			if height == nil {
+				return nil, errors.New("nil height")
+			}
+			if observeHeight != nil {
+				observeHeight(*height)
+			}
+			block := testBlock(*height)
+			return &coretypes.ResultBlockResults{TxResults: make([]*abci.ExecTxResult, len(block.Txs))}, nil
+		},
+	}
+}
+
+func testBlock(height int64) *tmtypes.Block {
+	if block, ok := testBlocks[height]; ok {
+		return block
+	}
+	return tmtypes.MakeBlock(height, nil, nil, nil)
+}
+
+func waitForSignal(t *testing.T, ch <-chan struct{}, timeout time.Duration, name string) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(timeout):
+		t.Fatalf("timed out waiting for %s", name)
+	}
 }
 
 var testBlocks = map[int64]*tmtypes.Block{
@@ -613,6 +887,87 @@ func (r *recordingTxIndexer) GetTraceBlockByHeight(int64, *rpctypes.TraceConfig)
 	return nil, nil
 }
 func (r *recordingTxIndexer) IsBlockIndexed(int64) (bool, error) { return false, nil }
+
+type concurrentTxIndexer struct {
+	stubTxIndexer
+
+	mu          sync.Mutex
+	successes   []int64
+	deleted     []int64
+	blockTxs    map[int64][]string
+	failHeights map[int64]error
+	onIndex     func(int64)
+}
+
+func (c *concurrentTxIndexer) WithContext(context.Context) TxIndexer { return c }
+
+func (c *concurrentTxIndexer) IndexBlock(block *tmtypes.Block, _ []*abci.ExecTxResult) error {
+	if c.onIndex != nil {
+		c.onIndex(block.Height)
+	}
+	if err, ok := c.failHeights[block.Height]; ok {
+		return err
+	}
+
+	txNames := make([]string, 0, len(block.Txs))
+	for _, tx := range block.Txs {
+		txNames = append(txNames, string(tx))
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.successes = append(c.successes, block.Height)
+	if c.blockTxs != nil {
+		c.blockTxs[block.Height] = txNames
+	}
+	return nil
+}
+
+func (c *concurrentTxIndexer) DeleteBlock(height int64) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.deleted = append(c.deleted, height)
+	if c.blockTxs != nil {
+		delete(c.blockTxs, height)
+	}
+	return nil
+}
+
+func (c *concurrentTxIndexer) Successes() []int64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]int64(nil), c.successes...)
+}
+
+func (c *concurrentTxIndexer) SuccessesPrefix(n int) []int64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.successes) < n {
+		n = len(c.successes)
+	}
+	return append([]int64(nil), c.successes[:n]...)
+}
+
+func (c *concurrentTxIndexer) HasSuccess(height int64) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, success := range c.successes {
+		if success == height {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *concurrentTxIndexer) Deleted() []int64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	deleted := append([]int64(nil), c.deleted...)
+	sort.Slice(deleted, func(i, j int) bool {
+		return deleted[i] < deleted[j]
+	})
+	return deleted
+}
 
 type faultyTxIndexer struct {
 	successes   []int64

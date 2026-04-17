@@ -2,6 +2,25 @@ package config
 
 import "testing"
 
+func TestDefaultConfigEnablesParallelTipAndGapSync(t *testing.T) {
+	cfg := DefaultConfig()
+	if !cfg.ParallelSyncTipAndGaps {
+		t.Fatal("expected parallel tip and gap sync to be enabled by default")
+	}
+}
+
+func TestLoadOverridesParallelTipAndGapSync(t *testing.T) {
+	t.Setenv("WEB3INJ_PARALLEL_SYNC_TIP_AND_GAPS", "false")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if cfg.ParallelSyncTipAndGaps {
+		t.Fatal("expected parallel tip and gap sync to be disabled from env")
+	}
+}
+
 func TestValidateOfflineRPCOnlyRequiresChainID(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.EnableSync = false

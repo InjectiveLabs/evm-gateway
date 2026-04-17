@@ -136,11 +136,62 @@ func (s *Syncer) Run(ctx context.Context) error {
 		}
 	}
 
+	if len(gaps) > 0 && s.cfg.ParallelSyncTipAndGaps {
+		return s.runParallelTipAndGaps(ctx, gaps, head)
+	}
+
+	if err := s.syncGaps(ctx, gaps, false); err != nil {
+		return err
+	}
+
+	lastSynced := head
+	s.logger.Info("initial sync complete", "synced_height", lastSynced)
+	return s.runForwardSync(ctx, lastSynced+1, true)
+}
+
+func (s *Syncer) runParallelTipAndGaps(ctx context.Context, gaps []BlockRange, head int64) error {
+	tipStart := head + 1
+	s.logger.Info("starting parallel gap and tip sync", "head", head, "tip_start", tipStart, "gaps", len(gaps))
+	if s.status != nil {
+		s.status.SetPhase("parallel_gap_tip_sync")
+		s.status.StartSegment("forward", tipStart, nil)
+	}
+
+	type queueResult struct {
+		name string
+		err  error
+	}
+
+	resultC := make(chan queueResult, 2)
+	go func() {
+		resultC <- queueResult{name: "gap", err: s.syncGaps(ctx, gaps, true)}
+	}()
+	go func() {
+		resultC <- queueResult{name: "tip", err: s.runForwardSync(ctx, tipStart, false)}
+	}()
+
+	var canceled error
+	for remaining := 2; remaining > 0; remaining-- {
+		result := <-resultC
+		if result.err != nil && errors.Is(result.err, context.Canceled) {
+			canceled = result.err
+		}
+		if result.err != nil && !errors.Is(result.err, context.Canceled) {
+			s.logger.Error("sync queue stopped", "sync_queue", result.name, "error", result.err)
+		}
+	}
+	if canceled != nil {
+		return canceled
+	}
+	return nil
+}
+
+func (s *Syncer) syncGaps(ctx context.Context, gaps []BlockRange, parallel bool) error {
 	rangeSyncer := blocksync.NewSyncer(s.client, s.logger, s.cfg.FetchJobs, s.cfg.AllowGaps, false)
 	for _, gap := range gaps {
 		s.logger.Info("syncing gap", "start", gap.Start, "end", gap.End)
 		pace := blocksync.NewPace("blocks synced", paceInterval, s.logger.With("sync_queue", "gap"))
-		if s.status != nil {
+		if s.status != nil && !parallel {
 			end := gap.End
 			s.status.StartSegment("gap", gap.Start, &end)
 		}
@@ -156,29 +207,35 @@ func (s *Syncer) Run(ctx context.Context) error {
 			continue
 		}
 		if s.status != nil {
-			s.status.CompleteCurrentSegment()
+			if parallel {
+				s.status.CompleteGap(gap.Start, gap.End)
+			} else {
+				s.status.CompleteCurrentSegment()
+			}
 		}
 	}
+	return nil
+}
 
-	lastSynced := head
-	s.logger.Info("initial sync complete", "synced_height", lastSynced)
-	if s.status != nil {
+func (s *Syncer) runForwardSync(ctx context.Context, start int64, manageStatus bool) error {
+	if manageStatus && s.status != nil {
 		s.status.SetPhase("forward_sync")
-		s.status.StartSegment("forward", lastSynced+1, nil)
+		s.status.StartSegment("forward", start, nil)
 	}
 
+	s.logger.Info("starting forward sync", "start", start)
 	pace := blocksync.NewPace("blocks synced", paceInterval, s.logger.With("sync_queue", "tip"))
 	defer pace.Stop()
 
 	forwardSyncer := blocksync.NewSyncer(s.client, s.logger, s.cfg.FetchJobs, false, false)
-	err = forwardSyncer.SyncForward(ctx, lastSynced+1, func(block blocksync.NewBlockData) error {
+	err := forwardSyncer.SyncForward(ctx, start, func(block blocksync.NewBlockData) error {
 		return s.handleSyncedBlock(block, pace)
 	})
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			return err
 		}
-		s.logger.Error("forward sync stopped", "start", lastSynced+1, "error", err)
+		s.logger.Error("forward sync stopped", "start", start, "error", err)
 		if s.status != nil {
 			s.status.SetPhase("forward_sync_stopped")
 		}

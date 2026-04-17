@@ -14,6 +14,7 @@ func TestBuildConfigCarriesSyncAndOfflineFlags(t *testing.T) {
 		fetchJobs:                         intPtr(4),
 		dataDir:                           stringPtr(t.TempDir()),
 		enableSync:                        boolPtr(false),
+		parallelSyncTipAndGaps:            boolPtr(false),
 		offlineRPCOnly:                    boolPtr(true),
 		logFormat:                         stringPtr("json"),
 		logVerbose:                        boolPtr(false),
@@ -34,6 +35,9 @@ func TestBuildConfigCarriesSyncAndOfflineFlags(t *testing.T) {
 	}
 	if cfg.EnableSync {
 		t.Fatal("expected enable sync to be false")
+	}
+	if cfg.ParallelSyncTipAndGaps {
+		t.Fatal("expected parallel tip and gap sync to be false")
 	}
 	if !cfg.OfflineRPCOnly {
 		t.Fatal("expected offline rpc only to be true")
