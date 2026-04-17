@@ -251,6 +251,19 @@ func TestLiveModePrefersCachedBlockDataWhenAvailable(t *testing.T) {
 	if txByHash == nil || txByHash.Hash != fixture.txHashB {
 		t.Fatalf("unexpected tx by block hash/index: %#v", txByHash)
 	}
+
+	latest, err := b.BlockNumber()
+	if err != nil {
+		t.Fatalf("BlockNumber returned error: %v", err)
+	}
+	if uint64(latest) != uint64(fixture.meta.Height) {
+		t.Fatalf("unexpected live-mode cached latest: got %d want %d", latest, fixture.meta.Height)
+	}
+	byLatest, err := b.GetBlockByNumber(rpctypes.EthLatestBlockNumber, false)
+	if err != nil {
+		t.Fatalf("GetBlockByNumber(latest) returned error: %v", err)
+	}
+	backendTestAssertBlockSummary(t, byLatest, fixture.meta, []common.Hash{fixture.txHashA, fixture.txHashB})
 }
 
 func TestOfflineCachedBlockRejectsIncompleteTransactionCache(t *testing.T) {

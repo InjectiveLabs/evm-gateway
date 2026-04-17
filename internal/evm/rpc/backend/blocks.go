@@ -23,10 +23,9 @@ import (
 	txindexer "github.com/InjectiveLabs/evm-gateway/internal/indexer"
 )
 
-// BlockNumber returns the current block number in abci app state. Because abci
-// app state could lag behind from tendermint latest block, it's more stable for
-// the client to use the latest block number in abci app state than tendermint
-// rpc.
+// BlockNumber returns the latest block height available to JSON-RPC callers.
+// When the indexer is present, the cached head is the scalable source of truth
+// for read RPCs; live gRPC is only a fallback for backends without an indexer.
 func (b *Backend) BlockNumber() (hexutil.Uint64, error) {
 	ctx := b.operationContext()
 	if b.ctx != nil {
@@ -36,15 +35,15 @@ func (b *Backend) BlockNumber() (hexutil.Uint64, error) {
 	}
 	b = b.WithContext(ctx).(*Backend)
 
-	if b.cfg.OfflineRPCOnly && b.indexer != nil {
+	if b.indexer != nil {
 		last, err := b.indexer.LastIndexedBlock()
 		if err != nil {
 			return hexutil.Uint64(0), err
 		}
-		if last < 0 {
-			return hexutil.Uint64(0), nil
+		if last >= 0 {
+			return hexutil.Uint64(last), nil
 		}
-		return hexutil.Uint64(last), nil
+		return hexutil.Uint64(0), nil
 	}
 
 	// do any grpc query, ignore the response and use the returned block height
@@ -85,16 +84,16 @@ func (b *Backend) GetBlockByNumber(blockNum rpctypes.BlockNumber, fullTx bool) (
 		if cacheErr == nil {
 			return block, nil
 		}
-		if b.cfg.OfflineRPCOnly {
+		if b.cfg.OfflineRPCOnly || b.cacheOnlyDynamicBlockNumber(blockNum) {
 			return nil, cacheErr
 		}
 		b.logger.Debug("cached block-by-number reconstruction failed; falling back to live rpc", "height", meta.Height, "error", cacheErr.Error())
 	} else if err != nil && !isIndexerCacheMiss(err) {
-		if b.cfg.OfflineRPCOnly {
+		if b.cfg.OfflineRPCOnly || b.cacheOnlyDynamicBlockNumber(blockNum) {
 			return nil, err
 		}
 		b.logger.Debug("cached block-by-number lookup failed; falling back to live rpc", "height", blockNum, "error", err.Error())
-	} else if b.cfg.OfflineRPCOnly {
+	} else if b.cfg.OfflineRPCOnly || b.cacheOnlyDynamicBlockNumber(blockNum) {
 		return nil, nil
 	}
 
@@ -779,6 +778,10 @@ func (b *Backend) cachedBlockMetaByNumber(blockNum rpctypes.BlockNumber) (*txind
 		return nil, err
 	}
 	return b.indexer.GetBlockMetaByHeight(height)
+}
+
+func (b *Backend) cacheOnlyDynamicBlockNumber(blockNum rpctypes.BlockNumber) bool {
+	return b.indexer != nil && blockNum < 0
 }
 
 func (b *Backend) cachedBlockMetaByHash(hash common.Hash) (*txindexer.CachedBlockMeta, error) {
