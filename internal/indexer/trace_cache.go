@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	errorsmod "cosmossdk.io/errors"
+	"github.com/bytedance/sonic"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/ethereum/go-ethereum/common"
 	"upd.dev/xlab/gotracer"
@@ -56,7 +57,7 @@ func prefixRangeEnd(prefix []byte) []byte {
 }
 
 func traceConfigKey(config *rpctypes.TraceConfig) []byte {
-	bz, err := json.Marshal(config)
+	bz, err := sonic.Marshal(config)
 	if err != nil {
 		sum := sha256.Sum256([]byte(fmt.Sprintf("marshal-error:%T", config)))
 		return sum[:]
@@ -77,7 +78,7 @@ func (kv *KVIndexer) SetTraceTransaction(hash common.Hash, config *rpctypes.Trac
 	if len(raw) == 0 {
 		raw = json.RawMessage("null")
 	}
-	if err := kv.db.Set(TraceTxKey(hash, config), raw); err != nil {
+	if err := kv.db.Set(TraceTxKey(hash, config), mustMarshalTracePayload(raw)); err != nil {
 		return errorsmod.Wrapf(err, "SetTraceTransaction %s", hash.Hex())
 	}
 	return nil
@@ -99,7 +100,11 @@ func (kv *KVIndexer) GetTraceTransaction(hash common.Hash, config *rpctypes.Trac
 	if len(bz) == 0 {
 		return nil, newCacheMiss("trace tx not found, hash: %s", hash.Hex())
 	}
-	return append(json.RawMessage(nil), bz...), nil
+	raw, err := unmarshalTracePayload(bz)
+	if err != nil {
+		return nil, errorsmod.Wrapf(err, "GetTraceTransaction %s", hash.Hex())
+	}
+	return json.RawMessage(raw), nil
 }
 
 func (kv *KVIndexer) SetTraceBlockByHeight(height int64, config *rpctypes.TraceConfig, raw json.RawMessage) error {
@@ -114,7 +119,7 @@ func (kv *KVIndexer) SetTraceBlockByHeight(height int64, config *rpctypes.TraceC
 	if len(raw) == 0 {
 		raw = json.RawMessage("[]")
 	}
-	if err := kv.db.Set(TraceBlockKey(height, config), raw); err != nil {
+	if err := kv.db.Set(TraceBlockKey(height, config), mustMarshalTracePayload(raw)); err != nil {
 		return errorsmod.Wrapf(err, "SetTraceBlockByHeight %d", height)
 	}
 	return nil
@@ -136,7 +141,11 @@ func (kv *KVIndexer) GetTraceBlockByHeight(height int64, config *rpctypes.TraceC
 	if len(bz) == 0 {
 		return nil, newCacheMiss("trace block not found, height: %d", height)
 	}
-	return append(json.RawMessage(nil), bz...), nil
+	raw, err := unmarshalTracePayload(bz)
+	if err != nil {
+		return nil, errorsmod.Wrapf(err, "GetTraceBlockByHeight %d", height)
+	}
+	return json.RawMessage(raw), nil
 }
 
 func (kv *KVIndexer) deleteTraceKeysForBlock(batch interface {

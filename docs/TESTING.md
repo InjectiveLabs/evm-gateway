@@ -155,6 +155,9 @@ These env vars tune the benchmark runner:
 - `WEB3INJ_BENCH_OFFLINE_AFTER_SYNC`
 - `WEB3INJ_BENCH_CPU_PROFILE`
 - `WEB3INJ_BENCH_CPU_PROFILE_PATH`
+- `WEB3INJ_BENCH_MEM_PROFILE`
+- `WEB3INJ_BENCH_MEM_PROFILE_BEFORE_PATH`
+- `WEB3INJ_BENCH_MEM_PROFILE_AFTER_PATH`
 - `WEB3INJ_BENCH_OUTPUT_DIR`
 - `WEB3INJ_VIRTUALIZE_COSMOS_EVENTS`
 - `WEB3INJ_E2E_MIN_GAS_PRICE`
@@ -166,6 +169,8 @@ These env vars tune the benchmark runner:
 `WEB3INJ_VIRTUALIZE_COSMOS_EVENTS=true` starts the benchmark gateway with native Cosmos event virtualization enabled. Benchmark reports include `environment.virtualize_cosmos_events` and `gateway.sync_duration_seconds`.
 
 `WEB3INJ_BENCH_CPU_PROFILE=1` starts `debug_startCPUProfile` immediately before the measured benchmark phase and stops it after the phase completes. The default profile path is `cpu.pprof` in the benchmark output directory. Override it with `WEB3INJ_BENCH_CPU_PROFILE_PATH`.
+
+`WEB3INJ_BENCH_MEM_PROFILE=1` writes heap profiles immediately before and after the measured benchmark phase. The default paths are `heap_before.pprof` and `heap_after.pprof` in the benchmark output directory. Override them with `WEB3INJ_BENCH_MEM_PROFILE_BEFORE_PATH` and `WEB3INJ_BENCH_MEM_PROFILE_AFTER_PATH`. Use `go tool pprof -alloc_space` or `go tool pprof -alloc_objects` to inspect allocation pressure.
 
 `WEB3INJ_E2E_MIN_GAS_PRICE` defaults to `160000000inj`, matching the current local Injective devnet minimum gas price.
 

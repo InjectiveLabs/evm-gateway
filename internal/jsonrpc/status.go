@@ -1,8 +1,9 @@
 package jsonrpc
 
 import (
-	"encoding/json"
 	"net/http"
+
+	"github.com/bytedance/sonic"
 
 	"github.com/InjectiveLabs/evm-gateway/internal/syncstatus"
 )
@@ -10,6 +11,6 @@ import (
 func makeSyncStatusHandler(status *syncstatus.Tracker) http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(status.Snapshot())
+		_ = sonic.ConfigDefault.NewEncoder(w).Encode(status.Snapshot())
 	}
 }

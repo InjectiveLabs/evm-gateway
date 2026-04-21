@@ -50,12 +50,12 @@ func (kv *KVIndexer) saveVirtualRPCTransaction(
 	receipt CachedReceipt,
 	cosmosHash *common.Hash,
 ) error {
-	if err := batch.Set(ReceiptKey(txHash), mustJSON(receipt)); err != nil {
+	if err := batch.Set(ReceiptKey(txHash), mustMarshalReceipt(receipt)); err != nil {
 		return errorsmod.Wrapf(err, "set virtual receipt %s", txHash.Hex())
 	}
 
 	rpcTx := virtualbank.NewRPCTransaction(txHash, blockHash, uint64(height), uint64(txIndex), kv.virtualChainID, cosmosHash)
-	if err := batch.Set(RPCtxHashKey(txHash), mustJSON(rpcTx)); err != nil {
+	if err := batch.Set(RPCtxHashKey(txHash), mustMarshalRPCTransaction(rpcTx)); err != nil {
 		return errorsmod.Wrapf(err, "set virtual rpc tx hash %s", txHash.Hex())
 	}
 	if err := batch.Set(VirtualRPCtxKey(txHash), []byte{1}); err != nil {

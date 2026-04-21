@@ -225,7 +225,7 @@ func (b *Backend) GetTransactionReceipt(hash common.Hash) (map[string]interface{
 
 	b.logger.Debug("eth_getTransactionReceipt", "hash", hash)
 	if b.indexer != nil {
-		receipt, err := b.indexer.GetReceiptByTxHash(hash)
+		receipt, err := b.materializedReceiptByHash(hash)
 		if err == nil {
 			visible, err := b.cachedTransactionVisible(hash)
 			if err != nil {

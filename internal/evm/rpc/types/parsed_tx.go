@@ -1,7 +1,6 @@
 package types
 
 import (
-	"encoding/json"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -9,6 +8,7 @@ import (
 	errorsmod "cosmossdk.io/errors"
 	evmtypes "github.com/InjectiveLabs/sdk-go/chain/evm/types"
 	chaintypes "github.com/InjectiveLabs/sdk-go/chain/types"
+	"github.com/bytedance/sonic"
 	abci "github.com/cometbft/cometbft/abci/types"
 	cmrpctypes "github.com/cometbft/cometbft/rpc/core/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
@@ -159,7 +159,7 @@ func (p *ParsedTxs) parseFromLog(result *abci.ExecTxResult, tx sdk.Tx) error {
 	}
 
 	logJSON := parts[2]
-	if err := json.Unmarshal([]byte(logJSON), &vmErr); err != nil {
+	if err := sonic.Unmarshal([]byte(logJSON), &vmErr); err != nil {
 		failedTx, fallbackErr := failedTxFromTextLog(tx, result, msgIndex, logJSON)
 		if fallbackErr != nil {
 			return errorsmod.Wrap(err, "failed to parse abci log as JSON")

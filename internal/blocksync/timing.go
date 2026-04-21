@@ -1,11 +1,12 @@
 package blocksync
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/bytedance/sonic"
 )
 
 const fetchTimingEnvVar = "WEB3INJ_DEBUG_BLOCKSYNC_TIMINGS_FILE"
@@ -79,7 +80,7 @@ func (r *fetchTimingRecorder) Record(kind string, height int64, jobID, attempt i
 		event.Error = err.Error()
 	}
 
-	line, marshalErr := json.Marshal(event)
+	line, marshalErr := sonic.Marshal(event)
 	if marshalErr != nil {
 		return
 	}

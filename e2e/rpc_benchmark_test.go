@@ -64,6 +64,14 @@ func TestHistoricalRPCBenchmarkSuite(t *testing.T) {
 	if cfg.CPUProfilePath == "" && cfg.CPUProfile {
 		cfg.CPUProfilePath = filepath.Join(artifactsDir, "cpu.pprof")
 	}
+	if cfg.MemProfile {
+		if cfg.MemProfileBeforePath == "" {
+			cfg.MemProfileBeforePath = filepath.Join(artifactsDir, "heap_before.pprof")
+		}
+		if cfg.MemProfileAfterPath == "" {
+			cfg.MemProfileAfterPath = filepath.Join(artifactsDir, "heap_after.pprof")
+		}
+	}
 	t.Logf("benchmark artifacts dir: %s", artifactsDir)
 
 	chainID, err := cometChainID(ctx, cfg.CometRPC)
@@ -233,6 +241,10 @@ func TestHistoricalRPCBenchmarkSuite(t *testing.T) {
 		t.Fatalf("query pre-benchmark status: %v", err)
 	}
 
+	if cfg.MemProfile {
+		writeBenchmarkMemProfile(t, ctx, proc.RPCURL(), cfg.MemProfileBeforePath)
+	}
+
 	stopCPUProfile := startBenchmarkCPUProfile(t, ctx, proc.RPCURL(), cfg.CPUProfilePath)
 	if stopCPUProfile != nil {
 		defer func() {
@@ -248,6 +260,9 @@ func TestHistoricalRPCBenchmarkSuite(t *testing.T) {
 		stopCPUProfile()
 		stopCPUProfile = nil
 		assertFileWritten(t, cfg.CPUProfilePath)
+	}
+	if cfg.MemProfile {
+		writeBenchmarkMemProfile(t, ctx, proc.RPCURL(), cfg.MemProfileAfterPath)
 	}
 
 	statusAfter, err := proc.Status(ctx)
@@ -311,13 +326,15 @@ func TestHistoricalRPCBenchmarkSuite(t *testing.T) {
 			TraceHashes:  len(fixtures.TraceHashes),
 		},
 		Gateway: benchmarkGatewayReport{
-			RPCURL:              proc.RPCURL(),
-			DataDir:             gatewayDataDir,
-			LogPath:             proc.logPath,
-			CPUProfilePath:      cfg.CPUProfilePath,
-			SyncDurationSeconds: roundSeconds(syncDuration),
-			StatusBefore:        statusBefore,
-			StatusAfter:         statusAfter,
+			RPCURL:               proc.RPCURL(),
+			DataDir:              gatewayDataDir,
+			LogPath:              proc.logPath,
+			CPUProfilePath:       cfg.CPUProfilePath,
+			MemProfileBeforePath: cfg.MemProfileBeforePath,
+			MemProfileAfterPath:  cfg.MemProfileAfterPath,
+			SyncDurationSeconds:  roundSeconds(syncDuration),
+			StatusBefore:         statusBefore,
+			StatusAfter:          statusAfter,
 		},
 		Scenarios: scenarioReports,
 		Totals:    summarizeScenarioReports(scenarioReports),
@@ -360,6 +377,9 @@ type benchmarkConfig struct {
 	VirtualizeCosmosEvents bool
 	CPUProfile             bool
 	CPUProfilePath         string
+	MemProfile             bool
+	MemProfileBeforePath   string
+	MemProfileAfterPath    string
 }
 
 func loadBenchmarkConfig(t *testing.T) benchmarkConfig {
@@ -403,6 +423,9 @@ func loadBenchmarkConfig(t *testing.T) benchmarkConfig {
 		VirtualizeCosmosEvents: strings.TrimSpace(os.Getenv("WEB3INJ_VIRTUALIZE_COSMOS_EVENTS")) == "true",
 		CPUProfile:             envBool("WEB3INJ_BENCH_CPU_PROFILE"),
 		CPUProfilePath:         strings.TrimSpace(os.Getenv("WEB3INJ_BENCH_CPU_PROFILE_PATH")),
+		MemProfile:             envBool("WEB3INJ_BENCH_MEM_PROFILE"),
+		MemProfileBeforePath:   strings.TrimSpace(os.Getenv("WEB3INJ_BENCH_MEM_PROFILE_BEFORE_PATH")),
+		MemProfileAfterPath:    strings.TrimSpace(os.Getenv("WEB3INJ_BENCH_MEM_PROFILE_AFTER_PATH")),
 	}
 }
 
@@ -648,6 +671,34 @@ func startBenchmarkCPUProfile(t *testing.T, ctx context.Context, rpcURL, path st
 		}
 		t.Logf("benchmark cpu profile stopped: %s", path)
 	}
+}
+
+func writeBenchmarkMemProfile(t *testing.T, ctx context.Context, rpcURL, path string) {
+	t.Helper()
+
+	if strings.TrimSpace(path) == "" {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("create benchmark mem profile dir: %v", err)
+	}
+
+	resp, err := rpcCallResponse(ctx, rpcURL, "debug_freeOSMemory", []interface{}{})
+	if err != nil {
+		t.Fatalf("force gc before benchmark mem profile: %v", err)
+	}
+	if resp.Error != nil {
+		t.Fatalf("force gc before benchmark mem profile rpc error %d: %s", resp.Error.Code, resp.Error.Message)
+	}
+	resp, err = rpcCallResponse(ctx, rpcURL, "debug_writeMemProfile", []interface{}{path})
+	if err != nil {
+		t.Fatalf("write benchmark mem profile: %v", err)
+	}
+	if resp.Error != nil {
+		t.Fatalf("write benchmark mem profile rpc error %d: %s", resp.Error.Code, resp.Error.Message)
+	}
+	assertFileWritten(t, path)
+	t.Logf("benchmark mem profile written: %s", path)
 }
 
 type benchmarkScenarioSpec struct {
@@ -1414,13 +1465,15 @@ type benchmarkFixtureReport struct {
 }
 
 type benchmarkGatewayReport struct {
-	RPCURL              string             `json:"rpc_url"`
-	DataDir             string             `json:"data_dir"`
-	LogPath             string             `json:"log_path"`
-	CPUProfilePath      string             `json:"cpu_profile_path,omitempty"`
-	SyncDurationSeconds float64            `json:"sync_duration_seconds"`
-	StatusBefore        syncStatusResponse `json:"status_before"`
-	StatusAfter         syncStatusResponse `json:"status_after"`
+	RPCURL               string             `json:"rpc_url"`
+	DataDir              string             `json:"data_dir"`
+	LogPath              string             `json:"log_path"`
+	CPUProfilePath       string             `json:"cpu_profile_path,omitempty"`
+	MemProfileBeforePath string             `json:"mem_profile_before_path,omitempty"`
+	MemProfileAfterPath  string             `json:"mem_profile_after_path,omitempty"`
+	SyncDurationSeconds  float64            `json:"sync_duration_seconds"`
+	StatusBefore         syncStatusResponse `json:"status_before"`
+	StatusAfter          syncStatusResponse `json:"status_after"`
 }
 
 type benchmarkTotalsReport struct {

@@ -1,11 +1,11 @@
 package indexer
 
 import (
-	"encoding/json"
 	"fmt"
 	"math/big"
 
 	errorsmod "cosmossdk.io/errors"
+	"github.com/bytedance/sonic"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -138,7 +138,7 @@ func BlockHashKey(hash common.Hash) []byte {
 }
 
 func mustJSON(v interface{}) []byte {
-	bz, err := json.Marshal(v)
+	bz, err := sonic.Marshal(v)
 	if err != nil {
 		panic(err)
 	}
@@ -150,7 +150,7 @@ func unmarshalJSON[T any](bz []byte) (T, error) {
 	if len(bz) == 0 {
 		return out, fmt.Errorf("empty payload")
 	}
-	if err := json.Unmarshal(bz, &out); err != nil {
+	if err := sonic.Unmarshal(bz, &out); err != nil {
 		return out, err
 	}
 	return out, nil
@@ -173,11 +173,11 @@ func (kv *KVIndexer) GetRPCTransactionByHash(hash common.Hash) (*rpctypes.RPCTra
 		return nil, newCacheMiss("rpc tx not found, hash: %s", hash.Hex())
 	}
 
-	tx, err := unmarshalJSON[rpctypes.RPCTransaction](bz)
+	tx, err := unmarshalRPCTransactionPayload(bz)
 	if err != nil {
 		return nil, errorsmod.Wrapf(err, "GetRPCTransactionByHash %s", hash.Hex())
 	}
-	return &tx, nil
+	return tx, nil
 }
 
 func (kv *KVIndexer) GetRPCTransactionByBlockAndIndex(blockNumber int64, txIndex int32) (*rpctypes.RPCTransaction, error) {
@@ -238,7 +238,7 @@ func (kv *KVIndexer) GetReceiptByTxHash(hash common.Hash) (map[string]interface{
 		return nil, newCacheMiss("receipt not found, hash: %s", hash.Hex())
 	}
 
-	receipt, err := unmarshalJSON[CachedReceipt](bz)
+	receipt, err := unmarshalReceiptPayload(bz)
 	if err != nil {
 		return nil, errorsmod.Wrapf(err, "GetReceiptByTxHash %s", hash.Hex())
 	}
@@ -278,7 +278,7 @@ func (kv *KVIndexer) GetBlockMetaByHeight(height int64) (*CachedBlockMeta, error
 		return nil, newCacheMiss("block meta not found, height: %d", height)
 	}
 
-	meta, err := unmarshalJSON[CachedBlockMeta](bz)
+	meta, err := unmarshalBlockMetaPayload(bz)
 	if err != nil {
 		return nil, errorsmod.Wrapf(err, "GetBlockMetaByHeight %d", height)
 	}
@@ -321,7 +321,30 @@ func (kv *KVIndexer) GetLogsByBlockHeight(height int64) ([][]*virtualbank.RPCLog
 	if len(bz) == 0 {
 		return nil, newCacheMiss("block logs not found, height: %d", height)
 	}
-	return unmarshalJSON[[][]*virtualbank.RPCLog](bz)
+	return unmarshalBlockLogsPayload(bz)
+}
+
+func (kv *KVIndexer) GetFilteredLogsByBlockHeight(
+	height int64,
+	addresses []common.Address,
+	topics [][]common.Hash,
+) ([]*virtualbank.RPCLog, error) {
+	ctx := kv.operationContext()
+	if kv.ctx != nil {
+		defer gotracer.Trace(&ctx, kv.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, kv.baseTraceTags)()
+	}
+	kv = kv.WithContext(ctx).(*KVIndexer)
+
+	bz, err := kv.db.Get(BlockLogsKey(height))
+	if err != nil {
+		return nil, errorsmod.Wrapf(err, "GetFilteredLogsByBlockHeight %d", height)
+	}
+	if len(bz) == 0 {
+		return nil, newCacheMiss("block logs not found, height: %d", height)
+	}
+	return unmarshalFilteredBlockLogsPayload(bz, addresses, topics)
 }
 
 func (kv *KVIndexer) GetLogsByBlockHash(hash common.Hash) ([][]*virtualbank.RPCLog, error) {
@@ -342,6 +365,30 @@ func (kv *KVIndexer) GetLogsByBlockHash(hash common.Hash) ([][]*virtualbank.RPCL
 	}
 	height := int64(sdk.BigEndianToUint64(bz))
 	return kv.GetLogsByBlockHeight(height)
+}
+
+func (kv *KVIndexer) GetFilteredLogsByBlockHash(
+	hash common.Hash,
+	addresses []common.Address,
+	topics [][]common.Hash,
+) ([]*virtualbank.RPCLog, error) {
+	ctx := kv.operationContext()
+	if kv.ctx != nil {
+		defer gotracer.Trace(&ctx, kv.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, kv.baseTraceTags)()
+	}
+	kv = kv.WithContext(ctx).(*KVIndexer)
+
+	bz, err := kv.db.Get(BlockHashKey(hash))
+	if err != nil {
+		return nil, errorsmod.Wrapf(err, "GetFilteredLogsByBlockHash %s", hash.Hex())
+	}
+	if len(bz) == 0 {
+		return nil, newCacheMiss("block hash not indexed: %s", hash.Hex())
+	}
+	height := int64(sdk.BigEndianToUint64(bz))
+	return kv.GetFilteredLogsByBlockHeight(height, addresses, topics)
 }
 
 func (kv *KVIndexer) IsBlockIndexed(height int64) (bool, error) {

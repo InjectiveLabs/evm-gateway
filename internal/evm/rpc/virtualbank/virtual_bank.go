@@ -2,13 +2,13 @@ package virtualbank
 
 import (
 	"encoding/binary"
-	"encoding/json"
 	"fmt"
 	"math/big"
 	"strconv"
 	"strings"
 
 	sdkmath "cosmossdk.io/math"
+	"github.com/bytedance/sonic"
 	"github.com/cometbft/cometbft/abci/types"
 	cmtypes "github.com/cometbft/cometbft/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
@@ -79,17 +79,17 @@ type LogContext struct {
 // RPCLog matches the Ethereum log JSON shape and carries optional metadata for
 // synthesized Cosmos events.
 type RPCLog struct {
-	Address     common.Address
-	Topics      []common.Hash
-	Data        []byte
-	BlockNumber uint64
-	TxHash      common.Hash
-	TxIndex     uint
-	BlockHash   common.Hash
-	Index       uint
-	Removed     bool
-	Virtual     bool
-	CosmosHash  *common.Hash
+	Address     common.Address `json:"address"`
+	Topics      []common.Hash  `json:"topics"`
+	Data        hexutil.Bytes  `json:"data"`
+	BlockNumber hexutil.Uint64 `json:"blockNumber"`
+	TxHash      common.Hash    `json:"transactionHash"`
+	TxIndex     hexutil.Uint   `json:"transactionIndex"`
+	BlockHash   common.Hash    `json:"blockHash"`
+	Index       hexutil.Uint   `json:"logIndex"`
+	Removed     bool           `json:"removed"`
+	Virtual     bool           `json:"virtual,omitempty"`
+	CosmosHash  *common.Hash   `json:"cosmos_hash,omitempty"`
 }
 
 type rpcLogJSON struct {
@@ -106,35 +106,53 @@ type rpcLogJSON struct {
 	CosmosHash  *common.Hash   `json:"cosmos_hash,omitempty"`
 }
 
-func (l RPCLog) MarshalJSON() ([]byte, error) {
-	return json.Marshal(rpcLogJSON{
-		Address:     l.Address,
-		Topics:      l.Topics,
-		Data:        hexutil.Bytes(l.Data),
-		BlockNumber: hexutil.Uint64(l.BlockNumber),
-		TxHash:      l.TxHash,
-		TxIndex:     hexutil.Uint(l.TxIndex),
-		BlockHash:   l.BlockHash,
-		Index:       hexutil.Uint(l.Index),
-		Removed:     l.Removed,
-		Virtual:     l.Virtual,
-		CosmosHash:  l.CosmosHash,
-	})
+func LogMatches(log *RPCLog, addresses []common.Address, topics [][]common.Hash) bool {
+	if log == nil {
+		return false
+	}
+	if len(addresses) > 0 {
+		matched := false
+		for _, address := range addresses {
+			if log.Address == address {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	if len(topics) > len(log.Topics) {
+		return false
+	}
+	for i, sub := range topics {
+		matched := len(sub) == 0
+		for _, topic := range sub {
+			if log.Topics[i] == topic {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	return true
 }
 
 func (l *RPCLog) UnmarshalJSON(input []byte) error {
 	var dec rpcLogJSON
-	if err := json.Unmarshal(input, &dec); err != nil {
+	if err := sonic.Unmarshal(input, &dec); err != nil {
 		return err
 	}
 	l.Address = dec.Address
 	l.Topics = append([]common.Hash(nil), dec.Topics...)
-	l.Data = append([]byte(nil), dec.Data...)
-	l.BlockNumber = uint64(dec.BlockNumber)
+	l.Data = append(hexutil.Bytes(nil), dec.Data...)
+	l.BlockNumber = dec.BlockNumber
 	l.TxHash = dec.TxHash
-	l.TxIndex = uint(dec.TxIndex)
+	l.TxIndex = dec.TxIndex
 	l.BlockHash = dec.BlockHash
-	l.Index = uint(dec.Index)
+	l.Index = dec.Index
 	l.Removed = dec.Removed
 	l.Virtual = dec.Virtual
 	l.CosmosHash = copyHashPtr(dec.CosmosHash)
@@ -356,12 +374,12 @@ func Logs(events []TransferEvent, ctx LogContext) ([]*RPCLog, error) {
 		logs = append(logs, &RPCLog{
 			Address:     ContractAddress,
 			Topics:      topics,
-			Data:        data,
-			BlockNumber: ctx.BlockNumber,
+			Data:        hexutil.Bytes(data),
+			BlockNumber: hexutil.Uint64(ctx.BlockNumber),
 			TxHash:      ctx.TxHash,
-			TxIndex:     ctx.TxIndex,
+			TxIndex:     hexutil.Uint(ctx.TxIndex),
 			BlockHash:   ctx.BlockHash,
-			Index:       ctx.FirstLogIndex + uint(i),
+			Index:       hexutil.Uint(ctx.FirstLogIndex + uint(i)),
 			Virtual:     true,
 			CosmosHash:  copyHashPtr(ctx.CosmosHash),
 		})
@@ -376,12 +394,12 @@ func NewRPCLog(log *ethtypes.Log, virtual bool, cosmosHash *common.Hash) *RPCLog
 	return &RPCLog{
 		Address:     log.Address,
 		Topics:      append([]common.Hash(nil), log.Topics...),
-		Data:        append([]byte(nil), log.Data...),
-		BlockNumber: log.BlockNumber,
+		Data:        append(hexutil.Bytes(nil), log.Data...),
+		BlockNumber: hexutil.Uint64(log.BlockNumber),
 		TxHash:      log.TxHash,
-		TxIndex:     log.TxIndex,
+		TxIndex:     hexutil.Uint(log.TxIndex),
 		BlockHash:   log.BlockHash,
-		Index:       log.Index,
+		Index:       hexutil.Uint(log.Index),
 		Removed:     log.Removed,
 		Virtual:     virtual,
 		CosmosHash:  copyHashPtr(cosmosHash),
@@ -407,11 +425,11 @@ func EthLog(log *RPCLog) *ethtypes.Log {
 		Address:     log.Address,
 		Topics:      append([]common.Hash(nil), log.Topics...),
 		Data:        append([]byte(nil), log.Data...),
-		BlockNumber: log.BlockNumber,
+		BlockNumber: uint64(log.BlockNumber),
 		TxHash:      log.TxHash,
-		TxIndex:     log.TxIndex,
+		TxIndex:     uint(log.TxIndex),
 		BlockHash:   log.BlockHash,
-		Index:       log.Index,
+		Index:       uint(log.Index),
 		Removed:     log.Removed,
 	}
 }
@@ -459,11 +477,11 @@ func SetLogMetadata(logs []*RPCLog, ctx LogContext) {
 		if log == nil {
 			continue
 		}
-		log.BlockNumber = ctx.BlockNumber
+		log.BlockNumber = hexutil.Uint64(ctx.BlockNumber)
 		log.TxHash = ctx.TxHash
-		log.TxIndex = ctx.TxIndex
+		log.TxIndex = hexutil.Uint(ctx.TxIndex)
 		log.BlockHash = ctx.BlockHash
-		log.Index = ctx.FirstLogIndex + uint(i)
+		log.Index = hexutil.Uint(ctx.FirstLogIndex + uint(i))
 	}
 }
 

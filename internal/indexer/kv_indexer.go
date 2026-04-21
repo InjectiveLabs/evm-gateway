@@ -439,7 +439,7 @@ func (kv *KVIndexer) indexBlockWithStats(block *cmtypes.Block, blockResults *cor
 				txData.To(),
 				uint64(txData.Type()),
 			)
-			if err := batch.Set(ReceiptKey(txHash), mustJSON(receipt)); err != nil {
+			if err := batch.Set(ReceiptKey(txHash), mustMarshalReceipt(receipt)); err != nil {
 				return stats, errorsmod.Wrapf(err, "IndexBlock %d, set receipt", block.Height)
 			}
 
@@ -455,7 +455,7 @@ func (kv *KVIndexer) indexBlockWithStats(block *cmtypes.Block, blockResults *cor
 				return stats, newBlockParseError(err, "block %d txIndex %d msgIndex %d txHash %s: failed to build rpc tx", block.Height, txIndex, msgIndex, txHash.Hex())
 			}
 			rpcTx.Hash = txHash
-			if err := batch.Set(RPCtxHashKey(txHash), mustJSON(rpcTx)); err != nil {
+			if err := batch.Set(RPCtxHashKey(txHash), mustMarshalRPCTransaction(rpcTx)); err != nil {
 				return stats, errorsmod.Wrapf(err, "IndexBlock %d, set rpc tx hash", block.Height)
 			}
 			if err := batch.Set(RPCtxIndexKey(block.Height, visibleTxIndex), txHash.Bytes()); err != nil {
@@ -543,13 +543,13 @@ func (kv *KVIndexer) indexBlockWithStats(block *cmtypes.Block, blockResults *cor
 		VirtualizedCosmosEvents: kv.virtualBankTransfers,
 	}
 
-	if err := batch.Set(BlockMetaKey(block.Height), mustJSON(meta)); err != nil {
+	if err := batch.Set(BlockMetaKey(block.Height), mustMarshalBlockMeta(meta)); err != nil {
 		return stats, errorsmod.Wrapf(err, "IndexBlock %d, set block meta", block.Height)
 	}
 	if err := batch.Set(BlockHashKey(blockHash), sdk.Uint64ToBigEndian(uint64(block.Height))); err != nil {
 		return stats, errorsmod.Wrapf(err, "IndexBlock %d, set block hash map", block.Height)
 	}
-	if err := batch.Set(BlockLogsKey(block.Height), mustJSON(blockLogs)); err != nil {
+	if err := batch.Set(BlockLogsKey(block.Height), mustMarshalBlockLogs(blockLogs)); err != nil {
 		return stats, errorsmod.Wrapf(err, "IndexBlock %d, set block logs", block.Height)
 	}
 
@@ -625,11 +625,11 @@ func (kv *KVIndexer) GetByTxHash(hash common.Hash) (*chaintypes.TxResult, error)
 	if len(bz) == 0 {
 		return nil, fmt.Errorf("tx not found, hash: %s", hash.Hex())
 	}
-	var txKey chaintypes.TxResult
-	if err := kv.clientCtx.Codec.Unmarshal(bz, &txKey); err != nil {
+	txResult, err := unmarshalTxResultPayload(kv.clientCtx.Codec, bz)
+	if err != nil {
 		return nil, errorsmod.Wrapf(err, "GetByTxHash %s", hash.Hex())
 	}
-	return &txKey, nil
+	return txResult, nil
 }
 
 // GetByBlockAndIndex finds eth tx by block number and eth tx index
@@ -728,8 +728,8 @@ func isEthTx(tx sdk.Tx) bool {
 }
 
 // saveTxResult index the txResult into the kv db batch
-func saveTxResult(codec sdkcodec.Codec, batch dbm.Batch, txHash common.Hash, txResult *chaintypes.TxResult) error {
-	bz := codec.MustMarshal(txResult)
+func saveTxResult(_ sdkcodec.Codec, batch dbm.Batch, txHash common.Hash, txResult *chaintypes.TxResult) error {
+	bz := mustMarshalTxResult(txResult)
 	if err := batch.Set(TxHashKey(txHash), bz); err != nil {
 		return errorsmod.Wrap(err, "set tx-hash key")
 	}
@@ -801,7 +801,7 @@ func (kv *KVIndexer) resetBlock(batch dbm.Batch, height int64) error {
 		return errorsmod.Wrapf(err, "reset block %d: get meta", height)
 	}
 	if len(metaBz) > 0 {
-		meta, err := unmarshalJSON[CachedBlockMeta](metaBz)
+		meta, err := unmarshalBlockMetaPayload(metaBz)
 		if err != nil {
 			return errorsmod.Wrapf(err, "reset block %d: unmarshal meta", height)
 		}

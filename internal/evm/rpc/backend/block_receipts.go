@@ -111,7 +111,7 @@ func (b *Backend) cachedBlockReceipts(blockNrOrHash rpctypes.BlockNumberOrHash) 
 		if hash == (common.Hash{}) {
 			return nil, fmt.Errorf("cached block tx hash missing for height %d", meta.Height)
 		}
-		receipt, err := b.indexer.GetReceiptByTxHash(hash)
+		receipt, err := b.materializedReceiptByHash(hash)
 		if err != nil {
 			return nil, err
 		}
@@ -119,6 +119,18 @@ func (b *Backend) cachedBlockReceipts(blockNrOrHash rpctypes.BlockNumberOrHash) 
 	}
 
 	return receipts, nil
+}
+
+func (b *Backend) materializedReceiptByHash(hash common.Hash) (map[string]interface{}, error) {
+	if receipt, ok := b.materialized.getReceipt(hash); ok {
+		return receipt, nil
+	}
+	receipt, err := b.indexer.GetReceiptByTxHash(hash)
+	if err != nil {
+		return nil, err
+	}
+	b.materialized.addReceipt(hash, receipt)
+	return receipt, nil
 }
 
 func (b *Backend) liveReceiptsBlock(blockNrOrHash rpctypes.BlockNumberOrHash) (*cmrpctypes.ResultBlock, error) {

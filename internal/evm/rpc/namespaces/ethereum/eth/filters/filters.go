@@ -191,27 +191,11 @@ func (f *Filter) Logs(ctx context.Context, logLimit int, blockLimit int64) ([]*v
 }
 
 func (f *Filter) blockLogsByHash(hash common.Hash) ([]*virtualbank.RPCLog, error) {
-	logsList, err := f.backend.GetLogs(hash)
-	if err != nil {
-		return nil, err
-	}
-	return f.filterLogs(logsList), nil
+	return f.backend.GetFilteredLogs(hash, f.criteria.Addresses, f.criteria.Topics)
 }
 
 func (f *Filter) blockLogsByHeight(height int64) ([]*virtualbank.RPCLog, error) {
-	logsList, err := f.backend.GetLogsByHeight(&height)
-	if err != nil {
-		return nil, err
-	}
-	return f.filterLogs(logsList), nil
-}
-
-func (f *Filter) filterLogs(logsList [][]*virtualbank.RPCLog) []*virtualbank.RPCLog {
-	unfiltered := make([]*virtualbank.RPCLog, 0)
-	for _, txLogs := range logsList {
-		unfiltered = append(unfiltered, txLogs...)
-	}
-	return FilterLogs(unfiltered, nil, nil, f.criteria.Addresses, f.criteria.Topics)
+	return f.backend.GetFilteredLogsByHeight(height, f.criteria.Addresses, f.criteria.Topics)
 }
 
 func createBloomFilters(filters [][][]byte, logger *slog.Logger) [][]BloomIV {

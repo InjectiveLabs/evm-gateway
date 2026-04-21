@@ -45,6 +45,8 @@ type Backend interface {
 	TendermintBlockResultByNumber(height *int64) (*coretypes.ResultBlockResults, error)
 	GetLogs(blockHash common.Hash) ([][]*virtualbank.RPCLog, error)
 	GetLogsByHeight(*int64) ([][]*virtualbank.RPCLog, error)
+	GetFilteredLogs(blockHash common.Hash, addresses []common.Address, topics [][]common.Hash) ([]*virtualbank.RPCLog, error)
+	GetFilteredLogsByHeight(height int64, addresses []common.Address, topics [][]common.Hash) ([]*virtualbank.RPCLog, error)
 	GetBlockBloomByHeight(height int64) (ethtypes.Bloom, error)
 	BlockBloom(blockRes *coretypes.ResultBlockResults) (ethtypes.Bloom, error)
 

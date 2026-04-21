@@ -102,7 +102,7 @@ func TestParseEventsAndBuildLogsForTrackedBankEvents(t *testing.T) {
 		if log.Topics[0] != wantTopics[i] {
 			t.Fatalf("log %d unexpected topic0: got %s want %s", i, log.Topics[0].Hex(), wantTopics[i].Hex())
 		}
-		if log.BlockNumber != 12 || log.TxIndex != 3 || log.Index != uint(4+i) {
+		if uint64(log.BlockNumber) != 12 || uint(log.TxIndex) != 3 || uint(log.Index) != uint(4+i) {
 			t.Fatalf("log %d unexpected location: block=%d tx=%d index=%d", i, log.BlockNumber, log.TxIndex, log.Index)
 		}
 	}

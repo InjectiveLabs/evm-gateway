@@ -124,6 +124,8 @@ type EVMBackend interface {
 	// Filter API
 	GetLogs(hash common.Hash) ([][]*virtualbank.RPCLog, error)
 	GetLogsByHeight(height *int64) ([][]*virtualbank.RPCLog, error)
+	GetFilteredLogs(hash common.Hash, addresses []common.Address, topics [][]common.Hash) ([]*virtualbank.RPCLog, error)
+	GetFilteredLogsByHeight(height int64, addresses []common.Address, topics [][]common.Hash) ([]*virtualbank.RPCLog, error)
 	GetBlockBloomByHeight(height int64) (ethtypes.Bloom, error)
 	BloomStatus() (uint64, uint64)
 
@@ -158,6 +160,7 @@ type Backend struct {
 	indexer             txindexer.TxIndexer
 	syncStatus          *syncstatus.Tracker
 	processBlocker      ProcessBlocker
+	materialized        *materializedCache
 }
 
 // NewBackend creates a new Backend instance for cosmos and ethereum namespaces
@@ -186,6 +189,7 @@ func NewBackend(
 		allowUnprotectedTxs: allowUnprotectedTxs,
 		indexer:             indexer,
 		syncStatus:          syncStatus,
+		materialized:        newMaterializedCache(),
 	}
 	b.processBlocker = b.processBlock
 	return b

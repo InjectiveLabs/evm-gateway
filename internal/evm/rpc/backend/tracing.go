@@ -6,6 +6,7 @@ import (
 
 	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
 	evmtypes "github.com/InjectiveLabs/sdk-go/chain/evm/types"
+	"github.com/bytedance/sonic"
 	cmrpctypes "github.com/cometbft/cometbft/rpc/core/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/ethereum/go-ethereum/common"
@@ -137,7 +138,7 @@ func (b *Backend) TraceTransaction(hash common.Hash, config *rpctypes.TraceConfi
 	// Response format is unknown due to custom tracer config param
 	// More information can be found here https://geth.ethereum.org/docs/dapp/tracing-filtered
 	var decodedResult interface{}
-	err = json.Unmarshal(traceResult.Data, &decodedResult)
+	err = sonic.Unmarshal(traceResult.Data, &decodedResult)
 	if err != nil {
 		return nil, err
 	}
@@ -262,7 +263,7 @@ func (b *Backend) TraceBlock(height rpctypes.BlockNumber,
 	}
 
 	decodedResults := make([]*rpctypes.TxTraceResult, txsLength)
-	if err := json.Unmarshal(res.Data, &decodedResults); err != nil {
+	if err := sonic.Unmarshal(res.Data, &decodedResults); err != nil {
 		return nil, err
 	}
 	if b.indexer != nil && cacheable {
@@ -287,7 +288,7 @@ func (b *Backend) TraceCall(
 	}
 	b = b.WithContext(ctx).(*Backend)
 
-	bz, err := json.Marshal(&args)
+	bz, err := sonic.Marshal(&args)
 	if err != nil {
 		return nil, err
 	}
@@ -329,7 +330,7 @@ func (b *Backend) TraceCall(
 	// Response format is unknown due to custom tracer config param
 	// More information can be found here https://geth.ethereum.org/docs/dapp/tracing-filtered
 	var decodedResult interface{}
-	err = json.Unmarshal(traceResult.Data, &decodedResult)
+	err = sonic.Unmarshal(traceResult.Data, &decodedResult)
 	if err != nil {
 		return nil, err
 	}
@@ -339,7 +340,7 @@ func (b *Backend) TraceCall(
 
 func decodeCachedTraceTransaction(raw json.RawMessage) (interface{}, error) {
 	var decoded interface{}
-	if err := json.Unmarshal(raw, &decoded); err != nil {
+	if err := sonic.Unmarshal(raw, &decoded); err != nil {
 		return nil, err
 	}
 	return decoded, nil
@@ -347,7 +348,7 @@ func decodeCachedTraceTransaction(raw json.RawMessage) (interface{}, error) {
 
 func decodeCachedTraceBlock(raw json.RawMessage) ([]*rpctypes.TxTraceResult, error) {
 	var decoded []*rpctypes.TxTraceResult
-	if err := json.Unmarshal(raw, &decoded); err != nil {
+	if err := sonic.Unmarshal(raw, &decoded); err != nil {
 		return nil, err
 	}
 	if decoded == nil {
