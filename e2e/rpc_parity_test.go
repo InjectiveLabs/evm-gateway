@@ -79,6 +79,7 @@ func TestRPCParityAgainstLiveSource(t *testing.T) {
 		"--grpc-addr", grpcAddr,
 		"--accounts", accountsPath,
 		"--accounts-num", strconv.Itoa(seedAccountsNum),
+		"--min-gas-price", getenv("WEB3INJ_E2E_MIN_GAS_PRICE", "160000000inj"),
 	}
 
 	for _, tc := range []struct {

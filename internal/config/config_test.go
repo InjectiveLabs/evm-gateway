@@ -21,6 +21,18 @@ func TestLoadOverridesParallelTipAndGapSync(t *testing.T) {
 	}
 }
 
+func TestLoadOverridesCosmosEventVirtualization(t *testing.T) {
+	t.Setenv("WEB3INJ_VIRTUALIZE_COSMOS_EVENTS", "true")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if !cfg.VirtualizeCosmosEvents {
+		t.Fatal("expected cosmos event virtualization to be enabled from env")
+	}
+}
+
 func TestValidateOfflineRPCOnlyRequiresChainID(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.EnableSync = false

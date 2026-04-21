@@ -16,6 +16,7 @@ import (
 
 	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/backend"
 	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
+	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtualbank"
 	evmtypes "github.com/InjectiveLabs/sdk-go/chain/evm/types"
 )
 
@@ -93,7 +94,7 @@ type EthereumAPI interface {
 	// Other
 	Syncing(ctx context.Context) (interface{}, error)
 	Coinbase(ctx context.Context) (string, error)
-	GetTransactionLogs(ctx context.Context, txHash common.Hash) ([]*ethtypes.Log, error)
+	GetTransactionLogs(ctx context.Context, txHash common.Hash) ([]*virtualbank.RPCLog, error)
 	FillTransaction(ctx context.Context, args rpctypes.TransactionArgs) (*rpctypes.SignTransactionResult, error)
 	GetPendingTransactions(ctx context.Context) ([]*rpctypes.RPCTransaction, error)
 	// eth_signTransaction (on Ethereum.org)
@@ -419,7 +420,7 @@ func (e *PublicAPI) Coinbase(ctx context.Context) (string, error) {
 }
 
 // GetTransactionLogs returns the logs given a transaction hash.
-func (e *PublicAPI) GetTransactionLogs(ctx context.Context, txHash common.Hash) ([]*ethtypes.Log, error) {
+func (e *PublicAPI) GetTransactionLogs(ctx context.Context, txHash common.Hash) ([]*virtualbank.RPCLog, error) {
 	defer gotracer.Trace(&ctx)()
 	e.logger.Debug("eth_getTransactionLogs", "hash", txHash)
 	receipt, err := e.backend.WithContext(ctx).GetTransactionReceipt(txHash)
@@ -430,11 +431,14 @@ func (e *PublicAPI) GetTransactionLogs(ctx context.Context, txHash common.Hash) 
 	if !ok || logsRaw == nil {
 		return nil, nil
 	}
-	logs, ok := logsRaw.([]*ethtypes.Log)
-	if !ok {
+	switch logs := logsRaw.(type) {
+	case []*virtualbank.RPCLog:
+		return logs, nil
+	case []*ethtypes.Log:
+		return virtualbank.WrapLogs(logs, false, nil), nil
+	default:
 		return nil, nil
 	}
-	return logs, nil
 }
 
 // FillTransaction fills the defaults (nonce, gas, gasPrice or 1559 fields)

@@ -7,6 +7,7 @@ import (
 	"math/big"
 
 	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
+	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtualbank"
 
 	"log/slog"
 
@@ -93,7 +94,7 @@ const (
 
 // Logs searches the blockchain for matching log entries, returning all from the
 // first block that contains matches, updating the start of the filter accordingly.
-func (f *Filter) Logs(ctx context.Context, logLimit int, blockLimit int64) ([]*ethtypes.Log, error) {
+func (f *Filter) Logs(ctx context.Context, logLimit int, blockLimit int64) ([]*virtualbank.RPCLog, error) {
 	defer gotracer.Trace(&ctx)()
 
 	backend := f.backend
@@ -110,7 +111,7 @@ func (f *Filter) Logs(ctx context.Context, logLimit int, blockLimit int64) ([]*e
 			return nil, errors.Wrapf(err, "failed to fetch header by hash %s", f.criteria.BlockHash)
 		}
 		if header == nil || header.Number == nil {
-			return []*ethtypes.Log{}, nil
+			return []*virtualbank.RPCLog{}, nil
 		}
 		height := header.Number.Int64()
 
@@ -120,7 +121,7 @@ func (f *Filter) Logs(ctx context.Context, logLimit int, blockLimit int64) ([]*e
 			return nil, nil
 		}
 		if !bloomFilter(bloom, f.criteria.Addresses, f.criteria.Topics) {
-			return []*ethtypes.Log{}, nil
+			return []*virtualbank.RPCLog{}, nil
 		}
 
 		return f.blockLogsByHash(*f.criteria.BlockHash)
@@ -155,14 +156,14 @@ func (f *Filter) Logs(ctx context.Context, logLimit int, blockLimit int64) ([]*e
 
 	// check bounds
 	if f.criteria.FromBlock.Int64() > head {
-		return []*ethtypes.Log{}, nil
+		return []*virtualbank.RPCLog{}, nil
 	} else if f.criteria.ToBlock.Int64() > head+maxToOverhang {
 		f.criteria.ToBlock = big.NewInt(head + maxToOverhang)
 	}
 
 	from := f.criteria.FromBlock.Int64()
 	to := f.criteria.ToBlock.Int64()
-	logs := []*ethtypes.Log{}
+	logs := []*virtualbank.RPCLog{}
 
 	for height := from; height <= to; height++ {
 		bloom, err := backend.GetBlockBloomByHeight(height)
@@ -189,7 +190,7 @@ func (f *Filter) Logs(ctx context.Context, logLimit int, blockLimit int64) ([]*e
 	return logs, nil
 }
 
-func (f *Filter) blockLogsByHash(hash common.Hash) ([]*ethtypes.Log, error) {
+func (f *Filter) blockLogsByHash(hash common.Hash) ([]*virtualbank.RPCLog, error) {
 	logsList, err := f.backend.GetLogs(hash)
 	if err != nil {
 		return nil, err
@@ -197,7 +198,7 @@ func (f *Filter) blockLogsByHash(hash common.Hash) ([]*ethtypes.Log, error) {
 	return f.filterLogs(logsList), nil
 }
 
-func (f *Filter) blockLogsByHeight(height int64) ([]*ethtypes.Log, error) {
+func (f *Filter) blockLogsByHeight(height int64) ([]*virtualbank.RPCLog, error) {
 	logsList, err := f.backend.GetLogsByHeight(&height)
 	if err != nil {
 		return nil, err
@@ -205,8 +206,8 @@ func (f *Filter) blockLogsByHeight(height int64) ([]*ethtypes.Log, error) {
 	return f.filterLogs(logsList), nil
 }
 
-func (f *Filter) filterLogs(logsList [][]*ethtypes.Log) []*ethtypes.Log {
-	unfiltered := make([]*ethtypes.Log, 0)
+func (f *Filter) filterLogs(logsList [][]*virtualbank.RPCLog) []*virtualbank.RPCLog {
+	unfiltered := make([]*virtualbank.RPCLog, 0)
 	for _, txLogs := range logsList {
 		unfiltered = append(unfiltered, txLogs...)
 	}

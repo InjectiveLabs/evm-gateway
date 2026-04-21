@@ -3,9 +3,20 @@ package indexer
 import (
 	"testing"
 
+	txsigning "cosmossdk.io/x/tx/signing"
+	abci "github.com/cometbft/cometbft/abci/types"
+	coretypes "github.com/cometbft/cometbft/rpc/core/types"
+	tmtypes "github.com/cometbft/cometbft/types"
 	dbm "github.com/cosmos/cosmos-db"
+	"github.com/cosmos/cosmos-sdk/client"
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	"github.com/cosmos/cosmos-sdk/types/tx/signing"
+	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
+	protov2 "google.golang.org/protobuf/proto"
+
+	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtualbank"
 )
 
 func TestKVIndexerDeleteBlockRemovesIndexedDataForHeight(t *testing.T) {
@@ -58,6 +69,7 @@ func TestKVIndexerDeleteBlockRemovesIndexedDataForHeight(t *testing.T) {
 	mustSet(ReceiptKey(txHashB), []byte("{}"))
 	mustSet(RPCtxHashKey(txHashA), []byte("{}"))
 	mustSet(RPCtxHashKey(txHashB), []byte("{}"))
+	mustSet(VirtualRPCtxKey(txHashB), []byte{1})
 	mustSet(RPCtxIndexKey(height, 0), txHashA.Bytes())
 	mustSet(RPCtxIndexKey(height, 1), txHashB.Bytes())
 	mustSet(TraceTxKey(txHashA, nil), []byte(`{"type":"call"}`))
@@ -86,6 +98,7 @@ func TestKVIndexerDeleteBlockRemovesIndexedDataForHeight(t *testing.T) {
 	assertMissing(ReceiptKey(txHashB))
 	assertMissing(RPCtxHashKey(txHashA))
 	assertMissing(RPCtxHashKey(txHashB))
+	assertMissing(VirtualRPCtxKey(txHashB))
 	assertMissing(RPCtxIndexKey(height, 0))
 	assertMissing(RPCtxIndexKey(height, 1))
 	assertMissing(TraceTxKey(txHashA, nil))
@@ -151,6 +164,155 @@ func TestKVIndexerCachedBlockLookupsUseHashAndRPCIndexCollections(t *testing.T) 
 	}
 }
 
+func TestKVIndexerIndexesVirtualBankTransfersForCosmosAndFinalizeEvents(t *testing.T) {
+	db := dbm.NewMemDB()
+	tx := testSDKTx{msgs: []sdk.Msg{&banktypes.MsgSend{}}}
+	kv := NewKVIndexer(
+		db,
+		testLogger(),
+		client.Context{TxConfig: testTxConfig{tx: tx}},
+		WithVirtualBankTransfers(true, "1337"),
+	)
+
+	block := tmtypes.MakeBlock(7, []tmtypes.Tx{tmtypes.Tx("cosmos-bank-tx")}, nil, nil)
+	blockResults := &coretypes.ResultBlockResults{
+		Height: 7,
+		TxResults: []*abci.ExecTxResult{
+			{
+				Code:    abci.CodeTypeOK,
+				GasUsed: 42,
+				Events: []abci.Event{
+					{
+						Type: virtualbank.EventTypeTransfer,
+						Attributes: []abci.EventAttribute{
+							{Key: "sender", Value: "0x1111111111111111111111111111111111111111"},
+							{Key: "recipient", Value: "0x2222222222222222222222222222222222222222"},
+							{Key: "amount", Value: "100inj"},
+							{Key: virtualbank.AttributeMsgIndex, Value: "0"},
+						},
+					},
+				},
+			},
+		},
+		FinalizeBlockEvents: []abci.Event{
+			{
+				Type: virtualbank.EventTypeCoinReceived,
+				Attributes: []abci.EventAttribute{
+					{Key: "receiver", Value: "0x4444444444444444444444444444444444444444"},
+					{Key: "amount", Value: "6inj"},
+					{Key: virtualbank.AttributeMode, Value: virtualbank.ModeBeginBlock},
+				},
+			},
+			{
+				Type: virtualbank.EventTypeBurn,
+				Attributes: []abci.EventAttribute{
+					{Key: "burner", Value: "0x3333333333333333333333333333333333333333"},
+					{Key: "amount", Value: "5inj"},
+					{Key: virtualbank.AttributeMode, Value: virtualbank.ModeEndBlock},
+				},
+			},
+		},
+	}
+
+	if err := kv.IndexBlockWithResults(block, blockResults); err != nil {
+		t.Fatalf("IndexBlockWithResults returned error: %v", err)
+	}
+
+	meta, err := kv.GetBlockMetaByHeight(7)
+	if err != nil {
+		t.Fatalf("GetBlockMetaByHeight returned error: %v", err)
+	}
+	if !meta.VirtualizedCosmosEvents {
+		t.Fatal("expected block meta to record virtualized cosmos event mode")
+	}
+	if meta.EthTxCount != 3 {
+		t.Fatalf("unexpected visible tx count: got %d want 3", meta.EthTxCount)
+	}
+
+	hashes, err := kv.GetRPCTransactionHashesByBlockHeight(7)
+	if err != nil {
+		t.Fatalf("GetRPCTransactionHashesByBlockHeight returned error: %v", err)
+	}
+	if len(hashes) != 3 {
+		t.Fatalf("unexpected hash count: got %d want 3", len(hashes))
+	}
+	if hashes[0] != virtualbank.BeginBlockHash(7) {
+		t.Fatalf("unexpected begin block virtual hash: got %s want %s", hashes[0], virtualbank.BeginBlockHash(7))
+	}
+	if hashes[1] != virtualbank.CosmosTxHash(block.Txs[0]) {
+		t.Fatalf("unexpected cosmos virtual hash: got %s want %s", hashes[1], virtualbank.CosmosTxHash(block.Txs[0]))
+	}
+	if hashes[2] != virtualbank.EndBlockHash(7) {
+		t.Fatalf("unexpected finalize virtual hash: got %s want %s", hashes[2], virtualbank.EndBlockHash(7))
+	}
+
+	rpcTx, err := kv.GetRPCTransactionByBlockAndIndex(7, 1)
+	if err != nil {
+		t.Fatalf("GetRPCTransactionByBlockAndIndex returned error: %v", err)
+	}
+	if rpcTx.Hash != hashes[1] {
+		t.Fatalf("unexpected rpc tx hash: got %s want %s", rpcTx.Hash, hashes[1])
+	}
+	if rpcTx.To == nil || *rpcTx.To != virtualbank.ContractAddress {
+		t.Fatalf("expected virtual tx to target reserved contract address, got %v", rpcTx.To)
+	}
+	if len(rpcTx.Input) != 0 {
+		t.Fatalf("expected virtual tx input to be empty, got %s", hexutil.Encode(rpcTx.Input))
+	}
+	if !rpcTx.Virtual {
+		t.Fatal("expected virtual tx field to be true")
+	}
+	originalCosmosHash := virtualbank.OriginalCosmosTxHash(block.Txs[0])
+	if rpcTx.CosmosHash == nil || *rpcTx.CosmosHash != originalCosmosHash {
+		t.Fatalf("unexpected cosmos hash: got %v want %s", rpcTx.CosmosHash, originalCosmosHash.Hex())
+	}
+	isVirtual, err := kv.IsVirtualRPCTransaction(hashes[1])
+	if err != nil {
+		t.Fatalf("IsVirtualRPCTransaction returned error: %v", err)
+	}
+	if !isVirtual {
+		t.Fatal("expected cosmos tx marker to be virtual")
+	}
+
+	logs, err := kv.GetLogsByBlockHeight(7)
+	if err != nil {
+		t.Fatalf("GetLogsByBlockHeight returned error: %v", err)
+	}
+	if len(logs) != 3 {
+		t.Fatalf("unexpected log groups: got %d want 3", len(logs))
+	}
+	if logs[0][0].Topics[0] != virtualbank.TopicCoinReceived || logs[0][0].TxIndex != 0 || logs[0][0].Index != 0 {
+		t.Fatalf("unexpected first virtual log: topic=%s tx=%d index=%d", logs[0][0].Topics[0], logs[0][0].TxIndex, logs[0][0].Index)
+	}
+	if !logs[0][0].Virtual || logs[0][0].CosmosHash != nil {
+		t.Fatalf("unexpected begin block virtual metadata: virtual=%t cosmos_hash=%v", logs[0][0].Virtual, logs[0][0].CosmosHash)
+	}
+	if logs[1][0].Topics[0] != virtualbank.TopicTransfer || logs[1][0].TxIndex != 1 || logs[1][0].Index != 1 {
+		t.Fatalf("unexpected cosmos virtual log: topic=%s tx=%d index=%d", logs[1][0].Topics[0], logs[1][0].TxIndex, logs[1][0].Index)
+	}
+	if !logs[1][0].Virtual || logs[1][0].CosmosHash == nil || *logs[1][0].CosmosHash != originalCosmosHash {
+		t.Fatalf("unexpected cosmos virtual metadata: virtual=%t cosmos_hash=%v", logs[1][0].Virtual, logs[1][0].CosmosHash)
+	}
+	if logs[2][0].Topics[0] != virtualbank.TopicBurn || logs[2][0].TxIndex != 2 || logs[2][0].Index != 2 {
+		t.Fatalf("unexpected finalize virtual log: topic=%s tx=%d index=%d", logs[2][0].Topics[0], logs[2][0].TxIndex, logs[2][0].Index)
+	}
+	if !logs[2][0].Virtual || logs[2][0].CosmosHash != nil {
+		t.Fatalf("unexpected end block virtual metadata: virtual=%t cosmos_hash=%v", logs[2][0].Virtual, logs[2][0].CosmosHash)
+	}
+
+	receipt, err := kv.GetReceiptByTxHash(hashes[1])
+	if err != nil {
+		t.Fatalf("GetReceiptByTxHash returned error: %v", err)
+	}
+	receiptLogs, ok := receipt["logs"].([]*virtualbank.RPCLog)
+	if !ok || len(receiptLogs) != 1 {
+		t.Fatalf("unexpected receipt logs: %#v", receipt["logs"])
+	}
+	if !receiptLogs[0].Virtual || receiptLogs[0].CosmosHash == nil || *receiptLogs[0].CosmosHash != originalCosmosHash {
+		t.Fatalf("unexpected receipt virtual metadata: virtual=%t cosmos_hash=%v", receiptLogs[0].Virtual, receiptLogs[0].CosmosHash)
+	}
+}
+
 func TestKVIndexerTraceCacheRoundTrip(t *testing.T) {
 	db := dbm.NewMemDB()
 	kv := &KVIndexer{db: db, logger: testLogger()}
@@ -182,4 +344,60 @@ func TestKVIndexerTraceCacheRoundTrip(t *testing.T) {
 	if string(gotBlock) != string(blockPayload) {
 		t.Fatalf("unexpected block trace payload: got %s want %s", gotBlock, blockPayload)
 	}
+}
+
+type testSDKTx struct {
+	msgs []sdk.Msg
+}
+
+func (t testSDKTx) GetMsgs() []sdk.Msg {
+	return t.msgs
+}
+
+func (t testSDKTx) GetMsgsV2() ([]protov2.Message, error) {
+	return nil, nil
+}
+
+type testTxConfig struct {
+	tx sdk.Tx
+}
+
+func (c testTxConfig) TxEncoder() sdk.TxEncoder {
+	return func(tx sdk.Tx) ([]byte, error) { return nil, nil }
+}
+
+func (c testTxConfig) TxDecoder() sdk.TxDecoder {
+	return func(txBytes []byte) (sdk.Tx, error) { return c.tx, nil }
+}
+
+func (c testTxConfig) TxJSONEncoder() sdk.TxEncoder {
+	return c.TxEncoder()
+}
+
+func (c testTxConfig) TxJSONDecoder() sdk.TxDecoder {
+	return c.TxDecoder()
+}
+
+func (c testTxConfig) MarshalSignatureJSON([]signing.SignatureV2) ([]byte, error) {
+	return nil, nil
+}
+
+func (c testTxConfig) UnmarshalSignatureJSON([]byte) ([]signing.SignatureV2, error) {
+	return nil, nil
+}
+
+func (c testTxConfig) NewTxBuilder() client.TxBuilder {
+	return nil
+}
+
+func (c testTxConfig) WrapTxBuilder(sdk.Tx) (client.TxBuilder, error) {
+	return nil, nil
+}
+
+func (c testTxConfig) SignModeHandler() *txsigning.HandlerMap {
+	return nil
+}
+
+func (c testTxConfig) SigningContext() *txsigning.Context {
+	return nil
 }

@@ -7,6 +7,8 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/eth/filters"
+
+	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtualbank"
 )
 
 const (
@@ -20,8 +22,8 @@ const (
 // [null, B] -> anything in first position, B in second position
 // [A, B] -> A in first position and B in second position
 // [[A, B], [A, B]] -> A or B in first position, A or B in second position
-func FilterLogs(logs []*ethtypes.Log, fromBlock, toBlock *big.Int, addresses []common.Address, topics [][]common.Hash) []*ethtypes.Log {
-	var ret []*ethtypes.Log
+func FilterLogs(logs []*virtualbank.RPCLog, fromBlock, toBlock *big.Int, addresses []common.Address, topics [][]common.Hash) []*virtualbank.RPCLog {
+	var ret []*virtualbank.RPCLog
 Logs:
 	for _, log := range logs {
 		if fromBlock != nil && fromBlock.Int64() >= 0 && fromBlock.Uint64() > log.BlockNumber {
@@ -105,9 +107,9 @@ func returnHashes(hashes []common.Hash) []common.Hash {
 
 // returnLogs is a helper that will return an empty log array in case the given logs array is nil,
 // otherwise the given logs array is returned.
-func returnLogs(logs []*ethtypes.Log) []*ethtypes.Log {
+func returnLogs(logs []*virtualbank.RPCLog) []*virtualbank.RPCLog {
 	if logs == nil {
-		return []*ethtypes.Log{}
+		return []*virtualbank.RPCLog{}
 	}
 	return logs
 }

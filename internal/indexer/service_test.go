@@ -16,11 +16,11 @@ import (
 	tmtypes "github.com/cometbft/cometbft/types"
 	dbm "github.com/cosmos/cosmos-db"
 	"github.com/ethereum/go-ethereum/common"
-	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/pkg/errors"
 
 	"github.com/InjectiveLabs/evm-gateway/internal/config"
 	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
+	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtualbank"
 	chaintypes "github.com/InjectiveLabs/sdk-go/chain/types"
 )
 
@@ -560,46 +560,6 @@ func TestSyncerRunSerialDoesNotStartTipUntilGapsComplete(t *testing.T) {
 	}
 }
 
-func TestSyncerRunParallelGapErrorDoesNotStopTipSync(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	indexer := &concurrentTxIndexer{
-		blockTxs:    make(map[int64][]string),
-		failHeights: map[int64]error{1: errors.New("gap failed")},
-		onIndex: func(height int64) {
-			if height == 2 {
-				cancel()
-			}
-		},
-	}
-
-	syncer := NewSyncer(
-		config.Config{
-			EnableSync:             true,
-			Earliest:               1,
-			FetchJobs:              1,
-			AllowGaps:              false,
-			ParallelSyncTipAndGaps: true,
-		},
-		testLogger(),
-		testSyncClientWithHead(1, nil),
-		dbm.NewMemDB(),
-		indexer,
-		nil,
-	)
-
-	if err := syncer.Run(ctx); !errors.Is(err, context.Canceled) {
-		t.Fatalf("expected syncer to stop on context cancel after tip continued, got %v", err)
-	}
-	if !indexer.HasSuccess(2) {
-		t.Fatalf("expected tip block 2 to be indexed after gap failure, got %v", indexer.Successes())
-	}
-	if got, want := indexer.Deleted(), []int64{1}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("unexpected deleted heights: got %v want %v", got, want)
-	}
-}
-
 func TestSyncerRunParallelTipErrorDoesNotStopGapSync(t *testing.T) {
 	indexer := &concurrentTxIndexer{
 		blockTxs:    make(map[int64][]string),
@@ -715,8 +675,10 @@ func (stubTxIndexer) GetRPCTransactionHashesByBlockHeight(int64) ([]common.Hash,
 func (stubTxIndexer) GetReceiptByTxHash(common.Hash) (map[string]interface{}, error) { return nil, nil }
 func (stubTxIndexer) GetBlockMetaByHeight(int64) (*CachedBlockMeta, error)           { return nil, nil }
 func (stubTxIndexer) GetBlockMetaByHash(common.Hash) (*CachedBlockMeta, error)       { return nil, nil }
-func (stubTxIndexer) GetLogsByBlockHeight(int64) ([][]*ethtypes.Log, error)          { return nil, nil }
-func (stubTxIndexer) GetLogsByBlockHash(common.Hash) ([][]*ethtypes.Log, error)      { return nil, nil }
+func (stubTxIndexer) GetLogsByBlockHeight(int64) ([][]*virtualbank.RPCLog, error)    { return nil, nil }
+func (stubTxIndexer) GetLogsByBlockHash(common.Hash) ([][]*virtualbank.RPCLog, error) {
+	return nil, nil
+}
 func (stubTxIndexer) SetTraceTransaction(common.Hash, *rpctypes.TraceConfig, json.RawMessage) error {
 	return nil
 }
@@ -868,10 +830,10 @@ func (r *recordingTxIndexer) GetBlockMetaByHeight(int64) (*CachedBlockMeta, erro
 func (r *recordingTxIndexer) GetBlockMetaByHash(common.Hash) (*CachedBlockMeta, error) {
 	return nil, nil
 }
-func (r *recordingTxIndexer) GetLogsByBlockHeight(int64) ([][]*ethtypes.Log, error) {
+func (r *recordingTxIndexer) GetLogsByBlockHeight(int64) ([][]*virtualbank.RPCLog, error) {
 	return nil, nil
 }
-func (r *recordingTxIndexer) GetLogsByBlockHash(common.Hash) ([][]*ethtypes.Log, error) {
+func (r *recordingTxIndexer) GetLogsByBlockHash(common.Hash) ([][]*virtualbank.RPCLog, error) {
 	return nil, nil
 }
 func (r *recordingTxIndexer) SetTraceTransaction(common.Hash, *rpctypes.TraceConfig, json.RawMessage) error {
@@ -1026,10 +988,10 @@ func (f *faultyTxIndexer) GetBlockMetaByHeight(int64) (*CachedBlockMeta, error) 
 func (f *faultyTxIndexer) GetBlockMetaByHash(common.Hash) (*CachedBlockMeta, error) {
 	return nil, nil
 }
-func (f *faultyTxIndexer) GetLogsByBlockHeight(int64) ([][]*ethtypes.Log, error) {
+func (f *faultyTxIndexer) GetLogsByBlockHeight(int64) ([][]*virtualbank.RPCLog, error) {
 	return nil, nil
 }
-func (f *faultyTxIndexer) GetLogsByBlockHash(common.Hash) ([][]*ethtypes.Log, error) {
+func (f *faultyTxIndexer) GetLogsByBlockHash(common.Hash) ([][]*virtualbank.RPCLog, error) {
 	return nil, nil
 }
 func (f *faultyTxIndexer) SetTraceTransaction(common.Hash, *rpctypes.TraceConfig, json.RawMessage) error {

@@ -5,10 +5,13 @@ import (
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/pkg/errors"
 	"upd.dev/xlab/gotracer"
+
+	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
+	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtualbank"
 )
 
 // GetLogs returns all the logs from all the ethereum transactions in a block.
-func (b *Backend) GetLogs(hash common.Hash) ([][]*ethtypes.Log, error) {
+func (b *Backend) GetLogs(hash common.Hash) ([][]*virtualbank.RPCLog, error) {
 	ctx := b.operationContext()
 	if b.ctx != nil {
 		defer gotracer.Trace(&ctx, b.baseTraceTags)()
@@ -18,16 +21,27 @@ func (b *Backend) GetLogs(hash common.Hash) ([][]*ethtypes.Log, error) {
 	b = b.WithContext(ctx).(*Backend)
 
 	if b.indexer != nil {
-		logs, err := b.indexer.GetLogsByBlockHash(hash)
-		if err == nil {
-			if b.syncStatus != nil {
-				b.syncStatus.RecordBlockLogsCacheHit()
+		meta, metaErr := b.indexer.GetBlockMetaByHash(hash)
+		if metaErr == nil && meta != nil && b.cachedMetaMatchesVirtualization(meta) {
+			logs, err := b.indexer.GetLogsByBlockHash(hash)
+			if err == nil {
+				if b.syncStatus != nil {
+					b.syncStatus.RecordBlockLogsCacheHit()
+				}
+				return logs, nil
 			}
-			return logs, nil
-		}
-		if b.syncStatus != nil {
-			b.syncStatus.RecordBlockLogsCacheMiss()
-			b.syncStatus.RecordBlockLogsLiveFallback()
+			if b.syncStatus != nil {
+				b.syncStatus.RecordBlockLogsCacheMiss()
+				b.syncStatus.RecordBlockLogsLiveFallback()
+			}
+		} else if metaErr == nil && meta != nil && !b.cachedMetaMatchesVirtualization(meta) {
+			if b.cfg.OfflineRPCOnly {
+				return nil, errors.Errorf("cached block virtualization mode mismatch at height %d", meta.Height)
+			}
+			if b.syncStatus != nil {
+				b.syncStatus.RecordBlockLogsCacheMiss()
+				b.syncStatus.RecordBlockLogsLiveFallback()
+			}
 		}
 	}
 
@@ -42,7 +56,7 @@ func (b *Backend) GetLogs(hash common.Hash) ([][]*ethtypes.Log, error) {
 }
 
 // GetLogsByHeight returns all the logs from all the ethereum transactions in a block.
-func (b *Backend) GetLogsByHeight(height *int64) ([][]*ethtypes.Log, error) {
+func (b *Backend) GetLogsByHeight(height *int64) ([][]*virtualbank.RPCLog, error) {
 	ctx := b.operationContext()
 	if b.ctx != nil {
 		defer gotracer.Trace(&ctx, b.baseTraceTags)()
@@ -52,16 +66,27 @@ func (b *Backend) GetLogsByHeight(height *int64) ([][]*ethtypes.Log, error) {
 	b = b.WithContext(ctx).(*Backend)
 
 	if b.indexer != nil {
-		logs, err := b.indexer.GetLogsByBlockHeight(*height)
-		if err == nil {
-			if b.syncStatus != nil {
-				b.syncStatus.RecordBlockLogsCacheHit()
+		meta, metaErr := b.indexer.GetBlockMetaByHeight(*height)
+		if metaErr == nil && meta != nil && b.cachedMetaMatchesVirtualization(meta) {
+			logs, err := b.indexer.GetLogsByBlockHeight(*height)
+			if err == nil {
+				if b.syncStatus != nil {
+					b.syncStatus.RecordBlockLogsCacheHit()
+				}
+				return logs, nil
 			}
-			return logs, nil
-		}
-		if b.syncStatus != nil {
-			b.syncStatus.RecordBlockLogsCacheMiss()
-			b.syncStatus.RecordBlockLogsLiveFallback()
+			if b.syncStatus != nil {
+				b.syncStatus.RecordBlockLogsCacheMiss()
+				b.syncStatus.RecordBlockLogsLiveFallback()
+			}
+		} else if metaErr == nil && meta != nil && !b.cachedMetaMatchesVirtualization(meta) {
+			if b.cfg.OfflineRPCOnly {
+				return nil, errors.Errorf("cached block virtualization mode mismatch at height %d", meta.Height)
+			}
+			if b.syncStatus != nil {
+				b.syncStatus.RecordBlockLogsCacheMiss()
+				b.syncStatus.RecordBlockLogsLiveFallback()
+			}
 		}
 	}
 
@@ -69,6 +94,21 @@ func (b *Backend) GetLogsByHeight(height *int64) ([][]*ethtypes.Log, error) {
 	blockRes, err := b.TendermintBlockResultByNumber(height)
 	if err != nil {
 		return nil, err
+	}
+
+	if b.virtualBankEnabled() {
+		resBlock, err := b.TendermintBlockByNumber(rpctypes.BlockNumber(*height))
+		if err != nil {
+			return nil, err
+		}
+		if resBlock == nil || resBlock.Block == nil {
+			return nil, errors.Errorf("block not found for height %d", *height)
+		}
+		view, err := b.liveVirtualBankBlockView(resBlock, blockRes)
+		if err != nil {
+			return nil, err
+		}
+		return view.Logs, nil
 	}
 
 	return GetLogsFromBlockResults(blockRes)
@@ -85,7 +125,7 @@ func (b *Backend) GetBlockBloomByHeight(height int64) (ethtypes.Bloom, error) {
 
 	if b.indexer != nil {
 		meta, err := b.indexer.GetBlockMetaByHeight(height)
-		if err == nil {
+		if err == nil && b.cachedMetaMatchesVirtualization(meta) {
 			return ethtypes.BytesToBloom(common.FromHex(meta.Bloom)), nil
 		}
 	}

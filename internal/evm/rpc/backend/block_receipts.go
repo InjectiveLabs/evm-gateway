@@ -80,6 +80,9 @@ func (b *Backend) cachedBlockReceipts(blockNrOrHash rpctypes.BlockNumberOrHash) 
 	if err != nil || meta == nil {
 		return nil, err
 	}
+	if !b.cachedMetaMatchesVirtualization(meta) {
+		return nil, txindexer.ErrCacheMiss
+	}
 	if err := validateCachedBlockMeta(meta); err != nil {
 		return nil, err
 	}
@@ -141,6 +144,14 @@ func (b *Backend) liveBlockReceipts(resBlock *cmrpctypes.ResultBlock) ([]map[str
 	}
 	if blockRes == nil {
 		return nil, nil
+	}
+
+	if b.virtualBankEnabled() {
+		view, err := b.liveVirtualBankBlockView(resBlock, blockRes)
+		if err != nil {
+			return nil, err
+		}
+		return view.Receipts, nil
 	}
 
 	normalizedTxResults, err := rpctypes.NormalizeTxResponseIndexes(blockRes.TxResults)

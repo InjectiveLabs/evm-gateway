@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/big"
+	"strings"
 
 	errorsmod "cosmossdk.io/errors"
 	abci "github.com/cometbft/cometbft/abci/types"
@@ -22,6 +23,7 @@ import (
 	"upd.dev/xlab/gotracer"
 
 	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
+	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtualbank"
 	evmtypes "github.com/InjectiveLabs/sdk-go/chain/evm/types"
 	chaintypes "github.com/InjectiveLabs/sdk-go/chain/types"
 )
@@ -45,14 +47,32 @@ func WithCachedBlockGasLimit(gasLimit uint64) KVIndexerOption {
 	}
 }
 
+func WithVirtualBankTransfers(enabled bool, chainID string) KVIndexerOption {
+	return func(kv *KVIndexer) {
+		kv.virtualBankTransfers = enabled
+		if !enabled {
+			return
+		}
+		chainID = strings.TrimSpace(chainID)
+		if chainID == "" {
+			return
+		}
+		if parsed, ok := new(big.Int).SetString(chainID, 10); ok && parsed.Sign() > 0 {
+			kv.virtualChainID = parsed
+		}
+	}
+}
+
 // KVIndexer implements a eth tx indexer on a KV db.
 type KVIndexer struct {
-	ctx            context.Context
-	db             dbm.DB
-	logger         *slog.Logger
-	clientCtx      client.Context
-	cachedGasLimit uint64
-	baseTraceTags  gotracer.Tags
+	ctx                  context.Context
+	db                   dbm.DB
+	logger               *slog.Logger
+	clientCtx            client.Context
+	cachedGasLimit       uint64
+	virtualBankTransfers bool
+	virtualChainID       *big.Int
+	baseTraceTags        gotracer.Tags
 }
 
 // NewKVIndexer creates the KVIndexer
@@ -139,8 +159,9 @@ func (kv *KVIndexer) indexBlockWithStats(block *cmtypes.Block, blockResults *cor
 	}
 
 	blockHash := common.BytesToHash(block.Hash())
-	flatLogs := make([]*ethtypes.Log, 0)
-	blockLogs := make([][]*ethtypes.Log, 0)
+	flatLogs := make([]*virtualbank.RPCLog, 0)
+	blockLogs := make([][]*virtualbank.RPCLog, 0)
+	var logIndex uint
 	blockGasUsed := uint64(0)
 	blockResultGasUsedBeforeTx := uint64(0)
 	blockBaseFee := blockBaseFeeFromResults(blockResults)
@@ -155,6 +176,66 @@ func (kv *KVIndexer) indexBlockWithStats(block *cmtypes.Block, blockResults *cor
 
 	// record index of valid eth tx during the iteration
 	var ethTxIndex int32
+	var rpcTxIndex int32
+	appendLogGroup := func(logs []*virtualbank.RPCLog) {
+		blockLogs = append(blockLogs, logs)
+		flatLogs = append(flatLogs, logs...)
+	}
+	virtualLogContext := func(txHash common.Hash, txIndex int32) virtualbank.LogContext {
+		return virtualbank.LogContext{
+			BlockHash:     blockHash,
+			BlockNumber:   uint64(block.Height),
+			TxHash:        txHash,
+			TxIndex:       uint(txIndex),
+			FirstLogIndex: logIndex,
+		}
+	}
+	storeVirtualTx := func(txHash common.Hash, txIndex int32, logs []*virtualbank.RPCLog, status uint64, gasUsed uint64, cumulativeGasUsed uint64, cosmosHash *common.Hash) error {
+		receipt := kv.buildVirtualCachedReceipt(
+			status,
+			cumulativeGasUsed,
+			gasUsed,
+			logs,
+			txHash,
+			blockHash,
+			uint64(block.Height),
+			uint64(txIndex),
+		)
+		if err := kv.saveVirtualRPCTransaction(batch, block.Height, txIndex, txHash, blockHash, receipt, cosmosHash); err != nil {
+			return errorsmod.Wrapf(err, "IndexBlock %d", block.Height)
+		}
+		appendLogGroup(logs)
+		return nil
+	}
+
+	var endBlockEvents []virtualbank.TransferEvent
+	if kv.virtualBankTransfers && blockResults != nil {
+		beginBlockEvents, parsedEndEvents, err := virtualbank.SplitBlockEvents(blockResults.FinalizeBlockEvents)
+		if err != nil {
+			return stats, newBlockParseError(err, "block %d: failed to parse finalize virtual bank events", block.Height)
+		}
+		endBlockEvents = parsedEndEvents
+		if len(beginBlockEvents) > 0 {
+			txHash := virtualbank.BeginBlockHash(block.Height)
+			logs, err := virtualbank.Logs(beginBlockEvents, virtualLogContext(txHash, rpcTxIndex))
+			if err != nil {
+				return stats, newBlockParseError(err, "block %d: failed to build begin block virtual bank logs", block.Height)
+			}
+			logIndex += uint(len(logs))
+			if err := storeVirtualTx(
+				txHash,
+				rpcTxIndex,
+				logs,
+				uint64(ethtypes.ReceiptStatusSuccessful),
+				0,
+				0,
+				nil,
+			); err != nil {
+				return stats, err
+			}
+			rpcTxIndex++
+		}
+	}
 	for txIndex, tx := range block.Txs {
 		if txIndex >= len(normalizedTxResults) {
 			return stats, newBlockParseError(
@@ -177,7 +258,46 @@ func (kv *KVIndexer) indexBlockWithStats(block *cmtypes.Block, blockResults *cor
 			return stats, newBlockParseError(err, "block %d txIndex %d: failed to decode tx", block.Height, txIndex)
 		}
 
+		msgs := tx.GetMsgs()
+		ethMsgIndexes := make(map[int]bool)
+		for msgIndex, msg := range msgs {
+			if _, ok := msg.(*evmtypes.MsgEthereumTx); ok {
+				ethMsgIndexes[msgIndex] = true
+			}
+		}
+
+		var bankEvents []virtualbank.TransferEvent
+		if kv.virtualBankTransfers {
+			bankEvents, err = virtualbank.ParseEvents(result.Events)
+			if err != nil {
+				return stats, newBlockParseError(err, "block %d txIndex %d: failed to parse virtual bank events", block.Height, txIndex)
+			}
+		}
+
 		if !isEthTx(tx) {
+			if kv.virtualBankTransfers {
+				events := virtualbank.EventsForNonEthMessages(bankEvents, ethMsgIndexes, len(msgs))
+				if len(events) > 0 {
+					cosmosHash := virtualbank.OriginalCosmosTxHash(block.Txs[txIndex])
+					txHash := virtualbank.CosmosTxHash(block.Txs[txIndex])
+					ctx := virtualLogContext(txHash, rpcTxIndex)
+					ctx.CosmosHash = &cosmosHash
+					logs, err := virtualbank.Logs(events, ctx)
+					if err != nil {
+						return stats, newBlockParseError(err, "block %d txIndex %d: failed to build virtual bank logs", block.Height, txIndex)
+					}
+					logIndex += uint(len(logs))
+
+					status := uint64(ethtypes.ReceiptStatusSuccessful)
+					if result.Code != abci.CodeTypeOK {
+						status = uint64(ethtypes.ReceiptStatusFailed)
+					}
+					if err := storeVirtualTx(txHash, rpcTxIndex, logs, status, resultGasUsed, blockResultGasUsedBeforeTx+resultGasUsed, &cosmosHash); err != nil {
+						return stats, err
+					}
+					rpcTxIndex++
+				}
+			}
 			blockGasUsed += resultGasUsed
 			blockResultGasUsedBeforeTx += resultGasUsed
 			continue
@@ -189,7 +309,7 @@ func (kv *KVIndexer) indexBlockWithStats(block *cmtypes.Block, blockResults *cor
 		}
 
 		var cumulativeTxEthGasUsed uint64
-		for msgIndex, msg := range tx.GetMsgs() {
+		for msgIndex, msg := range msgs {
 			ethMsg, ok := msg.(*evmtypes.MsgEthereumTx)
 			if !ok {
 				// NOTE: non-evm msgs are ignored and excluded from cumulativeGasUsed.
@@ -200,11 +320,16 @@ func (kv *KVIndexer) indexBlockWithStats(block *cmtypes.Block, blockResults *cor
 			var txReason string
 			var txVMError string
 
+			visibleTxIndex := ethTxIndex
+			if kv.virtualBankTransfers {
+				visibleTxIndex = rpcTxIndex
+			}
+
 			txResult := chaintypes.TxResult{
 				Height:     block.Height,
 				TxIndex:    uint32(txIndex),
 				MsgIndex:   uint32(msgIndex),
-				EthTxIndex: ethTxIndex,
+				EthTxIndex: visibleTxIndex,
 			}
 			if result.Code != abci.CodeTypeOK && result.Codespace != evmtypes.ModuleName {
 				// exceeds block gas limit scenario, set gas used to gas limit because that's what's charged by ante handler.
@@ -249,14 +374,30 @@ func (kv *KVIndexer) indexBlockWithStats(block *cmtypes.Block, blockResults *cor
 				return stats, newBlockParseError(nil, "block %d txIndex %d msgIndex %d: failed to unpack eth tx data", block.Height, txIndex, msgIndex)
 			}
 
-			var logs []*ethtypes.Log
+			var logs []*virtualbank.RPCLog
 			if len(result.Data) > 0 {
-				logs, err = evmtypes.DecodeMsgLogs(result.Data, msgIndex, uint64(block.Height))
+				evmLogs, err := evmtypes.DecodeMsgLogs(result.Data, msgIndex, uint64(block.Height))
 				if err != nil {
 					return stats, newBlockParseError(err, "block %d txIndex %d msgIndex %d: failed to decode msg logs", block.Height, txIndex, msgIndex)
 				}
+				logs = virtualbank.WrapLogs(evmLogs, false, nil)
 			} else if !txResult.Failed {
 				return stats, newBlockParseError(nil, "block %d txIndex %d msgIndex %d: missing tx response data", block.Height, txIndex, msgIndex)
+			}
+
+			if kv.virtualBankTransfers {
+				virtualbank.SetLogMetadata(logs, virtualLogContext(txHash, visibleTxIndex))
+				logIndex += uint(len(logs))
+
+				events := virtualbank.EventsForMsg(bankEvents, msgIndex, len(msgs))
+				if len(events) > 0 {
+					virtualLogs, err := virtualbank.Logs(events, virtualLogContext(txHash, visibleTxIndex))
+					if err != nil {
+						return stats, newBlockParseError(err, "block %d txIndex %d msgIndex %d: failed to build virtual bank logs", block.Height, txIndex, msgIndex)
+					}
+					logIndex += uint(len(virtualLogs))
+					logs = append(logs, virtualLogs...)
+				}
 			}
 
 			status := uint64(ethtypes.ReceiptStatusSuccessful)
@@ -292,7 +433,7 @@ func (kv *KVIndexer) indexBlockWithStats(block *cmtypes.Block, blockResults *cor
 				contractAddress,
 				blockHash,
 				uint64(block.Height),
-				uint64(ethTxIndex),
+				uint64(visibleTxIndex),
 				txData.GasPrice(),
 				from,
 				txData.To(),
@@ -306,50 +447,100 @@ func (kv *KVIndexer) indexBlockWithStats(block *cmtypes.Block, blockResults *cor
 				ethMsg,
 				blockHash,
 				uint64(block.Height),
-				uint64(ethTxIndex),
+				uint64(visibleTxIndex),
 				blockBaseFee,
 				txData.ChainId(),
 			)
 			if err != nil {
 				return stats, newBlockParseError(err, "block %d txIndex %d msgIndex %d txHash %s: failed to build rpc tx", block.Height, txIndex, msgIndex, txHash.Hex())
 			}
+			rpcTx.Hash = txHash
 			if err := batch.Set(RPCtxHashKey(txHash), mustJSON(rpcTx)); err != nil {
 				return stats, errorsmod.Wrapf(err, "IndexBlock %d, set rpc tx hash", block.Height)
 			}
-			if err := batch.Set(RPCtxIndexKey(block.Height, ethTxIndex), txHash.Bytes()); err != nil {
+			if err := batch.Set(RPCtxIndexKey(block.Height, visibleTxIndex), txHash.Bytes()); err != nil {
 				return stats, errorsmod.Wrapf(err, "IndexBlock %d, set rpc tx index", block.Height)
 			}
 
-			blockLogs = append(blockLogs, logs)
-			flatLogs = append(flatLogs, logs...)
+			appendLogGroup(logs)
 			stats.IndexedEthTxs++
 			ethTxIndex++
+			rpcTxIndex++
+		}
+
+		if kv.virtualBankTransfers {
+			events := virtualbank.EventsForNonEthMessages(bankEvents, ethMsgIndexes, len(msgs))
+			if len(events) > 0 {
+				cosmosHash := virtualbank.OriginalCosmosTxHash(block.Txs[txIndex])
+				txHash := virtualbank.CosmosTxHash(block.Txs[txIndex])
+				ctx := virtualLogContext(txHash, rpcTxIndex)
+				ctx.CosmosHash = &cosmosHash
+				logs, err := virtualbank.Logs(events, ctx)
+				if err != nil {
+					return stats, newBlockParseError(err, "block %d txIndex %d: failed to build virtual bank logs", block.Height, txIndex)
+				}
+				logIndex += uint(len(logs))
+				status := uint64(ethtypes.ReceiptStatusSuccessful)
+				if result.Code != abci.CodeTypeOK {
+					status = uint64(ethtypes.ReceiptStatusFailed)
+				}
+				if err := storeVirtualTx(txHash, rpcTxIndex, logs, status, resultGasUsed, blockResultGasUsedBeforeTx+resultGasUsed, &cosmosHash); err != nil {
+					return stats, err
+				}
+				rpcTxIndex++
+			}
 		}
 
 		blockGasUsed += resultGasUsed
 		blockResultGasUsedBeforeTx += resultGasUsed
 	}
 
-	blockBloom := evmtypes.LogsBloom(flatLogs)
+	if kv.virtualBankTransfers && len(endBlockEvents) > 0 {
+		txHash := virtualbank.EndBlockHash(block.Height)
+		logs, err := virtualbank.Logs(endBlockEvents, virtualLogContext(txHash, rpcTxIndex))
+		if err != nil {
+			return stats, newBlockParseError(err, "block %d: failed to build finalize virtual bank logs", block.Height)
+		}
+		logIndex += uint(len(logs))
+		if err := storeVirtualTx(
+			txHash,
+			rpcTxIndex,
+			logs,
+			uint64(ethtypes.ReceiptStatusSuccessful),
+			0,
+			blockResultGasUsedBeforeTx,
+			nil,
+		); err != nil {
+			return stats, err
+		}
+		rpcTxIndex++
+	}
+
+	blockBloom := evmtypes.LogsBloom(virtualbank.EthLogs(flatLogs))
 	transactionsRoot := ethtypes.EmptyRootHash.Hex()
-	if ethTxIndex > 0 {
+	visibleTxCount := ethTxIndex
+	if kv.virtualBankTransfers {
+		visibleTxCount = rpcTxIndex
+	}
+	if visibleTxCount > 0 {
 		transactionsRoot = common.BytesToHash(block.Header.DataHash).Hex()
 	}
 	meta := CachedBlockMeta{
-		Height:           block.Height,
-		Hash:             blockHash.Hex(),
-		ParentHash:       common.BytesToHash(block.Header.LastBlockID.Hash).Hex(),
-		StateRoot:        hexutil.Encode(block.Header.AppHash),
-		Miner:            blockMiner.Hex(),
-		Timestamp:        block.Time.Unix(),
-		Size:             uint64(block.Size()),
-		GasLimit:         blockGasLimit,
-		GasUsed:          blockGasUsed,
-		EthTxCount:       ethTxIndex,
-		TxCount:          int32(len(block.Txs)),
-		Bloom:            hexutil.Encode(blockBloom),
-		TransactionsRoot: transactionsRoot,
-		BaseFee:          encodeOptionalBig(blockBaseFee),
+		Height:                  block.Height,
+		Hash:                    blockHash.Hex(),
+		ParentHash:              common.BytesToHash(block.Header.LastBlockID.Hash).Hex(),
+		StateRoot:               hexutil.Encode(block.Header.AppHash),
+		Miner:                   blockMiner.Hex(),
+		Timestamp:               block.Time.Unix(),
+		Size:                    uint64(block.Size()),
+		GasLimit:                blockGasLimit,
+		GasUsed:                 blockGasUsed,
+		EthTxCount:              visibleTxCount,
+		TxCount:                 int32(len(block.Txs)),
+		Bloom:                   hexutil.Encode(blockBloom),
+		TransactionsRoot:        transactionsRoot,
+		BaseFee:                 encodeOptionalBig(blockBaseFee),
+		VirtualizedCosmosEvents: kv.virtualBankTransfers,
 	}
 
 	if err := batch.Set(BlockMetaKey(block.Height), mustJSON(meta)); err != nil {
@@ -643,6 +834,9 @@ func (kv *KVIndexer) resetBlock(batch dbm.Batch, height int64) error {
 		if err := batch.Delete(RPCtxHashKey(txHash)); err != nil {
 			return errorsmod.Wrapf(err, "reset block %d: delete rpc tx hash", height)
 		}
+		if err := batch.Delete(VirtualRPCtxKey(txHash)); err != nil {
+			return errorsmod.Wrapf(err, "reset block %d: delete virtual rpc tx marker", height)
+		}
 	}
 
 	if err := kv.deleteTraceKeysForBlock(batch, height, txHashes); err != nil {
@@ -658,6 +852,16 @@ func (kv *KVIndexer) resetBlock(batch dbm.Batch, height int64) error {
 	defer rpcIt.Close()
 
 	for ; rpcIt.Valid(); rpcIt.Next() {
+		txHash := common.BytesToHash(rpcIt.Value())
+		if err := batch.Delete(ReceiptKey(txHash)); err != nil {
+			return errorsmod.Wrapf(err, "reset block %d: delete rpc receipt", height)
+		}
+		if err := batch.Delete(RPCtxHashKey(txHash)); err != nil {
+			return errorsmod.Wrapf(err, "reset block %d: delete rpc tx hash", height)
+		}
+		if err := batch.Delete(VirtualRPCtxKey(txHash)); err != nil {
+			return errorsmod.Wrapf(err, "reset block %d: delete virtual rpc tx marker", height)
+		}
 		if err := batch.Delete(rpcIt.Key()); err != nil {
 			return errorsmod.Wrapf(err, "reset block %d: delete rpc tx index", height)
 		}

@@ -24,6 +24,7 @@ import (
 
 	appconfig "github.com/InjectiveLabs/evm-gateway/internal/config"
 	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
+	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtualbank"
 	txindexer "github.com/InjectiveLabs/evm-gateway/internal/indexer"
 	"github.com/InjectiveLabs/evm-gateway/internal/syncstatus"
 	evmtypes "github.com/InjectiveLabs/sdk-go/chain/evm/types"
@@ -121,8 +122,8 @@ type EVMBackend interface {
 	GasPrice() (*hexutil.Big, error)
 
 	// Filter API
-	GetLogs(hash common.Hash) ([][]*ethtypes.Log, error)
-	GetLogsByHeight(height *int64) ([][]*ethtypes.Log, error)
+	GetLogs(hash common.Hash) ([][]*virtualbank.RPCLog, error)
+	GetLogsByHeight(height *int64) ([][]*virtualbank.RPCLog, error)
 	GetBlockBloomByHeight(height int64) (ethtypes.Bloom, error)
 	BloomStatus() (uint64, uint64)
 

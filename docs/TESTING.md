@@ -74,7 +74,7 @@ go test -vet=off ./e2e -run TestSyncOrchestration -count=1 -v
 
 This benchmark is intentionally heavier than parity checks. It:
 
-1. seeds deterministic EVM traffic with `chain-stresser`
+1. seeds deterministic native bank and EVM traffic with `chain-stresser`
 2. starts a fresh standalone `evm-gateway`
 3. waits for the gateway to fully sync the generated historical range
 4. optionally settles after sync, warms trace fixtures for strict-cache runs, and restarts in offline cache-only mode
@@ -153,11 +153,21 @@ These env vars tune the benchmark runner:
 - `WEB3INJ_BENCH_MIN_NOFILE`
 - `WEB3INJ_BENCH_STRICT_CACHE_ONLY`
 - `WEB3INJ_BENCH_OFFLINE_AFTER_SYNC`
+- `WEB3INJ_BENCH_CPU_PROFILE`
+- `WEB3INJ_BENCH_CPU_PROFILE_PATH`
 - `WEB3INJ_BENCH_OUTPUT_DIR`
+- `WEB3INJ_VIRTUALIZE_COSMOS_EVENTS`
+- `WEB3INJ_E2E_MIN_GAS_PRICE`
 
 `WEB3INJ_BENCH_STRICT_CACHE_ONLY=1` fails the benchmark if cache lookups fall back to live RPC/gRPC during the measured phase.
 
 `WEB3INJ_BENCH_OFFLINE_AFTER_SYNC=1` implies strict-cache mode, restarts the benchmark gateway with `WEB3INJ_OFFLINE_RPC_ONLY=true` after historical sync completes, and measures only what can be served from indexed KV state. If you use this mode with debug trace scenarios, warm the trace cache first.
+
+`WEB3INJ_VIRTUALIZE_COSMOS_EVENTS=true` starts the benchmark gateway with native Cosmos event virtualization enabled. Benchmark reports include `environment.virtualize_cosmos_events` and `gateway.sync_duration_seconds`.
+
+`WEB3INJ_BENCH_CPU_PROFILE=1` starts `debug_startCPUProfile` immediately before the measured benchmark phase and stops it after the phase completes. The default profile path is `cpu.pprof` in the benchmark output directory. Override it with `WEB3INJ_BENCH_CPU_PROFILE_PATH`.
+
+`WEB3INJ_E2E_MIN_GAS_PRICE` defaults to `160000000inj`, matching the current local Injective devnet minimum gas price.
 
 Useful overrides for a faster smoke run:
 
@@ -221,6 +231,14 @@ The parity test automatically runs these seed workloads:
 - `tx-eth-internal-call`
 
 Each seed workload is intentionally short. The goal is to create stable parity fixtures, not to stress performance.
+
+The benchmark additionally seeds:
+
+- `tx-bank-send`
+- `tx-bank-send-many`
+- `tx-tokenfactory-burn`
+
+Those native bank workloads exercise virtual Cosmos transaction and log indexing when `WEB3INJ_VIRTUALIZE_COSMOS_EVENTS=true`.
 
 ## Seeding Controls
 

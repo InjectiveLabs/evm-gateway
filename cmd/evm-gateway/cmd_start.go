@@ -54,6 +54,7 @@ func buildConfig(opts *gatewayCLIOptions) (config.Config, error) {
 	cfg.DataDir = *opts.dataDir
 	cfg.EnableSync = *opts.enableSync
 	cfg.ParallelSyncTipAndGaps = *opts.parallelSyncTipAndGaps
+	cfg.VirtualizeCosmosEvents = *opts.virtualizeCosmosEvents
 	cfg.OfflineRPCOnly = *opts.offlineRPCOnly
 	cfg.LogFormat = *opts.logFormat
 	cfg.LogVerbose = *opts.logVerbose

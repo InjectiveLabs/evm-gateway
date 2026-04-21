@@ -22,6 +22,7 @@ import (
 	"upd.dev/xlab/gotracer"
 
 	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
+	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtualbank"
 	evmtypes "github.com/InjectiveLabs/sdk-go/chain/evm/types"
 )
 
@@ -225,8 +226,8 @@ func ShouldIgnoreGasUsed(res *abci.ExecTxResult) bool {
 }
 
 // GetLogsFromBlockResults returns the list of event logs from the comet block result response
-func GetLogsFromBlockResults(blockRes *cmrpctypes.ResultBlockResults) ([][]*ethtypes.Log, error) {
-	blockLogs := [][]*ethtypes.Log{}
+func GetLogsFromBlockResults(blockRes *cmrpctypes.ResultBlockResults) ([][]*virtualbank.RPCLog, error) {
+	blockLogs := [][]*virtualbank.RPCLog{}
 	normalizedTxResults, err := types.NormalizeTxResponseIndexes(blockRes.TxResults)
 	if err != nil {
 		return nil, err
@@ -237,7 +238,7 @@ func GetLogsFromBlockResults(blockRes *cmrpctypes.ResultBlockResults) ([][]*etht
 		if err != nil {
 			return nil, err
 		}
-		blockLogs = append(blockLogs, logs)
+		blockLogs = append(blockLogs, virtualbank.WrapLogs(logs, false, nil))
 	}
 	return blockLogs, nil
 }

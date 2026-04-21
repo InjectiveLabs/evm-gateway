@@ -7,9 +7,9 @@ import (
 	abci "github.com/cometbft/cometbft/abci/types"
 	cmtypes "github.com/cometbft/cometbft/types"
 	"github.com/ethereum/go-ethereum/common"
-	ethtypes "github.com/ethereum/go-ethereum/core/types"
 
 	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
+	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtualbank"
 	chaintypes "github.com/InjectiveLabs/sdk-go/chain/types"
 )
 
@@ -34,8 +34,8 @@ type TxIndexer interface {
 	GetReceiptByTxHash(hash common.Hash) (map[string]interface{}, error)
 	GetBlockMetaByHeight(height int64) (*CachedBlockMeta, error)
 	GetBlockMetaByHash(hash common.Hash) (*CachedBlockMeta, error)
-	GetLogsByBlockHeight(height int64) ([][]*ethtypes.Log, error)
-	GetLogsByBlockHash(hash common.Hash) ([][]*ethtypes.Log, error)
+	GetLogsByBlockHeight(height int64) ([][]*virtualbank.RPCLog, error)
+	GetLogsByBlockHash(hash common.Hash) ([][]*virtualbank.RPCLog, error)
 	SetTraceTransaction(hash common.Hash, config *rpctypes.TraceConfig, raw json.RawMessage) error
 	GetTraceTransaction(hash common.Hash, config *rpctypes.TraceConfig) (json.RawMessage, error)
 	SetTraceBlockByHeight(height int64, config *rpctypes.TraceConfig, raw json.RawMessage) error
