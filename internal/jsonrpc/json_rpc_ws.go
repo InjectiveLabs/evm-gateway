@@ -3,13 +3,13 @@ package jsonrpc
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"math/big"
 	"net"
 	"net/http"
-	"strconv"
 	"sync"
 
 	rpcfilters "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/namespaces/ethereum/eth/filters"
@@ -38,9 +38,9 @@ type WebsocketsServer interface {
 }
 
 type SubscriptionResponseJSON struct {
-	Jsonrpc string      `json:"jsonrpc"`
-	Result  interface{} `json:"result"`
-	ID      float64     `json:"id"`
+	Jsonrpc string          `json:"jsonrpc"`
+	Result  interface{}     `json:"result"`
+	ID      json.RawMessage `json:"id"`
 }
 
 type SubscriptionNotification struct {
@@ -66,9 +66,9 @@ type ErrorMessageJSON struct {
 }
 
 type wsRPCRequest struct {
-	Method string        `json:"method"`
-	Params []interface{} `json:"params"`
-	ID     interface{}   `json:"id"`
+	Method string          `json:"method"`
+	Params []interface{}   `json:"params"`
+	ID     json.RawMessage `json:"id"`
 }
 
 type websocketsServer struct {
@@ -222,23 +222,6 @@ func (s *websocketsServer) readLoop(wsConn *wsConn) {
 			continue
 		}
 
-		var connID float64
-		switch id := msg.ID.(type) {
-		case string:
-			connID, err = strconv.ParseFloat(id, 64)
-		case float64:
-			connID = id
-		default:
-			err = fmt.Errorf("unknown type")
-		}
-		if err != nil {
-			s.sendErrResponse(
-				wsConn,
-				fmt.Errorf("invalid type for connection ID: %T", msg.ID).Error(),
-			)
-			continue
-		}
-
 		switch msg.Method {
 		case "eth_subscribe":
 			params, ok := s.getParamsAndCheckValid(msg.Params, wsConn)
@@ -256,7 +239,7 @@ func (s *websocketsServer) readLoop(wsConn *wsConn) {
 
 			res := &SubscriptionResponseJSON{
 				Jsonrpc: "2.0",
-				ID:      connID,
+				ID:      msg.ID,
 				Result:  subID,
 			}
 
@@ -284,7 +267,7 @@ func (s *websocketsServer) readLoop(wsConn *wsConn) {
 
 			res := &SubscriptionResponseJSON{
 				Jsonrpc: "2.0",
-				ID:      connID,
+				ID:      msg.ID,
 				Result:  ok,
 			}
 
