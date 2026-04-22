@@ -22,6 +22,7 @@ import (
 	backendpkg "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/backend"
 	streamtypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/stream"
 	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
+	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtualbank"
 )
 
 // FilterAPI gathers
@@ -30,9 +31,9 @@ type FilterAPI interface {
 	NewBlockFilter() rpc.ID
 	NewFilter(criteria filters.FilterCriteria) (rpc.ID, error)
 	GetFilterChanges(id rpc.ID) (interface{}, error)
-	GetFilterLogs(ctx context.Context, id rpc.ID) ([]*ethtypes.Log, error)
+	GetFilterLogs(ctx context.Context, id rpc.ID) ([]*virtualbank.RPCLog, error)
 	UninstallFilter(id rpc.ID) bool
-	GetLogs(ctx context.Context, crit filters.FilterCriteria) ([]*ethtypes.Log, error)
+	GetLogs(ctx context.Context, crit filters.FilterCriteria) ([]*virtualbank.RPCLog, error)
 }
 
 // Backend defines the methods requided by the PublicFilterAPI backend
@@ -42,8 +43,10 @@ type Backend interface {
 	HeaderByHash(blockHash common.Hash) (*ethtypes.Header, error)
 	TendermintBlockByHash(hash common.Hash) (*coretypes.ResultBlock, error)
 	TendermintBlockResultByNumber(height *int64) (*coretypes.ResultBlockResults, error)
-	GetLogs(blockHash common.Hash) ([][]*ethtypes.Log, error)
-	GetLogsByHeight(*int64) ([][]*ethtypes.Log, error)
+	GetLogs(blockHash common.Hash) ([][]*virtualbank.RPCLog, error)
+	GetLogsByHeight(*int64) ([][]*virtualbank.RPCLog, error)
+	GetFilteredLogs(blockHash common.Hash, addresses []common.Address, topics [][]common.Hash) ([]*virtualbank.RPCLog, error)
+	GetFilteredLogsByHeight(height int64, addresses []common.Address, topics [][]common.Hash) ([]*virtualbank.RPCLog, error)
 	GetBlockBloomByHeight(height int64) (ethtypes.Bloom, error)
 	BlockBloom(blockRes *coretypes.ResultBlockResults) (ethtypes.Bloom, error)
 
@@ -217,10 +220,12 @@ func (api *PublicFilterAPI) NewFilter(criteria filters.FilterCriteria) (rpc.ID, 
 	return id, nil
 }
 
-// GetLogs returns logs matching the given argument that are stored within the state.
+// GetLogs returns logs matching the given argument. The backend decides whether
+// the block data comes from indexed/cache storage or live block results, and may
+// include virtualized Cosmos x/bank logs when that mode is enabled.
 //
 // https://github.com/ethereum/wiki/wiki/JSON-RPC#eth_getlogs
-func (api *PublicFilterAPI) GetLogs(ctx context.Context, crit filters.FilterCriteria) ([]*ethtypes.Log, error) {
+func (api *PublicFilterAPI) GetLogs(ctx context.Context, crit filters.FilterCriteria) ([]*virtualbank.RPCLog, error) {
 	defer gotracer.Trace(&ctx)()
 
 	if err := ValidateFilterCriteria(crit); err != nil {
@@ -275,11 +280,13 @@ func (api *PublicFilterAPI) UninstallFilter(id rpc.ID) bool {
 	return found
 }
 
-// GetFilterLogs returns the logs for the filter with the given id.
+// GetFilterLogs returns the logs for the filter with the given id by running
+// the saved criteria through the same cache-first/live fallback path as
+// eth_getLogs.
 // If the filter could not be found an empty array of logs is returned.
 //
 // https://github.com/ethereum/wiki/wiki/JSON-RPC#eth_getfilterlogs
-func (api *PublicFilterAPI) GetFilterLogs(ctx context.Context, id rpc.ID) ([]*ethtypes.Log, error) {
+func (api *PublicFilterAPI) GetFilterLogs(ctx context.Context, id rpc.ID) ([]*virtualbank.RPCLog, error) {
 	defer gotracer.Trace(&ctx)()
 
 	api.filtersMu.Lock()
@@ -368,7 +375,7 @@ func (api *PublicFilterAPI) GetFilterChanges(id rpc.ID) (interface{}, error) {
 		return hashes, nil
 	case filters.LogsSubscription:
 		var (
-			logs  []*ethtypes.Log
+			logs  []*virtualbank.RPCLog
 			chunk []*ethtypes.Log
 		)
 		for {
@@ -376,8 +383,8 @@ func (api *PublicFilterAPI) GetFilterChanges(id rpc.ID) (interface{}, error) {
 			if len(chunk) == 0 {
 				break
 			}
-			chunk = FilterLogs(chunk, f.crit.FromBlock, f.crit.ToBlock, f.crit.Addresses, f.crit.Topics)
-			logs = append(logs, chunk...)
+			filtered := FilterLogs(virtualbank.WrapLogs(chunk, false, nil), f.crit.FromBlock, f.crit.ToBlock, f.crit.Addresses, f.crit.Topics)
+			logs = append(logs, filtered...)
 		}
 		return returnLogs(logs), nil
 	default:

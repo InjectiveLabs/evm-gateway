@@ -96,7 +96,7 @@ func Run(cfg config.Config, logger *slog.Logger) error {
 			}
 		}()
 		idxLogger := logger.With("indexer", "evm")
-		txIndexer = txindexer.NewKVIndexer(idxDB, idxLogger, clientCtx, buildKVIndexerOptions(ctx, clientCtx, logger)...)
+		txIndexer = txindexer.NewKVIndexer(idxDB, idxLogger, clientCtx, buildKVIndexerOptions(ctx, cfg, clientCtx, logger)...)
 		statusTracker = syncstatus.NewTracker(cfg.FetchJobs, cfg.Earliest)
 	}
 
@@ -199,7 +199,7 @@ func RunResync(cfg config.Config, logger *slog.Logger, targets []txindexer.Block
 	}()
 
 	idxLogger := logger.With("indexer", "evm")
-	txIndexer := txindexer.NewKVIndexer(idxDB, idxLogger, clientCtx, buildKVIndexerOptions(ctx, clientCtx, logger)...)
+	txIndexer := txindexer.NewKVIndexer(idxDB, idxLogger, clientCtx, buildKVIndexerOptions(ctx, cfg, clientCtx, logger)...)
 	syncer := txindexer.NewSyncer(cfg, logger, rpcClient, idxDB, txIndexer, nil)
 
 	startedAt := time.Now()
@@ -225,17 +225,24 @@ type evmParamsClient interface {
 	Params(context.Context, *evmtypes.QueryParamsRequest, ...grpc.CallOption) (*evmtypes.QueryParamsResponse, error)
 }
 
-func buildKVIndexerOptions(ctx context.Context, clientCtx client.Context, logger *slog.Logger) []txindexer.KVIndexerOption {
+// buildKVIndexerOptions wires startup configuration into the KV indexer,
+// including whether indexed receipts/logs should include virtualized Cosmos
+// bank events.
+func buildKVIndexerOptions(ctx context.Context, cfg config.Config, clientCtx client.Context, logger *slog.Logger) []txindexer.KVIndexerOption {
+	opts := []txindexer.KVIndexerOption{
+		txindexer.WithVirtualBankTransfers(cfg.VirtualizeCosmosEvents, cfg.EVMChainID),
+	}
+
 	gasLimit, ok, err := fetchStartupBlockGasLimit(ctx, clientCtx)
 	if err != nil {
 		logger.Warn("failed to cache startup block gas limit", "error", err)
-		return nil
+		return opts
 	}
 	if !ok {
-		return nil
+		return opts
 	}
 	logger.Info("cached startup block gas limit", "gas_limit", gasLimit)
-	return []txindexer.KVIndexerOption{txindexer.WithCachedBlockGasLimit(gasLimit)}
+	return append(opts, txindexer.WithCachedBlockGasLimit(gasLimit))
 }
 
 func fetchStartupBlockGasLimit(ctx context.Context, clientCtx client.Context) (uint64, bool, error) {

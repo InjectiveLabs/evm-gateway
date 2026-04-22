@@ -15,6 +15,7 @@ func TestBuildConfigCarriesSyncAndOfflineFlags(t *testing.T) {
 		dataDir:                           stringPtr(t.TempDir()),
 		enableSync:                        boolPtr(false),
 		parallelSyncTipAndGaps:            boolPtr(false),
+		virtualizeCosmosEvents:            boolPtr(true),
 		offlineRPCOnly:                    boolPtr(true),
 		logFormat:                         stringPtr("json"),
 		logVerbose:                        boolPtr(false),
@@ -38,6 +39,9 @@ func TestBuildConfigCarriesSyncAndOfflineFlags(t *testing.T) {
 	}
 	if cfg.ParallelSyncTipAndGaps {
 		t.Fatal("expected parallel tip and gap sync to be false")
+	}
+	if !cfg.VirtualizeCosmosEvents {
+		t.Fatal("expected cosmos event virtualization to be true")
 	}
 	if !cfg.OfflineRPCOnly {
 		t.Fatal("expected offline rpc only to be true")

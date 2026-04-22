@@ -42,6 +42,13 @@ func initIndexerOptions(app *cli.Cli, opts *gatewayCLIOptions, defaults config.C
 		Value:  defaults.ParallelSyncTipAndGaps,
 	})
 
+	opts.virtualizeCosmosEvents = app.Bool(cli.BoolOpt{
+		Name:   "virtualize-cosmos-events",
+		Desc:   "Expose tracked Cosmos events as virtual JSON-RPC transactions and logs.",
+		EnvVar: "WEB3INJ_VIRTUALIZE_COSMOS_EVENTS",
+		Value:  defaults.VirtualizeCosmosEvents,
+	})
+
 	opts.offlineRPCOnly = app.Bool(cli.BoolOpt{
 		Name:   "offline-rpc-only",
 		Desc:   "Start JSON-RPC with no live comet/grpc clients; requires --enable-sync=false and a chain ID.",

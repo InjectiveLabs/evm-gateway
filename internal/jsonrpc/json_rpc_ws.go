@@ -6,16 +6,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"math/big"
 	"net"
 	"net/http"
-	"strconv"
 	"sync"
-
-	"log/slog"
 
 	rpcfilters "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/namespaces/ethereum/eth/filters"
 	rpcstream "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/stream"
+	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtualbank"
+	"github.com/bytedance/sonic"
 	"github.com/cosmos/cosmos-sdk/client"
 	"github.com/ethereum/go-ethereum/common"
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
@@ -38,9 +38,9 @@ type WebsocketsServer interface {
 }
 
 type SubscriptionResponseJSON struct {
-	Jsonrpc string      `json:"jsonrpc"`
-	Result  interface{} `json:"result"`
-	ID      float64     `json:"id"`
+	Jsonrpc string          `json:"jsonrpc"`
+	Result  interface{}     `json:"result"`
+	ID      json.RawMessage `json:"id"`
 }
 
 type SubscriptionNotification struct {
@@ -63,6 +63,12 @@ type ErrorResponseJSON struct {
 type ErrorMessageJSON struct {
 	Code    *big.Int `json:"code"`
 	Message string   `json:"message"`
+}
+
+type wsRPCRequest struct {
+	Method string          `json:"method"`
+	Params []interface{}   `json:"params"`
+	ID     json.RawMessage `json:"id"`
 }
 
 type websocketsServer struct {
@@ -146,10 +152,20 @@ type wsConn struct {
 }
 
 func (w *wsConn) WriteJSON(v interface{}) error {
+	bz, err := sonic.Marshal(v)
+	if err != nil {
+		return err
+	}
+	return w.WriteMessage(websocket.TextMessage, bz)
+}
+
+// WriteMessage serializes websocket writes so concurrent subscription senders
+// cannot interleave frames on the same connection.
+func (w *wsConn) WriteMessage(messageType int, data []byte) error {
 	w.mux.Lock()
 	defer w.mux.Unlock()
 
-	return w.conn.WriteJSON(v)
+	return w.conn.WriteMessage(messageType, data)
 }
 
 func (w *wsConn) Close() error {
@@ -190,15 +206,14 @@ func (s *websocketsServer) readLoop(wsConn *wsConn) {
 			continue
 		}
 
-		var msg map[string]interface{}
-		if err = json.Unmarshal(mb, &msg); err != nil {
+		var msg wsRPCRequest
+		if err = sonic.Unmarshal(mb, &msg); err != nil {
 			s.sendErrResponse(wsConn, err.Error())
 			continue
 		}
 
 		// check if method == eth_subscribe or eth_unsubscribe
-		method, ok := msg["method"].(string)
-		if !ok {
+		if msg.Method == "" {
 			// otherwise, call the usual rpc server to respond
 			if err := s.tcpGetAndSendResponse(wsConn, mb); err != nil {
 				s.sendErrResponse(wsConn, err.Error())
@@ -207,26 +222,9 @@ func (s *websocketsServer) readLoop(wsConn *wsConn) {
 			continue
 		}
 
-		var connID float64
-		switch id := msg["id"].(type) {
-		case string:
-			connID, err = strconv.ParseFloat(id, 64)
-		case float64:
-			connID = id
-		default:
-			err = fmt.Errorf("unknown type")
-		}
-		if err != nil {
-			s.sendErrResponse(
-				wsConn,
-				fmt.Errorf("invalid type for connection ID: %T", msg["id"]).Error(),
-			)
-			continue
-		}
-
-		switch method {
+		switch msg.Method {
 		case "eth_subscribe":
-			params, ok := s.getParamsAndCheckValid(msg, wsConn)
+			params, ok := s.getParamsAndCheckValid(msg.Params, wsConn)
 			if !ok {
 				continue
 			}
@@ -241,7 +239,7 @@ func (s *websocketsServer) readLoop(wsConn *wsConn) {
 
 			res := &SubscriptionResponseJSON{
 				Jsonrpc: "2.0",
-				ID:      connID,
+				ID:      msg.ID,
 				Result:  subID,
 			}
 
@@ -249,7 +247,7 @@ func (s *websocketsServer) readLoop(wsConn *wsConn) {
 				break
 			}
 		case "eth_unsubscribe":
-			params, ok := s.getParamsAndCheckValid(msg, wsConn)
+			params, ok := s.getParamsAndCheckValid(msg.Params, wsConn)
 			if !ok {
 				continue
 			}
@@ -269,7 +267,7 @@ func (s *websocketsServer) readLoop(wsConn *wsConn) {
 
 			res := &SubscriptionResponseJSON{
 				Jsonrpc: "2.0",
-				ID:      connID,
+				ID:      msg.ID,
 				Result:  ok,
 			}
 
@@ -285,10 +283,9 @@ func (s *websocketsServer) readLoop(wsConn *wsConn) {
 	}
 }
 
-// tcpGetAndSendResponse sends error response to client if params is invalid
-func (s *websocketsServer) getParamsAndCheckValid(msg map[string]interface{}, wsConn *wsConn) ([]interface{}, bool) {
-	params, ok := msg["params"].([]interface{})
-	if !ok {
+// getParamsAndCheckValid sends an error response to the client if params are invalid.
+func (s *websocketsServer) getParamsAndCheckValid(params []interface{}, wsConn *wsConn) ([]interface{}, bool) {
+	if params == nil {
 		s.sendErrResponse(wsConn, "invalid parameters")
 		return nil, false
 	}
@@ -326,13 +323,7 @@ func (s *websocketsServer) tcpGetAndSendResponse(wsConn *wsConn, mb []byte) erro
 		return errors.Wrap(err, "could not read body from response")
 	}
 
-	var wsSend interface{}
-	err = json.Unmarshal(body, &wsSend)
-	if err != nil {
-		return errors.Wrap(err, "failed to unmarshal rest-server response")
-	}
-
-	return wsConn.WriteJSON(wsSend)
+	return wsConn.WriteMessage(websocket.TextMessage, body)
 }
 
 // pubSubAPI is the eth_ prefixed set of APIs in the Web3 JSON-RPC spec
@@ -525,7 +516,7 @@ func (api *pubSubAPI) subscribeLogs(wsConn *wsConn, subID rpc.ID, extra interfac
 	ctx, cancel := context.WithCancel(context.Background())
 	//nolint:errcheck // one liner
 	go api.events.LogStream().Subscribe(ctx, func(txLogs []*ethtypes.Log, _ int) error {
-		logs := rpcfilters.FilterLogs(txLogs, crit.FromBlock, crit.ToBlock, crit.Addresses, crit.Topics)
+		logs := rpcfilters.FilterLogs(virtualbank.WrapLogs(txLogs, false, nil), crit.FromBlock, crit.ToBlock, crit.Addresses, crit.Topics)
 		if len(logs) == 0 {
 			return nil
 		}

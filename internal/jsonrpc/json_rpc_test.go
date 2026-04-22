@@ -3,11 +3,13 @@ package jsonrpc
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"strings"
 	"testing"
 
+	"github.com/bytedance/sonic"
 	coretypes "github.com/cometbft/cometbft/rpc/core/types"
 	"github.com/pkg/errors"
 )
@@ -126,6 +128,58 @@ func TestEventClientForStreamsReturnsNilForNonEventClient(t *testing.T) {
 	}
 	if evtClient != nil {
 		t.Fatalf("expected nil event client, got %T", evtClient)
+	}
+}
+
+func TestSubscriptionResponsePreservesRequestID(t *testing.T) {
+	tests := []struct {
+		name    string
+		request string
+		wantID  string
+	}{
+		{
+			name:    "string ID",
+			request: `{"jsonrpc":"2.0","id":"client-1","method":"eth_subscribe","params":["newHeads"]}`,
+			wantID:  `"client-1"`,
+		},
+		{
+			name:    "large numeric ID",
+			request: `{"jsonrpc":"2.0","id":922337203685477580712345,"method":"eth_subscribe","params":["newHeads"]}`,
+			wantID:  `922337203685477580712345`,
+		},
+		{
+			name:    "null ID",
+			request: `{"jsonrpc":"2.0","id":null,"method":"eth_subscribe","params":["newHeads"]}`,
+			wantID:  `null`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var msg wsRPCRequest
+			if err := sonic.Unmarshal([]byte(tt.request), &msg); err != nil {
+				t.Fatalf("unmarshal request: %v", err)
+			}
+
+			response, err := sonic.Marshal(&SubscriptionResponseJSON{
+				Jsonrpc: "2.0",
+				ID:      msg.ID,
+				Result:  "0x1",
+			})
+			if err != nil {
+				t.Fatalf("marshal response: %v", err)
+			}
+
+			var decoded struct {
+				ID json.RawMessage `json:"id"`
+			}
+			if err := sonic.Unmarshal(response, &decoded); err != nil {
+				t.Fatalf("unmarshal response: %v", err)
+			}
+			if got := string(decoded.ID); got != tt.wantID {
+				t.Fatalf("expected response id %s, got %s in %s", tt.wantID, got, response)
+			}
+		})
 	}
 }
 

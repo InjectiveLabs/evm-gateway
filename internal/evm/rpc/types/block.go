@@ -2,12 +2,12 @@ package types
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"math"
 	"math/big"
 	"strings"
 
+	"github.com/bytedance/sonic"
 	grpctypes "github.com/cosmos/cosmos-sdk/types/grpc"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -136,12 +136,12 @@ type BlockNumberOrHash struct {
 func (bnh *BlockNumberOrHash) UnmarshalJSON(data []byte) error {
 	type erased BlockNumberOrHash
 	e := erased{}
-	err := json.Unmarshal(data, &e)
+	err := sonic.Unmarshal(data, &e)
 	if err == nil {
 		return bnh.checkUnmarshal(BlockNumberOrHash(e))
 	}
 	var input string
-	err = json.Unmarshal(data, &input)
+	err = sonic.Unmarshal(data, &input)
 	if err != nil {
 		return err
 	}

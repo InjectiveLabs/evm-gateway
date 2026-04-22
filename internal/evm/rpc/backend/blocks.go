@@ -6,8 +6,6 @@ import (
 	"math/big"
 	"strconv"
 
-	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
-	evmtypes "github.com/InjectiveLabs/sdk-go/chain/evm/types"
 	cmrpcclient "github.com/cometbft/cometbft/rpc/client"
 	cmrpctypes "github.com/cometbft/cometbft/rpc/core/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
@@ -20,7 +18,10 @@ import (
 	"google.golang.org/grpc/metadata"
 	"upd.dev/xlab/gotracer"
 
+	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
+	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtualbank"
 	txindexer "github.com/InjectiveLabs/evm-gateway/internal/indexer"
+	evmtypes "github.com/InjectiveLabs/sdk-go/chain/evm/types"
 )
 
 // BlockNumber returns the latest block height available to JSON-RPC callers.
@@ -80,14 +81,21 @@ func (b *Backend) GetBlockByNumber(blockNum rpctypes.BlockNumber, fullTx bool) (
 
 	meta, err := b.cachedBlockMetaByNumber(blockNum)
 	if err == nil && meta != nil {
-		block, cacheErr := b.rpcBlockFromCachedMeta(meta, fullTx)
-		if cacheErr == nil {
-			return block, nil
+		if b.cachedMetaMatchesVirtualization(meta) {
+			block, cacheErr := b.rpcBlockFromCachedMeta(meta, fullTx)
+			if cacheErr == nil {
+				return block, nil
+			}
+			if b.cfg.OfflineRPCOnly || b.cacheOnlyDynamicBlockNumber(blockNum) {
+				return nil, cacheErr
+			}
+			b.logger.Debug("cached block-by-number reconstruction failed; falling back to live rpc", "height", meta.Height, "error", cacheErr.Error())
+		} else {
+			if b.cfg.OfflineRPCOnly || b.cacheOnlyDynamicBlockNumber(blockNum) {
+				return nil, fmt.Errorf("cached block virtualization mode mismatch at height %d", meta.Height)
+			}
+			b.logger.Debug("cached block virtualization mode mismatch; falling back to live rpc", "height", meta.Height)
 		}
-		if b.cfg.OfflineRPCOnly || b.cacheOnlyDynamicBlockNumber(blockNum) {
-			return nil, cacheErr
-		}
-		b.logger.Debug("cached block-by-number reconstruction failed; falling back to live rpc", "height", meta.Height, "error", cacheErr.Error())
 	} else if err != nil && !isIndexerCacheMiss(err) {
 		if b.cfg.OfflineRPCOnly || b.cacheOnlyDynamicBlockNumber(blockNum) {
 			return nil, err
@@ -135,14 +143,21 @@ func (b *Backend) GetBlockByHash(hash common.Hash, fullTx bool) (map[string]inte
 
 	meta, err := b.cachedBlockMetaByHash(hash)
 	if err == nil && meta != nil {
-		block, cacheErr := b.rpcBlockFromCachedMeta(meta, fullTx)
-		if cacheErr == nil {
-			return block, nil
+		if b.cachedMetaMatchesVirtualization(meta) {
+			block, cacheErr := b.rpcBlockFromCachedMeta(meta, fullTx)
+			if cacheErr == nil {
+				return block, nil
+			}
+			if b.cfg.OfflineRPCOnly {
+				return nil, cacheErr
+			}
+			b.logger.Debug("cached block-by-hash reconstruction failed; falling back to live rpc", "hash", hash.Hex(), "error", cacheErr.Error())
+		} else {
+			if b.cfg.OfflineRPCOnly {
+				return nil, fmt.Errorf("cached block virtualization mode mismatch at height %d", meta.Height)
+			}
+			b.logger.Debug("cached block virtualization mode mismatch; falling back to live rpc", "hash", hash.Hex(), "height", meta.Height)
 		}
-		if b.cfg.OfflineRPCOnly {
-			return nil, cacheErr
-		}
-		b.logger.Debug("cached block-by-hash reconstruction failed; falling back to live rpc", "hash", hash.Hex(), "error", cacheErr.Error())
 	} else if err != nil && !isIndexerCacheMiss(err) {
 		if b.cfg.OfflineRPCOnly {
 			return nil, err
@@ -188,7 +203,7 @@ func (b *Backend) GetBlockTransactionCountByHash(hash common.Hash) *hexutil.Uint
 	}
 	b = b.WithContext(ctx).(*Backend)
 
-	if meta, err := b.cachedBlockMetaByHash(hash); err == nil && meta != nil {
+	if meta, err := b.cachedBlockMetaByHash(hash); err == nil && meta != nil && b.cachedMetaMatchesVirtualization(meta) {
 		n := hexutil.Uint(meta.EthTxCount)
 		return &n
 	}
@@ -210,6 +225,21 @@ func (b *Backend) GetBlockTransactionCountByHash(hash common.Hash) *hexutil.Uint
 		return nil
 	}
 
+	if b.virtualBankEnabled() {
+		blockRes, err := b.TendermintBlockResultByNumber(&block.Block.Height)
+		if err != nil {
+			b.logger.Debug("block result not found", "height", block.Block.Height, "error", err.Error())
+			return nil
+		}
+		view, err := b.liveVirtualBankBlockView(block, blockRes)
+		if err != nil {
+			b.logger.Debug("virtualized block tx count failed", "height", block.Block.Height, "error", err.Error())
+			return nil
+		}
+		n := hexutil.Uint(len(view.Transactions))
+		return &n
+	}
+
 	return b.GetBlockTransactionCount(block)
 }
 
@@ -224,7 +254,7 @@ func (b *Backend) GetBlockTransactionCountByNumber(blockNum rpctypes.BlockNumber
 	}
 	b = b.WithContext(ctx).(*Backend)
 
-	if meta, err := b.cachedBlockMetaByNumber(blockNum); err == nil && meta != nil {
+	if meta, err := b.cachedBlockMetaByNumber(blockNum); err == nil && meta != nil && b.cachedMetaMatchesVirtualization(meta) {
 		n := hexutil.Uint(meta.EthTxCount)
 		return &n
 	}
@@ -239,6 +269,21 @@ func (b *Backend) GetBlockTransactionCountByNumber(blockNum rpctypes.BlockNumber
 	} else if block.Block == nil {
 		b.logger.Debug("block not found", "height", blockNum.Int64())
 		return nil
+	}
+
+	if b.virtualBankEnabled() {
+		blockRes, err := b.TendermintBlockResultByNumber(&block.Block.Height)
+		if err != nil {
+			b.logger.Debug("block result not found", "height", block.Block.Height, "error", err.Error())
+			return nil
+		}
+		view, err := b.liveVirtualBankBlockView(block, blockRes)
+		if err != nil {
+			b.logger.Debug("virtualized block tx count failed", "height", block.Block.Height, "error", err.Error())
+			return nil
+		}
+		n := hexutil.Uint(len(view.Transactions))
+		return &n
 	}
 
 	return b.GetBlockTransactionCount(block)
@@ -445,7 +490,7 @@ func (b *Backend) HeaderByNumber(blockNum rpctypes.BlockNumber) (*ethtypes.Heade
 	b = b.WithContext(ctx).(*Backend)
 
 	meta, err := b.cachedBlockMetaByNumber(blockNum)
-	if err == nil && meta != nil {
+	if err == nil && meta != nil && b.cachedMetaMatchesVirtualization(meta) {
 		return headerFromCachedBlockMeta(meta)
 	}
 	if err != nil && !isIndexerCacheMiss(err) {
@@ -498,7 +543,7 @@ func (b *Backend) HeaderByHash(blockHash common.Hash) (*ethtypes.Header, error) 
 	b = b.WithContext(ctx).(*Backend)
 
 	meta, err := b.cachedBlockMetaByHash(blockHash)
-	if err == nil && meta != nil {
+	if err == nil && meta != nil && b.cachedMetaMatchesVirtualization(meta) {
 		return headerFromCachedBlockMeta(meta)
 	}
 	if err != nil && !isIndexerCacheMiss(err) {
@@ -555,8 +600,19 @@ func (b *Backend) BlockBloom(blockRes *cmrpctypes.ResultBlockResults) (ethtypes.
 
 	if blockRes != nil && b.indexer != nil {
 		meta, err := b.indexer.GetBlockMetaByHeight(blockRes.Height)
-		if err == nil {
+		if err == nil && b.cachedMetaMatchesVirtualization(meta) {
 			return ethtypes.BytesToBloom(common.FromHex(meta.Bloom)), nil
+		}
+	}
+
+	if b.virtualBankEnabled() {
+		resBlock, err := b.TendermintBlockByNumber(rpctypes.BlockNumber(blockRes.Height))
+		if err == nil && resBlock != nil && resBlock.Block != nil {
+			view, err := b.liveVirtualBankBlockView(resBlock, blockRes)
+			if err == nil {
+				return ethtypes.BytesToBloom(evmtypes.LogsBloom(virtualbank.FlattenEthLogs(view.Logs))), nil
+			}
+			b.logger.Debug("virtualized BlockBloom derivation failed", "height", blockRes.Height, "error", err.Error())
 		}
 	}
 
@@ -583,11 +639,7 @@ func (b *Backend) BlockBloom(blockRes *cmrpctypes.ResultBlockResults) (ethtypes.
 		return ethtypes.Bloom{}, errors.New("block bloom event is not found")
 	}
 
-	flatLogs := make([]*ethtypes.Log, 0)
-	for _, group := range logGroups {
-		flatLogs = append(flatLogs, group...)
-	}
-	return ethtypes.BytesToBloom(evmtypes.LogsBloom(flatLogs)), nil
+	return ethtypes.BytesToBloom(evmtypes.LogsBloom(virtualbank.FlattenEthLogs(logGroups))), nil
 }
 
 // RPCBlockFromTendermintBlock returns a JSON-RPC compatible Ethereum block from a
@@ -621,26 +673,40 @@ func (b *Backend) RPCBlockFromTendermintBlock(
 		b.logger.Error("failed to fetch Base Fee from prunned block. Check node prunning configuration", "height", block.Height, "error", err)
 	}
 
-	msgs := b.EthMsgsFromTendermintBlock(resBlock)
-	for txIndex, ethMsg := range msgs {
-		if !fullTx {
-			ethRPCTxs = append(ethRPCTxs, ethMsg.Hash())
-			continue
-		}
-
-		rpcTx, err := rpctypes.NewRPCTransaction(
-			ethMsg,
-			common.BytesToHash(block.Hash()),
-			uint64(block.Height),
-			uint64(txIndex),
-			baseFee,
-			b.ChainID().ToInt(),
-		)
+	if b.virtualBankEnabled() {
+		view, err := b.liveVirtualBankBlockView(resBlock, blockRes)
 		if err != nil {
-			b.logger.Debug("NewTransactionFromData for receipt failed", "hash", ethMsg.Hash, "error", err.Error())
-			continue
+			return nil, err
 		}
-		ethRPCTxs = append(ethRPCTxs, rpcTx)
+		for _, rpcTx := range view.Transactions {
+			if fullTx {
+				ethRPCTxs = append(ethRPCTxs, rpcTx)
+			} else {
+				ethRPCTxs = append(ethRPCTxs, rpcTx.Hash)
+			}
+		}
+	} else {
+		msgs := b.EthMsgsFromTendermintBlock(resBlock)
+		for txIndex, ethMsg := range msgs {
+			if !fullTx {
+				ethRPCTxs = append(ethRPCTxs, ethMsg.Hash())
+				continue
+			}
+
+			rpcTx, err := rpctypes.NewRPCTransaction(
+				ethMsg,
+				common.BytesToHash(block.Hash()),
+				uint64(block.Height),
+				uint64(txIndex),
+				baseFee,
+				b.ChainID().ToInt(),
+			)
+			if err != nil {
+				b.logger.Debug("NewTransactionFromData for receipt failed", "hash", ethMsg.Hash, "error", err.Error())
+				continue
+			}
+			ethRPCTxs = append(ethRPCTxs, rpcTx)
+		}
 	}
 
 	bloom, err := b.BlockBloom(blockRes)
@@ -1000,6 +1066,16 @@ func validateCachedBlockMeta(meta *txindexer.CachedBlockMeta) error {
 		}
 	}
 	return nil
+}
+
+// cachedMetaMatchesVirtualization reports whether indexed block metadata was
+// produced with the same Cosmos event virtualization mode as the current RPC
+// backend. Mismatches must use live data unless the gateway is offline-only.
+func (b *Backend) cachedMetaMatchesVirtualization(meta *txindexer.CachedBlockMeta) bool {
+	if meta == nil {
+		return false
+	}
+	return meta.VirtualizedCosmosEvents == b.cfg.VirtualizeCosmosEvents
 }
 
 func isHexHashString(value string) bool {

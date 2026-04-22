@@ -52,12 +52,26 @@ func TestHistoricalRPCBenchmarkSuite(t *testing.T) {
 	if cfg.OfflineAfterSync {
 		t.Log("offline-after-sync mode enabled; measured phase will restart the gateway in KV-only rpc mode")
 	}
+	if cfg.VirtualizeCosmosEvents {
+		t.Log("cosmos event virtualization enabled for benchmark gateway")
+	}
 	limit := ensureOpenFileLimit(cfg.MinNoFile)
 	if strings.TrimSpace(limit.Warning) != "" {
 		t.Logf("nofile warning: %s", limit.Warning)
 	}
 
 	artifactsDir := prepareBenchmarkOutputDir(t)
+	if cfg.CPUProfilePath == "" && cfg.CPUProfile {
+		cfg.CPUProfilePath = filepath.Join(artifactsDir, "cpu.pprof")
+	}
+	if cfg.MemProfile {
+		if cfg.MemProfileBeforePath == "" {
+			cfg.MemProfileBeforePath = filepath.Join(artifactsDir, "heap_before.pprof")
+		}
+		if cfg.MemProfileAfterPath == "" {
+			cfg.MemProfileAfterPath = filepath.Join(artifactsDir, "heap_after.pprof")
+		}
+	}
 	t.Logf("benchmark artifacts dir: %s", artifactsDir)
 
 	chainID, err := cometChainID(ctx, cfg.CometRPC)
@@ -82,6 +96,9 @@ func TestHistoricalRPCBenchmarkSuite(t *testing.T) {
 
 	stresserBin := buildChainStresserBinary(t, stresserRoot)
 	seedWorkloads := []benchmarkSeedWorkload{
+		{Name: "bank_send", Command: "tx-bank-send", Args: []string{"tx-bank-send"}},
+		{Name: "bank_multi_send", Command: "tx-bank-send-many", Args: []string{"tx-bank-send-many", "--targets", "3"}},
+		{Name: "tokenfactory_burn", Command: "tx-tokenfactory-burn", Args: []string{"tx-tokenfactory-burn"}},
 		{Name: "eth_send", Command: "tx-eth-send", Args: []string{"tx-eth-send"}},
 		{Name: "eth_call", Command: "tx-eth-call", Args: []string{"tx-eth-call"}},
 		{Name: "eth_deploy", Command: "tx-eth-deploy", Args: []string{"tx-eth-deploy"}},
@@ -98,6 +115,7 @@ func TestHistoricalRPCBenchmarkSuite(t *testing.T) {
 		"--grpc-addr", cfg.GRPCAddr,
 		"--accounts", accountsPath,
 		"--accounts-num", strconv.Itoa(cfg.SeedAccountsNum),
+		"--min-gas-price", getenv("WEB3INJ_E2E_MIN_GAS_PRICE", "160000000inj"),
 	}
 
 	for i := range seedWorkloads {
@@ -138,21 +156,23 @@ func TestHistoricalRPCBenchmarkSuite(t *testing.T) {
 
 	gatewayBin := buildGatewayBinary(t)
 	gatewayDataDir := filepath.Join(artifactsDir, "gateway")
+	syncStarted := time.Now()
 	proc := startGateway(t, gatewayStartConfig{
-		BinaryPath:  gatewayBin,
-		DataDir:     gatewayDataDir,
-		RPCPort:     cfg.GatewayRPCPort,
-		WSPort:      cfg.GatewayWSPort,
-		Earliest:    generatedFrom,
-		FetchJobs:   cfg.FetchJobs,
-		CometRPC:    cfg.CometRPC,
-		GRPCAddr:    cfg.GRPCAddr,
-		ChainID:     cfg.ChainID,
-		EVMChainID:  strconv.FormatInt(cfg.EthChainID, 10),
-		EnableSync:  true,
-		EnableRPC:   true,
-		APIList:     "eth,net,web3,debug,inj",
-		WaitTimeout: 90 * time.Second,
+		BinaryPath:             gatewayBin,
+		DataDir:                gatewayDataDir,
+		RPCPort:                cfg.GatewayRPCPort,
+		WSPort:                 cfg.GatewayWSPort,
+		Earliest:               generatedFrom,
+		FetchJobs:              cfg.FetchJobs,
+		CometRPC:               cfg.CometRPC,
+		GRPCAddr:               cfg.GRPCAddr,
+		ChainID:                cfg.ChainID,
+		EVMChainID:             strconv.FormatInt(cfg.EthChainID, 10),
+		EnableSync:             true,
+		EnableRPC:              true,
+		VirtualizeCosmosEvents: cfg.VirtualizeCosmosEvents,
+		APIList:                "eth,net,web3,debug,inj",
+		WaitTimeout:            90 * time.Second,
 	})
 	defer func() {
 		proc.Stop(t)
@@ -173,6 +193,7 @@ func TestHistoricalRPCBenchmarkSuite(t *testing.T) {
 		}
 		return st.GapsRemaining == 0 && dstHead == srcHead && dstHead >= headAfter, nil
 	}, "benchmark gateway did not fully sync to source head")
+	syncDuration := time.Since(syncStarted)
 	if cfg.PostSyncSettle > 0 {
 		t.Logf("post-sync settle for %s", cfg.PostSyncSettle)
 		time.Sleep(cfg.PostSyncSettle)
@@ -189,21 +210,22 @@ func TestHistoricalRPCBenchmarkSuite(t *testing.T) {
 		t.Log("restarting benchmark gateway in offline rpc-only mode against the indexed data dir")
 		proc.Stop(t)
 		proc = startGateway(t, gatewayStartConfig{
-			BinaryPath:     gatewayBin,
-			DataDir:        gatewayDataDir,
-			RPCPort:        cfg.GatewayRPCPort,
-			WSPort:         cfg.GatewayWSPort,
-			Earliest:       generatedFrom,
-			FetchJobs:      cfg.FetchJobs,
-			CometRPC:       cfg.CometRPC,
-			GRPCAddr:       cfg.GRPCAddr,
-			ChainID:        cfg.ChainID,
-			EVMChainID:     strconv.FormatInt(cfg.EthChainID, 10),
-			EnableSync:     false,
-			EnableRPC:      true,
-			OfflineRPCOnly: true,
-			APIList:        "eth,debug",
-			WaitTimeout:    30 * time.Second,
+			BinaryPath:             gatewayBin,
+			DataDir:                gatewayDataDir,
+			RPCPort:                cfg.GatewayRPCPort,
+			WSPort:                 cfg.GatewayWSPort,
+			Earliest:               generatedFrom,
+			FetchJobs:              cfg.FetchJobs,
+			CometRPC:               cfg.CometRPC,
+			GRPCAddr:               cfg.GRPCAddr,
+			ChainID:                cfg.ChainID,
+			EVMChainID:             strconv.FormatInt(cfg.EthChainID, 10),
+			EnableSync:             false,
+			EnableRPC:              true,
+			OfflineRPCOnly:         true,
+			VirtualizeCosmosEvents: cfg.VirtualizeCosmosEvents,
+			APIList:                "eth,debug",
+			WaitTimeout:            30 * time.Second,
 		})
 	}
 
@@ -219,8 +241,29 @@ func TestHistoricalRPCBenchmarkSuite(t *testing.T) {
 		t.Fatalf("query pre-benchmark status: %v", err)
 	}
 
+	if cfg.MemProfile {
+		writeBenchmarkMemProfile(t, ctx, proc.RPCURL(), cfg.MemProfileBeforePath)
+	}
+
+	stopCPUProfile := startBenchmarkCPUProfile(t, ctx, proc.RPCURL(), cfg.CPUProfilePath)
+	if stopCPUProfile != nil {
+		defer func() {
+			if stopCPUProfile != nil {
+				stopCPUProfile()
+			}
+		}()
+	}
+
 	t.Logf("measuring mixed historical rpc load for %s", cfg.MeasureDuration)
 	scenarioReports := runBenchmarkPhase(t, client, proc.RPCURL(), scenarios, cfg.MeasureDuration, cfg.BucketDuration, true)
+	if stopCPUProfile != nil {
+		stopCPUProfile()
+		stopCPUProfile = nil
+		assertFileWritten(t, cfg.CPUProfilePath)
+	}
+	if cfg.MemProfile {
+		writeBenchmarkMemProfile(t, ctx, proc.RPCURL(), cfg.MemProfileAfterPath)
+	}
 
 	statusAfter, err := proc.Status(ctx)
 	if err != nil {
@@ -253,13 +296,14 @@ func TestHistoricalRPCBenchmarkSuite(t *testing.T) {
 		WarmupDurationSeconds:  roundSeconds(cfg.WarmupDuration),
 		MeasureDurationSeconds: roundSeconds(cfg.MeasureDuration),
 		Environment: benchmarkEnvironmentReport{
-			SourceRPC:        cfg.SourceRPC,
-			CometRPC:         cfg.CometRPC,
-			GRPCAddr:         cfg.GRPCAddr,
-			ChainID:          cfg.ChainID,
-			EthChainID:       cfg.EthChainID,
-			OfflineAfterSync: cfg.OfflineAfterSync,
-			NoFile:           limit,
+			SourceRPC:              cfg.SourceRPC,
+			CometRPC:               cfg.CometRPC,
+			GRPCAddr:               cfg.GRPCAddr,
+			ChainID:                cfg.ChainID,
+			EthChainID:             cfg.EthChainID,
+			VirtualizeCosmosEvents: cfg.VirtualizeCosmosEvents,
+			OfflineAfterSync:       cfg.OfflineAfterSync,
+			NoFile:                 limit,
 		},
 		Seed: benchmarkSeedReport{
 			DurationSecondsPerWorkload: roundSeconds(cfg.SeedDuration),
@@ -282,11 +326,15 @@ func TestHistoricalRPCBenchmarkSuite(t *testing.T) {
 			TraceHashes:  len(fixtures.TraceHashes),
 		},
 		Gateway: benchmarkGatewayReport{
-			RPCURL:       proc.RPCURL(),
-			DataDir:      gatewayDataDir,
-			LogPath:      proc.logPath,
-			StatusBefore: statusBefore,
-			StatusAfter:  statusAfter,
+			RPCURL:               proc.RPCURL(),
+			DataDir:              gatewayDataDir,
+			LogPath:              proc.logPath,
+			CPUProfilePath:       cfg.CPUProfilePath,
+			MemProfileBeforePath: cfg.MemProfileBeforePath,
+			MemProfileAfterPath:  cfg.MemProfileAfterPath,
+			SyncDurationSeconds:  roundSeconds(syncDuration),
+			StatusBefore:         statusBefore,
+			StatusAfter:          statusAfter,
 		},
 		Scenarios: scenarioReports,
 		Totals:    summarizeScenarioReports(scenarioReports),
@@ -326,6 +374,12 @@ type benchmarkConfig struct {
 	MinNoFile              uint64
 	StrictCacheOnly        bool
 	OfflineAfterSync       bool
+	VirtualizeCosmosEvents bool
+	CPUProfile             bool
+	CPUProfilePath         string
+	MemProfile             bool
+	MemProfileBeforePath   string
+	MemProfileAfterPath    string
 }
 
 func loadBenchmarkConfig(t *testing.T) benchmarkConfig {
@@ -366,6 +420,12 @@ func loadBenchmarkConfig(t *testing.T) benchmarkConfig {
 		MinNoFile:              getenvUint64("WEB3INJ_BENCH_MIN_NOFILE", defaultBenchMinNoFile),
 		StrictCacheOnly:        strictCacheOnly,
 		OfflineAfterSync:       offlineAfterSync,
+		VirtualizeCosmosEvents: strings.TrimSpace(os.Getenv("WEB3INJ_VIRTUALIZE_COSMOS_EVENTS")) == "true",
+		CPUProfile:             envBool("WEB3INJ_BENCH_CPU_PROFILE"),
+		CPUProfilePath:         strings.TrimSpace(os.Getenv("WEB3INJ_BENCH_CPU_PROFILE_PATH")),
+		MemProfile:             envBool("WEB3INJ_BENCH_MEM_PROFILE"),
+		MemProfileBeforePath:   strings.TrimSpace(os.Getenv("WEB3INJ_BENCH_MEM_PROFILE_BEFORE_PATH")),
+		MemProfileAfterPath:    strings.TrimSpace(os.Getenv("WEB3INJ_BENCH_MEM_PROFILE_AFTER_PATH")),
 	}
 }
 
@@ -574,6 +634,75 @@ func warmTraceBenchmarkFixtures(t *testing.T, rpcURL string, fixtures benchmarkF
 			t.Fatalf("warm trace transaction %s: %v", hash, err)
 		}
 	}
+}
+
+// startBenchmarkCPUProfile asks a running gateway to write a CPU profile during
+// benchmark execution and returns a stop function.
+func startBenchmarkCPUProfile(t *testing.T, ctx context.Context, rpcURL, path string) func() {
+	t.Helper()
+
+	if strings.TrimSpace(path) == "" {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("create benchmark cpu profile dir: %v", err)
+	}
+
+	resp, err := rpcCallResponse(ctx, rpcURL, "debug_startCPUProfile", []interface{}{path})
+	if err != nil {
+		t.Fatalf("start benchmark cpu profile: %v", err)
+	}
+	if resp.Error != nil {
+		t.Fatalf("start benchmark cpu profile rpc error %d: %s", resp.Error.Code, resp.Error.Message)
+	}
+	t.Logf("benchmark cpu profile started: %s", path)
+
+	stopped := false
+	return func() {
+		if stopped {
+			return
+		}
+		stopped = true
+
+		resp, err := rpcCallResponse(ctx, rpcURL, "debug_stopCPUProfile", []interface{}{})
+		if err != nil {
+			t.Fatalf("stop benchmark cpu profile: %v", err)
+		}
+		if resp.Error != nil {
+			t.Fatalf("stop benchmark cpu profile rpc error %d: %s", resp.Error.Code, resp.Error.Message)
+		}
+		t.Logf("benchmark cpu profile stopped: %s", path)
+	}
+}
+
+// writeBenchmarkMemProfile asks a running gateway to force GC and write a heap
+// profile after benchmark execution.
+func writeBenchmarkMemProfile(t *testing.T, ctx context.Context, rpcURL, path string) {
+	t.Helper()
+
+	if strings.TrimSpace(path) == "" {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("create benchmark mem profile dir: %v", err)
+	}
+
+	resp, err := rpcCallResponse(ctx, rpcURL, "debug_freeOSMemory", []interface{}{})
+	if err != nil {
+		t.Fatalf("force gc before benchmark mem profile: %v", err)
+	}
+	if resp.Error != nil {
+		t.Fatalf("force gc before benchmark mem profile rpc error %d: %s", resp.Error.Code, resp.Error.Message)
+	}
+	resp, err = rpcCallResponse(ctx, rpcURL, "debug_writeMemProfile", []interface{}{path})
+	if err != nil {
+		t.Fatalf("write benchmark mem profile: %v", err)
+	}
+	if resp.Error != nil {
+		t.Fatalf("write benchmark mem profile rpc error %d: %s", resp.Error.Code, resp.Error.Message)
+	}
+	assertFileWritten(t, path)
+	t.Logf("benchmark mem profile written: %s", path)
 }
 
 type benchmarkScenarioSpec struct {
@@ -1292,13 +1421,14 @@ type benchmarkReport struct {
 }
 
 type benchmarkEnvironmentReport struct {
-	SourceRPC        string             `json:"source_rpc"`
-	CometRPC         string             `json:"comet_rpc"`
-	GRPCAddr         string             `json:"grpc_addr"`
-	ChainID          string             `json:"chain_id"`
-	EthChainID       int64              `json:"eth_chain_id"`
-	OfflineAfterSync bool               `json:"offline_after_sync"`
-	NoFile           benchmarkNoFileCap `json:"nofile"`
+	SourceRPC              string             `json:"source_rpc"`
+	CometRPC               string             `json:"comet_rpc"`
+	GRPCAddr               string             `json:"grpc_addr"`
+	ChainID                string             `json:"chain_id"`
+	EthChainID             int64              `json:"eth_chain_id"`
+	VirtualizeCosmosEvents bool               `json:"virtualize_cosmos_events"`
+	OfflineAfterSync       bool               `json:"offline_after_sync"`
+	NoFile                 benchmarkNoFileCap `json:"nofile"`
 }
 
 type benchmarkNoFileCap struct {
@@ -1339,11 +1469,15 @@ type benchmarkFixtureReport struct {
 }
 
 type benchmarkGatewayReport struct {
-	RPCURL       string             `json:"rpc_url"`
-	DataDir      string             `json:"data_dir"`
-	LogPath      string             `json:"log_path"`
-	StatusBefore syncStatusResponse `json:"status_before"`
-	StatusAfter  syncStatusResponse `json:"status_after"`
+	RPCURL               string             `json:"rpc_url"`
+	DataDir              string             `json:"data_dir"`
+	LogPath              string             `json:"log_path"`
+	CPUProfilePath       string             `json:"cpu_profile_path,omitempty"`
+	MemProfileBeforePath string             `json:"mem_profile_before_path,omitempty"`
+	MemProfileAfterPath  string             `json:"mem_profile_after_path,omitempty"`
+	SyncDurationSeconds  float64            `json:"sync_duration_seconds"`
+	StatusBefore         syncStatusResponse `json:"status_before"`
+	StatusAfter          syncStatusResponse `json:"status_after"`
 }
 
 type benchmarkTotalsReport struct {
@@ -1649,6 +1783,17 @@ func getenvUint64(key string, fallback uint64) uint64 {
 		return fallback
 	}
 	return n
+}
+
+// envBool parses common truthy environment variable values for optional e2e
+// benchmark controls.
+func envBool(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+	case "1", "true", "yes", "y", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 func maxInt(a, b int) int {

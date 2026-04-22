@@ -33,6 +33,7 @@ type Config struct {
 	AllowGaps              bool
 	EnableSync             bool
 	ParallelSyncTipAndGaps bool
+	VirtualizeCosmosEvents bool
 	OfflineRPCOnly         bool
 	MinGasPrices           string
 
@@ -91,6 +92,7 @@ func DefaultConfig() Config {
 		AllowGaps:              true,
 		EnableSync:             true,
 		ParallelSyncTipAndGaps: true,
+		VirtualizeCosmosEvents: false,
 		OfflineRPCOnly:         false,
 		MinGasPrices:           "160000000inj",
 
@@ -261,6 +263,7 @@ func applyEnvOverrides(cfg *Config) {
 	cfg.AllowGaps = getEnvBool("ALLOW_GAPS", cfg.AllowGaps)
 	cfg.EnableSync = getEnvBool("ENABLE_SYNC", cfg.EnableSync)
 	cfg.ParallelSyncTipAndGaps = getEnvBool("PARALLEL_SYNC_TIP_AND_GAPS", cfg.ParallelSyncTipAndGaps)
+	cfg.VirtualizeCosmosEvents = getEnvBool("VIRTUALIZE_COSMOS_EVENTS", cfg.VirtualizeCosmosEvents)
 	cfg.OfflineRPCOnly = getEnvBool("OFFLINE_RPC_ONLY", cfg.OfflineRPCOnly)
 	cfg.MinGasPrices = getEnvString("MIN_GAS_PRICES", cfg.MinGasPrices)
 	cfg.Shutdown.Timeout = getEnvDuration("SHUTDOWN_TIMEOUT", cfg.Shutdown.Timeout)

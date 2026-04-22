@@ -1,11 +1,11 @@
 package indexer
 
 import (
-	"encoding/json"
 	"fmt"
 	"math/big"
 
 	errorsmod "cosmossdk.io/errors"
+	"github.com/bytedance/sonic"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -13,6 +13,7 @@ import (
 	"upd.dev/xlab/gotracer"
 
 	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
+	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtualbank"
 	evmtypes "github.com/InjectiveLabs/sdk-go/chain/evm/types"
 )
 
@@ -23,43 +24,45 @@ const (
 	KeyPrefixBlockLogs     = 6
 	KeyPrefixBlockMeta     = 7
 	KeyPrefixBlockHash     = 8
+	KeyPrefixVirtualRPCtx  = 11
 	blockIndexedFlagLength = 1
 )
 
 type CachedBlockMeta struct {
-	Height           int64  `json:"height"`
-	Hash             string `json:"hash"`
-	ParentHash       string `json:"parent_hash"`
-	StateRoot        string `json:"state_root,omitempty"`
-	Miner            string `json:"miner,omitempty"`
-	Timestamp        int64  `json:"timestamp"`
-	Size             uint64 `json:"size"`
-	GasLimit         uint64 `json:"gas_limit"`
-	GasUsed          uint64 `json:"gas_used"`
-	EthTxCount       int32  `json:"eth_tx_count"`
-	TxCount          int32  `json:"tx_count"`
-	Bloom            string `json:"bloom"`
-	TransactionsRoot string `json:"transactions_root,omitempty"`
-	BaseFee          string `json:"base_fee,omitempty"`
+	Height                  int64  `json:"height"`
+	Hash                    string `json:"hash"`
+	ParentHash              string `json:"parent_hash"`
+	StateRoot               string `json:"state_root,omitempty"`
+	Miner                   string `json:"miner,omitempty"`
+	Timestamp               int64  `json:"timestamp"`
+	Size                    uint64 `json:"size"`
+	GasLimit                uint64 `json:"gas_limit"`
+	GasUsed                 uint64 `json:"gas_used"`
+	EthTxCount              int32  `json:"eth_tx_count"`
+	TxCount                 int32  `json:"tx_count"`
+	Bloom                   string `json:"bloom"`
+	TransactionsRoot        string `json:"transactions_root,omitempty"`
+	BaseFee                 string `json:"base_fee,omitempty"`
+	VirtualizedCosmosEvents bool   `json:"virtualized_cosmos_events,omitempty"`
 }
 
 type CachedReceipt struct {
-	Status            uint64          `json:"status"`
-	CumulativeGasUsed uint64          `json:"cumulative_gas_used"`
-	GasUsed           uint64          `json:"gas_used"`
-	Reason            *string         `json:"reason,omitempty"`
-	VMError           *string         `json:"vm_error,omitempty"`
-	LogsBloom         string          `json:"logs_bloom"`
-	Logs              []*ethtypes.Log `json:"logs"`
-	TransactionHash   string          `json:"transaction_hash"`
-	ContractAddress   *string         `json:"contract_address,omitempty"`
-	BlockHash         string          `json:"block_hash"`
-	BlockNumber       uint64          `json:"block_number"`
-	TransactionIndex  uint64          `json:"transaction_index"`
-	EffectiveGasPrice string          `json:"effective_gas_price"`
-	From              string          `json:"from"`
-	To                *string         `json:"to,omitempty"`
-	Type              uint64          `json:"type"`
+	Status            uint64                `json:"status"`
+	CumulativeGasUsed uint64                `json:"cumulative_gas_used"`
+	GasUsed           uint64                `json:"gas_used"`
+	Reason            *string               `json:"reason,omitempty"`
+	VMError           *string               `json:"vm_error,omitempty"`
+	LogsBloom         string                `json:"logs_bloom"`
+	Logs              []*virtualbank.RPCLog `json:"logs"`
+	TransactionHash   string                `json:"transaction_hash"`
+	ContractAddress   *string               `json:"contract_address,omitempty"`
+	BlockHash         string                `json:"block_hash"`
+	BlockNumber       uint64                `json:"block_number"`
+	TransactionIndex  uint64                `json:"transaction_index"`
+	EffectiveGasPrice string                `json:"effective_gas_price"`
+	From              string                `json:"from"`
+	To                *string               `json:"to,omitempty"`
+	Type              uint64                `json:"type"`
 }
 
 func (r CachedReceipt) ToMap() map[string]interface{} {
@@ -98,7 +101,7 @@ func (r CachedReceipt) ToMap() map[string]interface{} {
 		receipt["to"] = &to
 	}
 	if r.Logs == nil {
-		receipt["logs"] = [][]*ethtypes.Log{}
+		receipt["logs"] = []*virtualbank.RPCLog{}
 	}
 
 	return receipt
@@ -118,6 +121,12 @@ func ReceiptKey(hash common.Hash) []byte {
 	return append([]byte{KeyPrefixReceipt}, hash.Bytes()...)
 }
 
+// VirtualRPCtxKey stores the marker that identifies indexed RPC transactions
+// synthesized from Cosmos bank events.
+func VirtualRPCtxKey(hash common.Hash) []byte {
+	return append([]byte{KeyPrefixVirtualRPCtx}, hash.Bytes()...)
+}
+
 func BlockLogsKey(height int64) []byte {
 	return append([]byte{KeyPrefixBlockLogs}, sdk.Uint64ToBigEndian(uint64(height))...)
 }
@@ -131,7 +140,7 @@ func BlockHashKey(hash common.Hash) []byte {
 }
 
 func mustJSON(v interface{}) []byte {
-	bz, err := json.Marshal(v)
+	bz, err := sonic.Marshal(v)
 	if err != nil {
 		panic(err)
 	}
@@ -143,7 +152,7 @@ func unmarshalJSON[T any](bz []byte) (T, error) {
 	if len(bz) == 0 {
 		return out, fmt.Errorf("empty payload")
 	}
-	if err := json.Unmarshal(bz, &out); err != nil {
+	if err := sonic.Unmarshal(bz, &out); err != nil {
 		return out, err
 	}
 	return out, nil
@@ -166,11 +175,11 @@ func (kv *KVIndexer) GetRPCTransactionByHash(hash common.Hash) (*rpctypes.RPCTra
 		return nil, newCacheMiss("rpc tx not found, hash: %s", hash.Hex())
 	}
 
-	tx, err := unmarshalJSON[rpctypes.RPCTransaction](bz)
+	tx, err := unmarshalRPCTransactionPayload(bz)
 	if err != nil {
 		return nil, errorsmod.Wrapf(err, "GetRPCTransactionByHash %s", hash.Hex())
 	}
-	return &tx, nil
+	return tx, nil
 }
 
 func (kv *KVIndexer) GetRPCTransactionByBlockAndIndex(blockNumber int64, txIndex int32) (*rpctypes.RPCTransaction, error) {
@@ -231,11 +240,29 @@ func (kv *KVIndexer) GetReceiptByTxHash(hash common.Hash) (map[string]interface{
 		return nil, newCacheMiss("receipt not found, hash: %s", hash.Hex())
 	}
 
-	receipt, err := unmarshalJSON[CachedReceipt](bz)
+	receipt, err := unmarshalReceiptPayload(bz)
 	if err != nil {
 		return nil, errorsmod.Wrapf(err, "GetReceiptByTxHash %s", hash.Hex())
 	}
 	return receipt.ToMap(), nil
+}
+
+// IsVirtualRPCTransaction reports whether a cached RPC transaction was
+// synthesized by the virtual bank event indexer.
+func (kv *KVIndexer) IsVirtualRPCTransaction(hash common.Hash) (bool, error) {
+	ctx := kv.operationContext()
+	if kv.ctx != nil {
+		defer gotracer.Trace(&ctx, kv.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, kv.baseTraceTags)()
+	}
+	kv = kv.WithContext(ctx).(*KVIndexer)
+
+	bz, err := kv.db.Get(VirtualRPCtxKey(hash))
+	if err != nil {
+		return false, errorsmod.Wrapf(err, "IsVirtualRPCTransaction %s", hash.Hex())
+	}
+	return len(bz) > 0, nil
 }
 
 func (kv *KVIndexer) GetBlockMetaByHeight(height int64) (*CachedBlockMeta, error) {
@@ -255,7 +282,7 @@ func (kv *KVIndexer) GetBlockMetaByHeight(height int64) (*CachedBlockMeta, error
 		return nil, newCacheMiss("block meta not found, height: %d", height)
 	}
 
-	meta, err := unmarshalJSON[CachedBlockMeta](bz)
+	meta, err := unmarshalBlockMetaPayload(bz)
 	if err != nil {
 		return nil, errorsmod.Wrapf(err, "GetBlockMetaByHeight %d", height)
 	}
@@ -282,7 +309,9 @@ func (kv *KVIndexer) GetBlockMetaByHash(hash common.Hash) (*CachedBlockMeta, err
 	return kv.GetBlockMetaByHeight(height)
 }
 
-func (kv *KVIndexer) GetLogsByBlockHeight(height int64) ([][]*ethtypes.Log, error) {
+// GetLogsByBlockHeight returns grouped logs from the indexed KV cache for a
+// block height.
+func (kv *KVIndexer) GetLogsByBlockHeight(height int64) ([][]*virtualbank.RPCLog, error) {
 	ctx := kv.operationContext()
 	if kv.ctx != nil {
 		defer gotracer.Trace(&ctx, kv.baseTraceTags)()
@@ -298,10 +327,37 @@ func (kv *KVIndexer) GetLogsByBlockHeight(height int64) ([][]*ethtypes.Log, erro
 	if len(bz) == 0 {
 		return nil, newCacheMiss("block logs not found, height: %d", height)
 	}
-	return unmarshalJSON[[][]*ethtypes.Log](bz)
+	return unmarshalBlockLogsPayload(bz)
 }
 
-func (kv *KVIndexer) GetLogsByBlockHash(hash common.Hash) ([][]*ethtypes.Log, error) {
+// GetFilteredLogsByBlockHeight returns indexed logs for a height after applying
+// address/topic filtering during decode when the stored format supports it.
+func (kv *KVIndexer) GetFilteredLogsByBlockHeight(
+	height int64,
+	addresses []common.Address,
+	topics [][]common.Hash,
+) ([]*virtualbank.RPCLog, error) {
+	ctx := kv.operationContext()
+	if kv.ctx != nil {
+		defer gotracer.Trace(&ctx, kv.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, kv.baseTraceTags)()
+	}
+	kv = kv.WithContext(ctx).(*KVIndexer)
+
+	bz, err := kv.db.Get(BlockLogsKey(height))
+	if err != nil {
+		return nil, errorsmod.Wrapf(err, "GetFilteredLogsByBlockHeight %d", height)
+	}
+	if len(bz) == 0 {
+		return nil, newCacheMiss("block logs not found, height: %d", height)
+	}
+	return unmarshalFilteredBlockLogsPayload(bz, addresses, topics)
+}
+
+// GetLogsByBlockHash resolves a block hash through the indexed hash map and
+// returns grouped cached logs.
+func (kv *KVIndexer) GetLogsByBlockHash(hash common.Hash) ([][]*virtualbank.RPCLog, error) {
 	ctx := kv.operationContext()
 	if kv.ctx != nil {
 		defer gotracer.Trace(&ctx, kv.baseTraceTags)()
@@ -319,6 +375,32 @@ func (kv *KVIndexer) GetLogsByBlockHash(hash common.Hash) ([][]*ethtypes.Log, er
 	}
 	height := int64(sdk.BigEndianToUint64(bz))
 	return kv.GetLogsByBlockHeight(height)
+}
+
+// GetFilteredLogsByBlockHash resolves a block hash through the indexed hash map
+// and returns matching cached logs.
+func (kv *KVIndexer) GetFilteredLogsByBlockHash(
+	hash common.Hash,
+	addresses []common.Address,
+	topics [][]common.Hash,
+) ([]*virtualbank.RPCLog, error) {
+	ctx := kv.operationContext()
+	if kv.ctx != nil {
+		defer gotracer.Trace(&ctx, kv.baseTraceTags)()
+	} else {
+		defer gotracer.Traceless(&ctx, kv.baseTraceTags)()
+	}
+	kv = kv.WithContext(ctx).(*KVIndexer)
+
+	bz, err := kv.db.Get(BlockHashKey(hash))
+	if err != nil {
+		return nil, errorsmod.Wrapf(err, "GetFilteredLogsByBlockHash %s", hash.Hex())
+	}
+	if len(bz) == 0 {
+		return nil, newCacheMiss("block hash not indexed: %s", hash.Hex())
+	}
+	height := int64(sdk.BigEndianToUint64(bz))
+	return kv.GetFilteredLogsByBlockHeight(height, addresses, topics)
 }
 
 func (kv *KVIndexer) IsBlockIndexed(height int64) (bool, error) {
@@ -343,7 +425,7 @@ func buildCachedReceipt(
 	gasUsed uint64,
 	reason string,
 	vmError string,
-	logs []*ethtypes.Log,
+	logs []*virtualbank.RPCLog,
 	txHash common.Hash,
 	contractAddress *common.Address,
 	blockHash common.Hash,
@@ -396,6 +478,8 @@ func buildCachedReceipt(
 	}
 }
 
-func evmLogsBloom(logs []*ethtypes.Log) []byte {
-	return evmtypes.LogsBloom(logs)
+// evmLogsBloom calculates the Ethereum bloom for cached RPC logs, ignoring
+// virtual-only metadata.
+func evmLogsBloom(logs []*virtualbank.RPCLog) []byte {
+	return evmtypes.LogsBloom(virtualbank.EthLogs(logs))
 }

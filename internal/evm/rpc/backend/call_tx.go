@@ -8,6 +8,7 @@ import (
 	"math/big"
 
 	errorsmod "cosmossdk.io/errors"
+	"github.com/bytedance/sonic"
 	cmtjsonrpctypes "github.com/cometbft/cometbft/rpc/jsonrpc/types"
 	"github.com/cosmos/cosmos-sdk/client/flags"
 	sdk "github.com/cosmos/cosmos-sdk/types"
@@ -366,7 +367,7 @@ func (b *Backend) EstimateGas(args rpctypes.TransactionArgs, blockNrOptional *rp
 		blockNr = *blockNrOptional
 	}
 
-	bz, err := json.Marshal(&args)
+	bz, err := sonic.Marshal(&args)
 	if err != nil {
 		return 0, err
 	}
@@ -411,7 +412,7 @@ func (b *Backend) DoCall(
 	}
 	b = b.WithContext(ctx).(*Backend)
 
-	bz, err := json.Marshal(&args)
+	bz, err := sonic.Marshal(&args)
 	if err != nil {
 		return nil, err
 	}

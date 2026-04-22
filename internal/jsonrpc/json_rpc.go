@@ -85,26 +85,14 @@ func Start(
 	logger = logger.With("module", "jsonrpc")
 
 	var rpcStream *stream.RPCStream
-	evtClient, err := eventClientForStreams(clientCtx.Client)
-	if err != nil {
+	if cfg.VirtualizeCosmosEvents {
 		logger.Warn(
-			"comet event streams unavailable; continuing in polling-only mode",
-			"client_type", fmt.Sprintf("%T", clientCtx.Client),
-			"error", err,
+			"cosmos transfer virtualization enabled; continuing in polling-only mode for log filters",
 			"eth_subscribe_available", false,
 			"eth_new_filter_available", false,
 		)
-	} else if evtClient != nil {
-		var rpcStreamOpenAttempts = 6
-		for i := 0; i < rpcStreamOpenAttempts; i++ {
-			rpcStream, err = stream.NewRPCStreams(evtClient, logger, clientCtx.TxConfig.TxDecoder())
-			if err == nil {
-				break
-			}
-
-			time.Sleep(time.Second)
-		}
-
+	} else {
+		evtClient, err := eventClientForStreams(clientCtx.Client)
 		if err != nil {
 			logger.Warn(
 				"comet event streams unavailable; continuing in polling-only mode",
@@ -113,15 +101,35 @@ func Start(
 				"eth_subscribe_available", false,
 				"eth_new_filter_available", false,
 			)
-			rpcStream = nil
+		} else if evtClient != nil {
+			var rpcStreamOpenAttempts = 6
+			for i := 0; i < rpcStreamOpenAttempts; i++ {
+				rpcStream, err = stream.NewRPCStreams(evtClient, logger, clientCtx.TxConfig.TxDecoder())
+				if err == nil {
+					break
+				}
+
+				time.Sleep(time.Second)
+			}
+
+			if err != nil {
+				logger.Warn(
+					"comet event streams unavailable; continuing in polling-only mode",
+					"client_type", fmt.Sprintf("%T", clientCtx.Client),
+					"error", err,
+					"eth_subscribe_available", false,
+					"eth_new_filter_available", false,
+				)
+				rpcStream = nil
+			}
+		} else {
+			logger.Warn(
+				"client does not implement EventsClient; continuing in polling-only mode",
+				"client_type", fmt.Sprintf("%T", clientCtx.Client),
+				"eth_subscribe_available", false,
+				"eth_new_filter_available", false,
+			)
 		}
-	} else {
-		logger.Warn(
-			"client does not implement EventsClient; continuing in polling-only mode",
-			"client_type", fmt.Sprintf("%T", clientCtx.Client),
-			"eth_subscribe_available", false,
-			"eth_new_filter_available", false,
-		)
 	}
 
 	handler := NewWrappedSdkLogger(logger)

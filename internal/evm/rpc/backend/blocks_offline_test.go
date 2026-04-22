@@ -17,6 +17,7 @@ import (
 
 	appconfig "github.com/InjectiveLabs/evm-gateway/internal/config"
 	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
+	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtualbank"
 	"github.com/InjectiveLabs/evm-gateway/internal/indexer"
 )
 
@@ -461,7 +462,7 @@ func backendTestSeedCachedBlockFixture(t *testing.T, db dbm.DB) backendCachedBlo
 		CumulativeGasUsed: 21000,
 		GasUsed:           21000,
 		LogsBloom:         hexutil.Encode(make([]byte, ethtypes.BloomByteLength)),
-		Logs:              []*ethtypes.Log{},
+		Logs:              []*virtualbank.RPCLog{},
 		TransactionHash:   txHashA.Hex(),
 		BlockHash:         blockHash.Hex(),
 		BlockNumber:       uint64(meta.Height),
@@ -476,7 +477,7 @@ func backendTestSeedCachedBlockFixture(t *testing.T, db dbm.DB) backendCachedBlo
 		CumulativeGasUsed: 42000,
 		GasUsed:           21000,
 		LogsBloom:         hexutil.Encode(make([]byte, ethtypes.BloomByteLength)),
-		Logs:              []*ethtypes.Log{},
+		Logs:              []*virtualbank.RPCLog{},
 		TransactionHash:   txHashB.Hex(),
 		BlockHash:         blockHash.Hex(),
 		BlockNumber:       uint64(meta.Height),

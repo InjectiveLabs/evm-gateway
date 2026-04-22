@@ -15,6 +15,7 @@ type gatewayCLIOptions struct {
 	dataDir                *string
 	enableSync             *bool
 	parallelSyncTipAndGaps *bool
+	virtualizeCosmosEvents *bool
 	offlineRPCOnly         *bool
 
 	logFormat  *string

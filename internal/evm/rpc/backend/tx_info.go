@@ -61,10 +61,27 @@ func (b *Backend) GetTransactionByHash(txHash common.Hash) (*rpctypes.RPCTransac
 	if b.indexer != nil {
 		rpcTx, err := b.indexer.GetRPCTransactionByHash(txHash)
 		if err == nil {
-			if b.syncStatus != nil {
-				b.syncStatus.RecordTxByHashCacheHit()
+			visible, err := b.cachedTransactionVisible(txHash)
+			if err != nil {
+				return nil, err
 			}
-			return rpcTx, nil
+			if !visible {
+				return nil, nil
+			}
+			matches, err := b.cachedRPCTransactionMatchesVirtualization(rpcTx)
+			if err != nil {
+				return nil, err
+			}
+			if !matches {
+				if b.cfg.OfflineRPCOnly {
+					return nil, nil
+				}
+			} else {
+				if b.syncStatus != nil {
+					b.syncStatus.RecordTxByHashCacheHit()
+				}
+				return rpcTx, nil
+			}
 		}
 	}
 
@@ -99,6 +116,19 @@ func (b *Backend) GetTransactionByHash(txHash common.Hash) (*rpctypes.RPCTransac
 	blockRes, err := b.TendermintBlockResultByNumber(&block.Block.Height)
 	if err != nil {
 		b.logger.Debug("block result not found", "height", block.Block.Height, "error", err.Error())
+		return nil, nil
+	}
+
+	if b.virtualBankEnabled() {
+		view, err := b.liveVirtualBankBlockView(block, blockRes)
+		if err != nil {
+			return nil, err
+		}
+		for _, rpcTx := range view.Transactions {
+			if rpcTx != nil && rpcTx.Hash == txHash {
+				return rpcTx, nil
+			}
+		}
 		return nil, nil
 	}
 
@@ -195,12 +225,29 @@ func (b *Backend) GetTransactionReceipt(hash common.Hash) (map[string]interface{
 
 	b.logger.Debug("eth_getTransactionReceipt", "hash", hash)
 	if b.indexer != nil {
-		receipt, err := b.indexer.GetReceiptByTxHash(hash)
+		receipt, err := b.materializedReceiptByHash(hash)
 		if err == nil {
-			if b.syncStatus != nil {
-				b.syncStatus.RecordReceiptCacheHit()
+			visible, err := b.cachedTransactionVisible(hash)
+			if err != nil {
+				return nil, err
 			}
-			return receipt, nil
+			if !visible {
+				return nil, nil
+			}
+			matches, err := b.cachedReceiptMatchesVirtualization(receipt)
+			if err != nil {
+				return nil, err
+			}
+			if !matches {
+				if b.cfg.OfflineRPCOnly {
+					return nil, nil
+				}
+			} else {
+				if b.syncStatus != nil {
+					b.syncStatus.RecordReceiptCacheHit()
+				}
+				return receipt, nil
+			}
 		}
 		if b.syncStatus != nil {
 			b.syncStatus.RecordReceiptCacheMiss()
@@ -243,6 +290,18 @@ func (b *Backend) GetTransactionReceipt(hash common.Hash) (map[string]interface{
 	blockRes, err := b.TendermintBlockResultByNumber(&res.Height)
 	if err != nil {
 		b.logger.Warn("failed to retrieve block results", "height", res.Height, "error", err.Error())
+		return nil, nil
+	}
+	if b.virtualBankEnabled() {
+		view, err := b.liveVirtualBankBlockView(resBlock, blockRes)
+		if err != nil {
+			return nil, err
+		}
+		for _, receipt := range view.Receipts {
+			if receiptHash, ok := receipt["transactionHash"].(common.Hash); ok && receiptHash == hash {
+				return receipt, nil
+			}
+		}
 		return nil, nil
 	}
 	normalizedTxResults, err := rpctypes.NormalizeTxResponseIndexes(blockRes.TxResults)
@@ -353,24 +412,31 @@ func (b *Backend) GetTransactionByBlockHashAndIndex(hash common.Hash, idx hexuti
 	if b.indexer != nil {
 		meta, err := b.indexer.GetBlockMetaByHash(hash)
 		if err == nil {
-			rpcTx, err := b.indexer.GetRPCTransactionByBlockAndIndex(meta.Height, int32(idx))
-			if err == nil {
+			if !b.cachedMetaMatchesVirtualization(meta) {
+				if b.cfg.OfflineRPCOnly {
+					return nil, fmt.Errorf("cached block virtualization mode mismatch at height %d", meta.Height)
+				}
+				b.logger.Debug("cached block virtualization mode mismatch; falling back to live rpc", "hash", hash.Hex(), "height", meta.Height)
+			} else {
+				rpcTx, err := b.indexer.GetRPCTransactionByBlockAndIndex(meta.Height, int32(idx))
+				if err == nil {
+					if b.syncStatus != nil {
+						b.syncStatus.RecordTxByIndexCacheHit()
+					}
+					return rpcTx, nil
+				}
 				if b.syncStatus != nil {
-					b.syncStatus.RecordTxByIndexCacheHit()
+					b.syncStatus.RecordTxByIndexCacheMiss()
 				}
-				return rpcTx, nil
-			}
-			if b.syncStatus != nil {
-				b.syncStatus.RecordTxByIndexCacheMiss()
-			}
-			if b.cfg.OfflineRPCOnly {
-				if isIndexerCacheMiss(err) {
-					return nil, nil
+				if b.cfg.OfflineRPCOnly {
+					if isIndexerCacheMiss(err) {
+						return nil, nil
+					}
+					return nil, err
 				}
-				return nil, err
-			}
-			if !isIndexerCacheMiss(err) {
-				b.logger.Debug("cached tx-by-block-hash lookup failed; falling back to live rpc", "hash", hash.Hex(), "index", idx, "error", err.Error())
+				if !isIndexerCacheMiss(err) {
+					b.logger.Debug("cached tx-by-block-hash lookup failed; falling back to live rpc", "hash", hash.Hex(), "index", idx, "error", err.Error())
+				}
 			}
 		} else if b.cfg.OfflineRPCOnly {
 			if isIndexerCacheMiss(err) {
@@ -416,24 +482,32 @@ func (b *Backend) GetTransactionByBlockNumberAndIndex(blockNum rpctypes.BlockNum
 	if b.indexer != nil {
 		height, err := b.indexedBlockHeight(blockNum)
 		if err == nil && height >= 1 {
-			rpcTx, err := b.indexer.GetRPCTransactionByBlockAndIndex(height, int32(idx))
-			if err == nil {
+			meta, metaErr := b.indexer.GetBlockMetaByHeight(height)
+			if metaErr == nil && meta != nil && !b.cachedMetaMatchesVirtualization(meta) {
+				if b.cfg.OfflineRPCOnly {
+					return nil, fmt.Errorf("cached block virtualization mode mismatch at height %d", meta.Height)
+				}
+				b.logger.Debug("cached block virtualization mode mismatch; falling back to live rpc", "height", meta.Height)
+			} else {
+				rpcTx, err := b.indexer.GetRPCTransactionByBlockAndIndex(height, int32(idx))
+				if err == nil {
+					if b.syncStatus != nil {
+						b.syncStatus.RecordTxByIndexCacheHit()
+					}
+					return rpcTx, nil
+				}
 				if b.syncStatus != nil {
-					b.syncStatus.RecordTxByIndexCacheHit()
+					b.syncStatus.RecordTxByIndexCacheMiss()
 				}
-				return rpcTx, nil
-			}
-			if b.syncStatus != nil {
-				b.syncStatus.RecordTxByIndexCacheMiss()
-			}
-			if b.cfg.OfflineRPCOnly {
-				if isIndexerCacheMiss(err) {
-					return nil, nil
+				if b.cfg.OfflineRPCOnly {
+					if isIndexerCacheMiss(err) {
+						return nil, nil
+					}
+					return nil, err
 				}
-				return nil, err
-			}
-			if !isIndexerCacheMiss(err) {
-				b.logger.Debug("cached tx-by-block-number lookup failed; falling back to live rpc", "height", height, "index", idx, "error", err.Error())
+				if !isIndexerCacheMiss(err) {
+					b.logger.Debug("cached tx-by-block-number lookup failed; falling back to live rpc", "height", height, "index", idx, "error", err.Error())
+				}
 			}
 		} else if b.cfg.OfflineRPCOnly {
 			if isIndexerCacheMiss(err) {
@@ -611,6 +685,19 @@ func (b *Backend) GetTransactionByBlockAndIndex(block *cmrpctypes.ResultBlock, i
 	blockRes, err := b.TendermintBlockResultByNumber(&block.Block.Height)
 	if err != nil {
 		return nil, nil
+	}
+
+	if b.virtualBankEnabled() {
+		view, err := b.liveVirtualBankBlockView(block, blockRes)
+		if err != nil {
+			return nil, err
+		}
+		i := int(idx)
+		if i < 0 || i >= len(view.Transactions) {
+			b.logger.Warn("block txs index out of bound", "index", i)
+			return nil, nil
+		}
+		return view.Transactions[i], nil
 	}
 
 	var msg *evmtypes.MsgEthereumTx
