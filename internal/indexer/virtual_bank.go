@@ -11,6 +11,8 @@ import (
 	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtualbank"
 )
 
+// buildVirtualCachedReceipt builds the cached receipt shape for a virtual bank
+// transaction produced by the indexer, where there is no underlying EVM tx.
 func (kv *KVIndexer) buildVirtualCachedReceipt(
 	status uint64,
 	cumulativeGasUsed uint64,
@@ -41,6 +43,8 @@ func (kv *KVIndexer) buildVirtualCachedReceipt(
 	)
 }
 
+// saveVirtualRPCTransaction stores the indexed receipt, RPC transaction, lookup
+// index, and virtual marker for a synthesized Cosmos bank event transaction.
 func (kv *KVIndexer) saveVirtualRPCTransaction(
 	batch dbm.Batch,
 	height int64,

@@ -19,6 +19,8 @@ import (
 
 var kvCapnpMagic = []byte{0x89, 'e', 'g', 'c', 'p', '1', '\r', '\n'}
 
+// newKVCapnpMessage creates a single-segment Cap'n Proto message for indexer
+// cache payloads.
 func newKVCapnpMessage() (*capnp.Message, *capnp.Segment) {
 	msg, seg, err := capnp.NewMessage(capnp.SingleSegment(nil))
 	if err != nil {
@@ -27,6 +29,8 @@ func newKVCapnpMessage() (*capnp.Message, *capnp.Segment) {
 	return msg, seg
 }
 
+// mustCapnpPayload serializes a Cap'n Proto message with the indexer cache
+// magic header.
 func mustCapnpPayload(msg *capnp.Message) []byte {
 	bz, err := msg.Marshal()
 	if err != nil {
@@ -38,6 +42,8 @@ func mustCapnpPayload(msg *capnp.Message) []byte {
 	return out
 }
 
+// capnpPayloadMessage detects and unmarshals the Cap'n Proto cache format,
+// returning ok=false for legacy JSON or protobuf payloads.
 func capnpPayloadMessage(bz []byte) (*capnp.Message, bool, error) {
 	if !bytes.HasPrefix(bz, kvCapnpMagic) {
 		return nil, false, nil
@@ -46,6 +52,8 @@ func capnpPayloadMessage(bz []byte) (*capnp.Message, bool, error) {
 	return msg, true, err
 }
 
+// mustMarshalBlockMeta encodes cached block metadata in the current Cap'n Proto
+// KV format.
 func mustMarshalBlockMeta(meta CachedBlockMeta) []byte {
 	msg, seg := newKVCapnpMessage()
 	root, err := kvcapnp.NewRootBlockMeta(seg)
@@ -70,6 +78,8 @@ func mustMarshalBlockMeta(meta CachedBlockMeta) []byte {
 	return mustCapnpPayload(msg)
 }
 
+// unmarshalBlockMetaPayload decodes block metadata from Cap'n Proto or legacy
+// JSON cache payloads.
 func unmarshalBlockMetaPayload(bz []byte) (CachedBlockMeta, error) {
 	msg, ok, err := capnpPayloadMessage(bz)
 	if err != nil {
@@ -129,6 +139,8 @@ func unmarshalBlockMetaPayload(bz []byte) (CachedBlockMeta, error) {
 	}, nil
 }
 
+// mustMarshalBlockLogs encodes grouped block logs in the current Cap'n Proto KV
+// format.
 func mustMarshalBlockLogs(groups [][]*virtualbank.RPCLog) []byte {
 	msg, seg := newKVCapnpMessage()
 	root, err := kvcapnp.NewRootBlockLogs(seg)
@@ -152,6 +164,8 @@ func mustMarshalBlockLogs(groups [][]*virtualbank.RPCLog) []byte {
 	return mustCapnpPayload(msg)
 }
 
+// unmarshalBlockLogsPayload decodes grouped block logs from Cap'n Proto or
+// legacy JSON cache payloads.
 func unmarshalBlockLogsPayload(bz []byte) ([][]*virtualbank.RPCLog, error) {
 	msg, ok, err := capnpPayloadMessage(bz)
 	if err != nil {
@@ -191,6 +205,9 @@ func unmarshalBlockLogsPayload(bz []byte) ([][]*virtualbank.RPCLog, error) {
 	return out, nil
 }
 
+// unmarshalFilteredBlockLogsPayload decodes only logs that match the filter.
+// Cap'n Proto payloads are checked before full RPC log materialization, while
+// legacy JSON payloads are decoded then filtered.
 func unmarshalFilteredBlockLogsPayload(bz []byte, addresses []common.Address, topics [][]common.Hash) ([]*virtualbank.RPCLog, error) {
 	msg, ok, err := capnpPayloadMessage(bz)
 	if err != nil {
@@ -254,6 +271,8 @@ func unmarshalFilteredBlockLogsPayload(bz []byte, addresses []common.Address, to
 	return out, nil
 }
 
+// mustMarshalReceipt encodes a cached receipt in the current Cap'n Proto KV
+// format.
 func mustMarshalReceipt(receipt CachedReceipt) []byte {
 	msg, seg := newKVCapnpMessage()
 	root, err := kvcapnp.NewRootReceipt(seg)
@@ -298,6 +317,8 @@ func mustMarshalReceipt(receipt CachedReceipt) []byte {
 	return mustCapnpPayload(msg)
 }
 
+// unmarshalReceiptPayload decodes a cached receipt from Cap'n Proto or legacy
+// JSON payloads.
 func unmarshalReceiptPayload(bz []byte) (CachedReceipt, error) {
 	msg, ok, err := capnpPayloadMessage(bz)
 	if err != nil {
@@ -396,6 +417,8 @@ func unmarshalReceiptPayload(bz []byte) (CachedReceipt, error) {
 	return receipt, nil
 }
 
+// mustMarshalRPCTransaction encodes an RPC transaction in the current Cap'n
+// Proto KV format.
 func mustMarshalRPCTransaction(tx *rpctypes.RPCTransaction) []byte {
 	msg, seg := newKVCapnpMessage()
 	root, err := kvcapnp.NewRootRPCTransaction(seg)
@@ -480,6 +503,8 @@ func mustMarshalRPCTransaction(tx *rpctypes.RPCTransaction) []byte {
 	return mustCapnpPayload(msg)
 }
 
+// unmarshalRPCTransactionPayload decodes an RPC transaction from Cap'n Proto or
+// legacy JSON cache payloads.
 func unmarshalRPCTransactionPayload(bz []byte) (*rpctypes.RPCTransaction, error) {
 	msg, ok, err := capnpPayloadMessage(bz)
 	if err != nil {
@@ -648,6 +673,8 @@ func unmarshalRPCTransactionPayload(bz []byte) (*rpctypes.RPCTransaction, error)
 	return &tx, nil
 }
 
+// mustMarshalTxResult encodes an SDK TxResult in the current Cap'n Proto KV
+// format.
 func mustMarshalTxResult(tx *chaintypes.TxResult) []byte {
 	msg, seg := newKVCapnpMessage()
 	root, err := kvcapnp.NewRootTxResult(seg)
@@ -666,6 +693,8 @@ func mustMarshalTxResult(tx *chaintypes.TxResult) []byte {
 	return mustCapnpPayload(msg)
 }
 
+// unmarshalTxResultPayload decodes a TxResult from Cap'n Proto or the legacy
+// SDK protobuf cache format.
 func unmarshalTxResultPayload(codec sdkcodec.Codec, bz []byte) (*chaintypes.TxResult, error) {
 	msg, ok, err := capnpPayloadMessage(bz)
 	if err != nil {
@@ -693,6 +722,8 @@ func unmarshalTxResultPayload(codec sdkcodec.Codec, bz []byte) (*chaintypes.TxRe
 	}, nil
 }
 
+// mustMarshalTracePayload wraps cached trace JSON bytes in the Cap'n Proto KV
+// format.
 func mustMarshalTracePayload(raw []byte) []byte {
 	msg, seg := newKVCapnpMessage()
 	root, err := kvcapnp.NewRootTracePayload(seg)
@@ -703,6 +734,8 @@ func mustMarshalTracePayload(raw []byte) []byte {
 	return mustCapnpPayload(msg)
 }
 
+// unmarshalTracePayload returns trace JSON bytes from Cap'n Proto payloads or
+// legacy raw trace cache values.
 func unmarshalTracePayload(bz []byte) ([]byte, error) {
 	msg, ok, err := capnpPayloadMessage(bz)
 	if err != nil {
@@ -722,6 +755,7 @@ func unmarshalTracePayload(bz []byte) ([]byte, error) {
 	return append([]byte(nil), raw...), nil
 }
 
+// setCapnpLogList copies RPC logs into a Cap'n Proto log list.
 func setCapnpLogList(dst kvcapnp.Log_List, logs []*virtualbank.RPCLog) error {
 	for i, log := range logs {
 		if log == nil {
@@ -734,6 +768,8 @@ func setCapnpLogList(dst kvcapnp.Log_List, logs []*virtualbank.RPCLog) error {
 	return nil
 }
 
+// setCapnpLog copies one RPC log, including virtual metadata, into a Cap'n
+// Proto log struct.
 func setCapnpLog(dst kvcapnp.Log, log *virtualbank.RPCLog) error {
 	if err := dst.SetAddress(log.Address.Bytes()); err != nil {
 		return err
@@ -769,6 +805,7 @@ func setCapnpLog(dst kvcapnp.Log, log *virtualbank.RPCLog) error {
 	return nil
 }
 
+// capnpLogListToRPC converts a Cap'n Proto log list into RPC logs.
 func capnpLogListToRPC(src kvcapnp.Log_List) ([]*virtualbank.RPCLog, error) {
 	out := make([]*virtualbank.RPCLog, src.Len())
 	for i := 0; i < src.Len(); i++ {
@@ -781,6 +818,7 @@ func capnpLogListToRPC(src kvcapnp.Log_List) ([]*virtualbank.RPCLog, error) {
 	return out, nil
 }
 
+// capnpLogToRPC converts one Cap'n Proto log struct into an RPC log.
 func capnpLogToRPC(src kvcapnp.Log) (*virtualbank.RPCLog, error) {
 	var out virtualbank.RPCLog
 	if src.HasAddress() {
@@ -841,6 +879,8 @@ func capnpLogToRPC(src kvcapnp.Log) (*virtualbank.RPCLog, error) {
 	return &out, nil
 }
 
+// capnpLogMatches applies Ethereum address/topic filters directly to a Cap'n
+// Proto log struct before allocating the full RPC log.
 func capnpLogMatches(src kvcapnp.Log, addresses []common.Address, topics [][]common.Hash) (bool, error) {
 	if len(addresses) > 0 {
 		if !src.HasAddress() {
@@ -898,6 +938,7 @@ func capnpLogMatches(src kvcapnp.Log, addresses []common.Address, topics [][]com
 	return true, nil
 }
 
+// hexutilBigBytes converts an optional hexutil.Big to compact big-endian bytes.
 func hexutilBigBytes(v *hexutil.Big) []byte {
 	if v == nil {
 		return nil
@@ -905,15 +946,19 @@ func hexutilBigBytes(v *hexutil.Big) []byte {
 	return (*big.Int)(v).Bytes()
 }
 
+// hexutilBigFromData converts compact big-endian bytes to a hexutil.Big.
 func hexutilBigFromData(bz []byte) *hexutil.Big {
 	v := new(big.Int).SetBytes(bz)
 	return (*hexutil.Big)(v)
 }
 
+// hexBigDataString renders compact big-endian integer bytes as a hex quantity.
 func hexBigDataString(bz []byte) string {
 	return hexutil.EncodeBig(new(big.Int).SetBytes(bz))
 }
 
+// setHexBigData decodes a hex quantity and passes its compact bytes to a Cap'n
+// Proto setter.
 func setHexBigData(set func([]byte) error, raw string) error {
 	v, err := hexutil.DecodeBig(raw)
 	if err != nil {
@@ -922,6 +967,7 @@ func setHexBigData(set func([]byte) error, raw string) error {
 	return set(v.Bytes())
 }
 
+// mustSet panics on impossible schema setter errors while encoding cache data.
 func mustSet(err error) {
 	if err != nil {
 		panic(err)

@@ -15,6 +15,8 @@ import (
 	chaintypes "github.com/InjectiveLabs/sdk-go/chain/types"
 )
 
+// TestKVCapnpBlockLogsRoundTrip verifies grouped block logs preserve virtual
+// metadata through the Cap'n Proto cache codec.
 func TestKVCapnpBlockLogsRoundTrip(t *testing.T) {
 	cosmosHash := common.HexToHash("0xabc")
 	logs := [][]*virtualbank.RPCLog{{
@@ -52,6 +54,8 @@ func TestKVCapnpBlockLogsRoundTrip(t *testing.T) {
 	require.Equal(t, cosmosHash, *got[0][0].CosmosHash)
 }
 
+// TestKVCapnpReceiptRoundTripPreservesOptionalZeroBig verifies optional receipt
+// fields survive Cap'n Proto encoding, including zero-valued fee quantities.
 func TestKVCapnpReceiptRoundTripPreservesOptionalZeroBig(t *testing.T) {
 	to := virtualbank.ContractAddress.Hex()
 	reason := ""
@@ -88,6 +92,8 @@ func TestKVCapnpReceiptRoundTripPreservesOptionalZeroBig(t *testing.T) {
 	require.Equal(t, hexutil.Bytes("payload"), got.Logs[0].Data)
 }
 
+// TestKVCapnpRPCTransactionRoundTrip verifies cached RPC transactions preserve
+// optional EIP-2718 and virtual metadata fields.
 func TestKVCapnpRPCTransactionRoundTrip(t *testing.T) {
 	blockHash := common.HexToHash("0xb1")
 	blockNumber := hexBig(99)
@@ -142,6 +148,8 @@ func TestKVCapnpRPCTransactionRoundTrip(t *testing.T) {
 	require.Equal(t, cosmosHash, *got.CosmosHash)
 }
 
+// TestKVCapnpTxResultAndTraceRoundTrip verifies TxResult and trace cache
+// payloads round-trip and legacy block metadata still decodes.
 func TestKVCapnpTxResultAndTraceRoundTrip(t *testing.T) {
 	tx := &chaintypes.TxResult{
 		Height:            7,
@@ -167,6 +175,7 @@ func TestKVCapnpTxResultAndTraceRoundTrip(t *testing.T) {
 	require.Equal(t, int64(42), gotMeta.Height)
 }
 
+// hexBig returns a hexutil.Big test value.
 func hexBig(v int64) *hexutil.Big {
 	b := big.NewInt(v)
 	return (*hexutil.Big)(b)

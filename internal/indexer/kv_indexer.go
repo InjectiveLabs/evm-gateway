@@ -47,6 +47,8 @@ func WithCachedBlockGasLimit(gasLimit uint64) KVIndexerOption {
 	}
 }
 
+// WithVirtualBankTransfers controls whether the indexer materializes Cosmos
+// x/bank events as virtual Ethereum logs, receipts, and RPC transactions.
 func WithVirtualBankTransfers(enabled bool, chainID string) KVIndexerOption {
 	return func(kv *KVIndexer) {
 		kv.virtualBankTransfers = enabled

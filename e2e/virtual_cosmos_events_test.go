@@ -18,6 +18,9 @@ const (
 	defaultVirtualGatewayWSPort  = 8847
 )
 
+// TestCosmosEventVirtualizationAgainstLiveChain verifies that a gateway started
+// with Cosmos event virtualization exposes native bank events through standard
+// Ethereum log, transaction, and receipt RPCs.
 func TestCosmosEventVirtualizationAgainstLiveChain(t *testing.T) {
 	if os.Getenv("WEB3INJ_E2E") != "1" {
 		t.Skip("set WEB3INJ_E2E=1 to run cosmos event virtualization e2e")
@@ -212,6 +215,8 @@ type virtualizedReceipt struct {
 	Logs            []virtualizedLog `json:"logs"`
 }
 
+// collectVirtualLogs fetches virtual bank logs from the gateway over
+// eth_getLogs for the supplied generated block range.
 func collectVirtualLogs(t *testing.T, ctx context.Context, rpcURL string, from, to int64) []virtualizedLog {
 	t.Helper()
 
@@ -227,6 +232,8 @@ func collectVirtualLogs(t *testing.T, ctx context.Context, rpcURL string, from, 
 	return logs
 }
 
+// fetchVirtualTx fetches a transaction and decodes only the fields used to
+// assert virtual transaction metadata.
 func fetchVirtualTx(t *testing.T, ctx context.Context, rpcURL, hash string) virtualizedTx {
 	t.Helper()
 
@@ -237,6 +244,8 @@ func fetchVirtualTx(t *testing.T, ctx context.Context, rpcURL, hash string) virt
 	return tx
 }
 
+// fetchVirtualReceipt fetches a receipt and decodes only the virtual log fields
+// used by the e2e assertions.
 func fetchVirtualReceipt(t *testing.T, ctx context.Context, rpcURL, hash string) virtualizedReceipt {
 	t.Helper()
 
@@ -247,6 +256,8 @@ func fetchVirtualReceipt(t *testing.T, ctx context.Context, rpcURL, hash string)
 	return receipt
 }
 
+// receiptHasVirtualLog reports whether a receipt contains a virtual bank log,
+// optionally requiring it to carry the original Cosmos transaction hash.
 func receiptHasVirtualLog(receipt virtualizedReceipt, requireCosmosHash bool) bool {
 	for _, log := range receipt.Logs {
 		if !log.Virtual || !strings.EqualFold(log.Address, virtualbank.ContractAddress.Hex()) {
@@ -263,6 +274,8 @@ func receiptHasVirtualLog(receipt virtualizedReceipt, requireCosmosHash bool) bo
 	return false
 }
 
+// findValueTxHash scans source-chain transactions for an EVM value transfer
+// whose receipt should contain virtualized bank side-effect logs.
 func findValueTxHash(t *testing.T, ctx context.Context, sourceRPC string, from, to int64) string {
 	t.Helper()
 

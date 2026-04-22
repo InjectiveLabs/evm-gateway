@@ -26,10 +26,15 @@ type virtualRPCTransactionLookup interface {
 	IsVirtualRPCTransaction(hash common.Hash) (bool, error)
 }
 
+// virtualBankEnabled reports whether live RPC paths should synthesize Cosmos
+// x/bank events into Ethereum-compatible logs, receipts, and transactions.
 func (b *Backend) virtualBankEnabled() bool {
 	return b.cfg.VirtualizeCosmosEvents
 }
 
+// cachedTransactionVisible reports whether an indexed RPC transaction should be
+// exposed under the current virtualization setting. Virtual-only transactions
+// are hidden when the backend is running in non-virtualized mode.
 func (b *Backend) cachedTransactionVisible(hash common.Hash) (bool, error) {
 	if b.virtualBankEnabled() || b.indexer == nil {
 		return true, nil
@@ -45,6 +50,9 @@ func (b *Backend) cachedTransactionVisible(hash common.Hash) (bool, error) {
 	return !isVirtual, nil
 }
 
+// cachedRPCTransactionMatchesVirtualization checks that an indexed transaction's
+// block was cached with the same virtualized/non-virtualized mode as this RPC
+// backend.
 func (b *Backend) cachedRPCTransactionMatchesVirtualization(tx *rpctypes.RPCTransaction) (bool, error) {
 	if tx == nil || tx.BlockNumber == nil || b.indexer == nil {
 		return true, nil
@@ -60,6 +68,8 @@ func (b *Backend) cachedRPCTransactionMatchesVirtualization(tx *rpctypes.RPCTran
 	return b.cachedMetaMatchesVirtualization(meta), nil
 }
 
+// cachedReceiptMatchesVirtualization checks that an indexed receipt belongs to
+// a block cached with the current virtualization mode before it is served.
 func (b *Backend) cachedReceiptMatchesVirtualization(receipt map[string]interface{}) (bool, error) {
 	if receipt == nil || b.indexer == nil {
 		return true, nil
@@ -91,6 +101,10 @@ func (b *Backend) cachedReceiptMatchesVirtualization(receipt map[string]interfac
 	return b.cachedMetaMatchesVirtualization(meta), nil
 }
 
+// liveVirtualBankBlockView builds the RPC-visible block view directly from live
+// Comet block data when Cosmos event virtualization is enabled. It merges native
+// EVM logs with synthesized x/bank logs and creates virtual transactions for
+// non-EVM Cosmos messages and begin/end block events.
 func (b *Backend) liveVirtualBankBlockView(
 	resBlock *cmrpctypes.ResultBlock,
 	blockRes *cmrpctypes.ResultBlockResults,
@@ -331,6 +345,8 @@ func (b *Backend) liveVirtualBankBlockView(
 	return view, nil
 }
 
+// liveReceiptMap builds an Ethereum receipt map from live block result data,
+// preserving native EVM transaction fields and any merged virtual logs.
 func liveReceiptMap(
 	status uint64,
 	cumulativeGasUsed uint64,
@@ -371,6 +387,8 @@ func liveReceiptMap(
 	return receipt
 }
 
+// virtualReceiptMap builds the receipt shape for synthesized virtual bank
+// transactions that have no underlying EVM transaction.
 func virtualReceiptMap(
 	status uint64,
 	cumulativeGasUsed uint64,

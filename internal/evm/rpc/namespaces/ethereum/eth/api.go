@@ -419,7 +419,9 @@ func (e *PublicAPI) Coinbase(ctx context.Context) (string, error) {
 	return ethAddr.Hex(), nil
 }
 
-// GetTransactionLogs returns the logs given a transaction hash.
+// GetTransactionLogs returns the receipt logs for a transaction hash. The logs
+// may come from an indexed receipt or a live receipt, and may include
+// virtualized Cosmos x/bank events when that mode is enabled.
 func (e *PublicAPI) GetTransactionLogs(ctx context.Context, txHash common.Hash) ([]*virtualbank.RPCLog, error) {
 	defer gotracer.Trace(&ctx)()
 	e.logger.Debug("eth_getTransactionLogs", "hash", txHash)

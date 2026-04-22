@@ -636,6 +636,8 @@ func warmTraceBenchmarkFixtures(t *testing.T, rpcURL string, fixtures benchmarkF
 	}
 }
 
+// startBenchmarkCPUProfile asks a running gateway to write a CPU profile during
+// benchmark execution and returns a stop function.
 func startBenchmarkCPUProfile(t *testing.T, ctx context.Context, rpcURL, path string) func() {
 	t.Helper()
 
@@ -673,6 +675,8 @@ func startBenchmarkCPUProfile(t *testing.T, ctx context.Context, rpcURL, path st
 	}
 }
 
+// writeBenchmarkMemProfile asks a running gateway to force GC and write a heap
+// profile after benchmark execution.
 func writeBenchmarkMemProfile(t *testing.T, ctx context.Context, rpcURL, path string) {
 	t.Helper()
 
@@ -1781,6 +1785,8 @@ func getenvUint64(key string, fallback uint64) uint64 {
 	return n
 }
 
+// envBool parses common truthy environment variable values for optional e2e
+// benchmark controls.
 func envBool(key string) bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
 	case "1", "true", "yes", "y", "on":

@@ -220,7 +220,9 @@ func (api *PublicFilterAPI) NewFilter(criteria filters.FilterCriteria) (rpc.ID, 
 	return id, nil
 }
 
-// GetLogs returns logs matching the given argument that are stored within the state.
+// GetLogs returns logs matching the given argument. The backend decides whether
+// the block data comes from indexed/cache storage or live block results, and may
+// include virtualized Cosmos x/bank logs when that mode is enabled.
 //
 // https://github.com/ethereum/wiki/wiki/JSON-RPC#eth_getlogs
 func (api *PublicFilterAPI) GetLogs(ctx context.Context, crit filters.FilterCriteria) ([]*virtualbank.RPCLog, error) {
@@ -278,7 +280,9 @@ func (api *PublicFilterAPI) UninstallFilter(id rpc.ID) bool {
 	return found
 }
 
-// GetFilterLogs returns the logs for the filter with the given id.
+// GetFilterLogs returns the logs for the filter with the given id by running
+// the saved criteria through the same cache-first/live fallback path as
+// eth_getLogs.
 // If the filter could not be found an empty array of logs is returned.
 //
 // https://github.com/ethereum/wiki/wiki/JSON-RPC#eth_getfilterlogs

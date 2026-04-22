@@ -92,8 +92,9 @@ const (
 	maxToOverhang = 600
 )
 
-// Logs searches the blockchain for matching log entries, returning all from the
-// first block that contains matches, updating the start of the filter accordingly.
+// Logs searches the requested block hash or range for matching RPC-visible log
+// entries. Backend lookups may be served from indexed/cache data or from live
+// Comet results, depending on cache coverage and virtualization mode.
 func (f *Filter) Logs(ctx context.Context, logLimit int, blockLimit int64) ([]*virtualbank.RPCLog, error) {
 	defer gotracer.Trace(&ctx)()
 
@@ -190,10 +191,14 @@ func (f *Filter) Logs(ctx context.Context, logLimit int, blockLimit int64) ([]*v
 	return logs, nil
 }
 
+// blockLogsByHash delegates a single-block hash query to the backend's
+// cache-first filtered log path.
 func (f *Filter) blockLogsByHash(hash common.Hash) ([]*virtualbank.RPCLog, error) {
 	return f.backend.GetFilteredLogs(hash, f.criteria.Addresses, f.criteria.Topics)
 }
 
+// blockLogsByHeight delegates a single-block height query to the backend's
+// cache-first filtered log path.
 func (f *Filter) blockLogsByHeight(height int64) ([]*virtualbank.RPCLog, error) {
 	return f.backend.GetFilteredLogsByHeight(height, f.criteria.Addresses, f.criteria.Topics)
 }

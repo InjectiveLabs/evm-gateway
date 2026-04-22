@@ -675,7 +675,13 @@ func (stubTxIndexer) GetRPCTransactionHashesByBlockHeight(int64) ([]common.Hash,
 func (stubTxIndexer) GetReceiptByTxHash(common.Hash) (map[string]interface{}, error) { return nil, nil }
 func (stubTxIndexer) GetBlockMetaByHeight(int64) (*CachedBlockMeta, error)           { return nil, nil }
 func (stubTxIndexer) GetBlockMetaByHash(common.Hash) (*CachedBlockMeta, error)       { return nil, nil }
-func (stubTxIndexer) GetLogsByBlockHeight(int64) ([][]*virtualbank.RPCLog, error)    { return nil, nil }
+
+// GetLogsByBlockHeight satisfies the TxIndexer interface for syncer tests that
+// do not read indexed logs.
+func (stubTxIndexer) GetLogsByBlockHeight(int64) ([][]*virtualbank.RPCLog, error) { return nil, nil }
+
+// GetLogsByBlockHash satisfies the TxIndexer interface for syncer tests that do
+// not read indexed logs.
 func (stubTxIndexer) GetLogsByBlockHash(common.Hash) ([][]*virtualbank.RPCLog, error) {
 	return nil, nil
 }
@@ -830,9 +836,15 @@ func (r *recordingTxIndexer) GetBlockMetaByHeight(int64) (*CachedBlockMeta, erro
 func (r *recordingTxIndexer) GetBlockMetaByHash(common.Hash) (*CachedBlockMeta, error) {
 	return nil, nil
 }
+
+// GetLogsByBlockHeight satisfies the TxIndexer interface for recording syncer
+// tests that only track indexed heights.
 func (r *recordingTxIndexer) GetLogsByBlockHeight(int64) ([][]*virtualbank.RPCLog, error) {
 	return nil, nil
 }
+
+// GetLogsByBlockHash satisfies the TxIndexer interface for recording syncer
+// tests that only track indexed heights.
 func (r *recordingTxIndexer) GetLogsByBlockHash(common.Hash) ([][]*virtualbank.RPCLog, error) {
 	return nil, nil
 }
@@ -988,9 +1000,15 @@ func (f *faultyTxIndexer) GetBlockMetaByHeight(int64) (*CachedBlockMeta, error) 
 func (f *faultyTxIndexer) GetBlockMetaByHash(common.Hash) (*CachedBlockMeta, error) {
 	return nil, nil
 }
+
+// GetLogsByBlockHeight satisfies the TxIndexer interface for failure-path tests
+// that never read indexed logs.
 func (f *faultyTxIndexer) GetLogsByBlockHeight(int64) ([][]*virtualbank.RPCLog, error) {
 	return nil, nil
 }
+
+// GetLogsByBlockHash satisfies the TxIndexer interface for failure-path tests
+// that never read indexed logs.
 func (f *faultyTxIndexer) GetLogsByBlockHash(common.Hash) ([][]*virtualbank.RPCLog, error) {
 	return nil, nil
 }

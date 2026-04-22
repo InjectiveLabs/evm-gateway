@@ -121,6 +121,8 @@ func ReceiptKey(hash common.Hash) []byte {
 	return append([]byte{KeyPrefixReceipt}, hash.Bytes()...)
 }
 
+// VirtualRPCtxKey stores the marker that identifies indexed RPC transactions
+// synthesized from Cosmos bank events.
 func VirtualRPCtxKey(hash common.Hash) []byte {
 	return append([]byte{KeyPrefixVirtualRPCtx}, hash.Bytes()...)
 }
@@ -245,6 +247,8 @@ func (kv *KVIndexer) GetReceiptByTxHash(hash common.Hash) (map[string]interface{
 	return receipt.ToMap(), nil
 }
 
+// IsVirtualRPCTransaction reports whether a cached RPC transaction was
+// synthesized by the virtual bank event indexer.
 func (kv *KVIndexer) IsVirtualRPCTransaction(hash common.Hash) (bool, error) {
 	ctx := kv.operationContext()
 	if kv.ctx != nil {
@@ -305,6 +309,8 @@ func (kv *KVIndexer) GetBlockMetaByHash(hash common.Hash) (*CachedBlockMeta, err
 	return kv.GetBlockMetaByHeight(height)
 }
 
+// GetLogsByBlockHeight returns grouped logs from the indexed KV cache for a
+// block height.
 func (kv *KVIndexer) GetLogsByBlockHeight(height int64) ([][]*virtualbank.RPCLog, error) {
 	ctx := kv.operationContext()
 	if kv.ctx != nil {
@@ -324,6 +330,8 @@ func (kv *KVIndexer) GetLogsByBlockHeight(height int64) ([][]*virtualbank.RPCLog
 	return unmarshalBlockLogsPayload(bz)
 }
 
+// GetFilteredLogsByBlockHeight returns indexed logs for a height after applying
+// address/topic filtering during decode when the stored format supports it.
 func (kv *KVIndexer) GetFilteredLogsByBlockHeight(
 	height int64,
 	addresses []common.Address,
@@ -347,6 +355,8 @@ func (kv *KVIndexer) GetFilteredLogsByBlockHeight(
 	return unmarshalFilteredBlockLogsPayload(bz, addresses, topics)
 }
 
+// GetLogsByBlockHash resolves a block hash through the indexed hash map and
+// returns grouped cached logs.
 func (kv *KVIndexer) GetLogsByBlockHash(hash common.Hash) ([][]*virtualbank.RPCLog, error) {
 	ctx := kv.operationContext()
 	if kv.ctx != nil {
@@ -367,6 +377,8 @@ func (kv *KVIndexer) GetLogsByBlockHash(hash common.Hash) ([][]*virtualbank.RPCL
 	return kv.GetLogsByBlockHeight(height)
 }
 
+// GetFilteredLogsByBlockHash resolves a block hash through the indexed hash map
+// and returns matching cached logs.
 func (kv *KVIndexer) GetFilteredLogsByBlockHash(
 	hash common.Hash,
 	addresses []common.Address,
@@ -466,6 +478,8 @@ func buildCachedReceipt(
 	}
 }
 
+// evmLogsBloom calculates the Ethereum bloom for cached RPC logs, ignoring
+// virtual-only metadata.
 func evmLogsBloom(logs []*virtualbank.RPCLog) []byte {
 	return evmtypes.LogsBloom(virtualbank.EthLogs(logs))
 }

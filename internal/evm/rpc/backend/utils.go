@@ -225,7 +225,9 @@ func ShouldIgnoreGasUsed(res *abci.ExecTxResult) bool {
 	return res.GetCode() == 11 && strings.Contains(res.GetLog(), "no block gas left to run tx: out of gas")
 }
 
-// GetLogsFromBlockResults returns the list of event logs from the comet block result response
+// GetLogsFromBlockResults returns native EVM logs decoded from live Comet block
+// results. It is the non-virtualized live path and does not synthesize Cosmos
+// x/bank events.
 func GetLogsFromBlockResults(blockRes *cmrpctypes.ResultBlockResults) ([][]*virtualbank.RPCLog, error) {
 	blockLogs := [][]*virtualbank.RPCLog{}
 	normalizedTxResults, err := types.NormalizeTxResponseIndexes(blockRes.TxResults)

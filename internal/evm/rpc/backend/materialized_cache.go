@@ -17,6 +17,8 @@ type materializedCache struct {
 	blockLogs *lru.Cache
 }
 
+// newMaterializedCache creates small in-memory caches for decoded KV values
+// that are expensive to materialize repeatedly during RPC reads.
 func newMaterializedCache() *materializedCache {
 	receipts, err := lru.New(materializedReceiptCacheSize)
 	if err != nil {
@@ -32,6 +34,7 @@ func newMaterializedCache() *materializedCache {
 	}
 }
 
+// getReceipt returns a previously decoded indexed receipt by transaction hash.
 func (c *materializedCache) getReceipt(hash common.Hash) (map[string]interface{}, bool) {
 	if c == nil || c.receipts == nil {
 		return nil, false
@@ -44,6 +47,8 @@ func (c *materializedCache) getReceipt(hash common.Hash) (map[string]interface{}
 	return receipt, ok
 }
 
+// addReceipt stores a decoded indexed receipt for reuse by cache-first RPC
+// paths.
 func (c *materializedCache) addReceipt(hash common.Hash, receipt map[string]interface{}) {
 	if c == nil || c.receipts == nil || receipt == nil {
 		return
@@ -51,6 +56,7 @@ func (c *materializedCache) addReceipt(hash common.Hash, receipt map[string]inte
 	c.receipts.Add(hash, receipt)
 }
 
+// getBlockLogs returns fully materialized logs for broad indexed log queries.
 func (c *materializedCache) getBlockLogs(height int64) ([]*virtualbank.RPCLog, bool) {
 	if c == nil || c.blockLogs == nil {
 		return nil, false
@@ -63,6 +69,7 @@ func (c *materializedCache) getBlockLogs(height int64) ([]*virtualbank.RPCLog, b
 	return logs, ok
 }
 
+// addBlockLogs stores fully materialized indexed logs for a broad block query.
 func (c *materializedCache) addBlockLogs(height int64, logs []*virtualbank.RPCLog) {
 	if c == nil || c.blockLogs == nil || logs == nil {
 		return

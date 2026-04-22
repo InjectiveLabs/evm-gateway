@@ -15,7 +15,10 @@ type filteredLogIndexer interface {
 	GetFilteredLogsByBlockHash(hash common.Hash, addresses []common.Address, topics [][]common.Hash) ([]*virtualbank.RPCLog, error)
 }
 
-// GetLogs returns all the logs from all the ethereum transactions in a block.
+// GetLogs returns all RPC-visible logs for a block hash. It prefers indexed KV
+// logs, but only when the cached block was indexed with the current
+// virtualization setting; otherwise online mode falls back to live block
+// results.
 func (b *Backend) GetLogs(hash common.Hash) ([][]*virtualbank.RPCLog, error) {
 	ctx := b.operationContext()
 	if b.ctx != nil {
@@ -60,6 +63,10 @@ func (b *Backend) GetLogs(hash common.Hash) ([][]*virtualbank.RPCLog, error) {
 	return b.GetLogsByHeight(&resBlock.Block.Header.Height)
 }
 
+// GetFilteredLogs returns logs for a block hash after applying Ethereum address
+// and topic filtering. Indexed Cap'n Proto payloads can be filtered before full
+// materialization; live fallback is used when cached data is unavailable or was
+// indexed with a different virtualization mode.
 func (b *Backend) GetFilteredLogs(
 	hash common.Hash,
 	addresses []common.Address,
@@ -118,7 +125,9 @@ func (b *Backend) GetFilteredLogs(
 	return filterGroupedLogs(logsList, addresses, topics), nil
 }
 
-// GetLogsByHeight returns all the logs from all the ethereum transactions in a block.
+// GetLogsByHeight returns all RPC-visible logs for a block height. It reads the
+// indexed cache first and builds a live view from Comet block results when the
+// cache is missing, stale for the current virtualization mode, or unavailable.
 func (b *Backend) GetLogsByHeight(height *int64) ([][]*virtualbank.RPCLog, error) {
 	ctx := b.operationContext()
 	if b.ctx != nil {
@@ -177,6 +186,8 @@ func (b *Backend) GetLogsByHeight(height *int64) ([][]*virtualbank.RPCLog, error
 	return GetLogsFromBlockResults(blockRes)
 }
 
+// GetFilteredLogsByHeight returns filtered logs for a block height using
+// indexed KV filtering when possible and live block-result filtering otherwise.
 func (b *Backend) GetFilteredLogsByHeight(
 	height int64,
 	addresses []common.Address,
@@ -235,6 +246,8 @@ func (b *Backend) GetFilteredLogsByHeight(
 	return filterGroupedLogs(logsList, addresses, topics), nil
 }
 
+// broadLogFilter reports whether a log query has no address or topic clauses
+// and can safely reuse a whole-block materialized log cache entry.
 func broadLogFilter(addresses []common.Address, topics [][]common.Hash) bool {
 	if len(addresses) > 0 {
 		return false
@@ -247,6 +260,8 @@ func broadLogFilter(addresses []common.Address, topics [][]common.Hash) bool {
 	return true
 }
 
+// filterGroupedLogs flattens grouped per-transaction logs and applies Ethereum
+// address/topic matching.
 func filterGroupedLogs(
 	logsList [][]*virtualbank.RPCLog,
 	addresses []common.Address,

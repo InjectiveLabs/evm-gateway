@@ -16,7 +16,9 @@ import (
 	evmtypes "github.com/InjectiveLabs/sdk-go/chain/evm/types"
 )
 
-// GetBlockReceipts returns all Ethereum transaction receipts for the provided block.
+// GetBlockReceipts returns all RPC-visible receipts for the provided block.
+// It reads indexed receipts first and falls back to live Comet/gRPC data when
+// the cache is missing or was built with a different virtualization mode.
 func (b *Backend) GetBlockReceipts(blockNrOrHash rpctypes.BlockNumberOrHash) ([]map[string]interface{}, error) {
 	ctx := b.operationContext()
 	if b.ctx != nil {
@@ -63,6 +65,8 @@ func (b *Backend) GetBlockReceipts(blockNrOrHash rpctypes.BlockNumberOrHash) ([]
 	return b.liveBlockReceipts(resBlock)
 }
 
+// cachedBlockReceipts assembles block receipts only from indexed KV data.
+// It is used by offline RPC mode and by online mode before trying live data.
 func (b *Backend) cachedBlockReceipts(blockNrOrHash rpctypes.BlockNumberOrHash) ([]map[string]interface{}, error) {
 	var (
 		meta *txindexer.CachedBlockMeta
@@ -121,6 +125,8 @@ func (b *Backend) cachedBlockReceipts(blockNrOrHash rpctypes.BlockNumberOrHash) 
 	return receipts, nil
 }
 
+// materializedReceiptByHash returns an indexed receipt, using the in-memory
+// materialized cache to avoid decoding the same KV payload repeatedly.
 func (b *Backend) materializedReceiptByHash(hash common.Hash) (map[string]interface{}, error) {
 	if receipt, ok := b.materialized.getReceipt(hash); ok {
 		return receipt, nil
@@ -133,6 +139,7 @@ func (b *Backend) materializedReceiptByHash(hash common.Hash) (map[string]interf
 	return receipt, nil
 }
 
+// liveReceiptsBlock resolves the requested block through live Comet RPC.
 func (b *Backend) liveReceiptsBlock(blockNrOrHash rpctypes.BlockNumberOrHash) (*cmrpctypes.ResultBlock, error) {
 	switch {
 	case blockNrOrHash.BlockHash != nil:
@@ -144,6 +151,9 @@ func (b *Backend) liveReceiptsBlock(blockNrOrHash rpctypes.BlockNumberOrHash) (*
 	}
 }
 
+// liveBlockReceipts builds receipts from live Comet block results. When
+// virtualization is enabled, Cosmos x/bank events are synthesized into the live
+// receipt view rather than read from the indexed cache.
 func (b *Backend) liveBlockReceipts(resBlock *cmrpctypes.ResultBlock) ([]map[string]interface{}, error) {
 	if resBlock == nil || resBlock.Block == nil {
 		return nil, nil

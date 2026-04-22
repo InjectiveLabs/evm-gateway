@@ -21,6 +21,8 @@ func TestLoadOverridesParallelTipAndGapSync(t *testing.T) {
 	}
 }
 
+// TestLoadOverridesCosmosEventVirtualization verifies the env override for
+// enabling virtualized Cosmos x/bank event RPC output.
 func TestLoadOverridesCosmosEventVirtualization(t *testing.T) {
 	t.Setenv("WEB3INJ_VIRTUALIZE_COSMOS_EVENTS", "true")
 

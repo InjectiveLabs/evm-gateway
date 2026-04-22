@@ -1068,6 +1068,9 @@ func validateCachedBlockMeta(meta *txindexer.CachedBlockMeta) error {
 	return nil
 }
 
+// cachedMetaMatchesVirtualization reports whether indexed block metadata was
+// produced with the same Cosmos event virtualization mode as the current RPC
+// backend. Mismatches must use live data unless the gateway is offline-only.
 func (b *Backend) cachedMetaMatchesVirtualization(meta *txindexer.CachedBlockMeta) bool {
 	if meta == nil {
 		return false

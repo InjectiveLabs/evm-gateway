@@ -164,6 +164,9 @@ func TestKVIndexerCachedBlockLookupsUseHashAndRPCIndexCollections(t *testing.T) 
 	}
 }
 
+// TestKVIndexerIndexesVirtualBankTransfersForCosmosAndFinalizeEvents verifies
+// indexed virtual bank logs, receipts, and RPC transactions for Cosmos and
+// begin/end block events.
 func TestKVIndexerIndexesVirtualBankTransfersForCosmosAndFinalizeEvents(t *testing.T) {
 	db := dbm.NewMemDB()
 	tx := testSDKTx{msgs: []sdk.Msg{&banktypes.MsgSend{}}}
@@ -350,10 +353,13 @@ type testSDKTx struct {
 	msgs []sdk.Msg
 }
 
+// GetMsgs returns the messages supplied to the stub SDK transaction.
 func (t testSDKTx) GetMsgs() []sdk.Msg {
 	return t.msgs
 }
 
+// GetMsgsV2 satisfies the SDK transaction interface for tests that only need
+// legacy message access.
 func (t testSDKTx) GetMsgsV2() ([]protov2.Message, error) {
 	return nil, nil
 }
@@ -362,42 +368,57 @@ type testTxConfig struct {
 	tx sdk.Tx
 }
 
+// TxEncoder returns a no-op encoder because the indexer tests inject decoded
+// transactions directly.
 func (c testTxConfig) TxEncoder() sdk.TxEncoder {
 	return func(tx sdk.Tx) ([]byte, error) { return nil, nil }
 }
 
+// TxDecoder returns the stub transaction configured for the test.
 func (c testTxConfig) TxDecoder() sdk.TxDecoder {
 	return func(txBytes []byte) (sdk.Tx, error) { return c.tx, nil }
 }
 
+// TxJSONEncoder reuses the no-op binary encoder for unused test paths.
 func (c testTxConfig) TxJSONEncoder() sdk.TxEncoder {
 	return c.TxEncoder()
 }
 
+// TxJSONDecoder reuses the stub decoder for unused test paths.
 func (c testTxConfig) TxJSONDecoder() sdk.TxDecoder {
 	return c.TxDecoder()
 }
 
+// MarshalSignatureJSON satisfies the TxConfig interface for unused signature
+// JSON paths.
 func (c testTxConfig) MarshalSignatureJSON([]signing.SignatureV2) ([]byte, error) {
 	return nil, nil
 }
 
+// UnmarshalSignatureJSON satisfies the TxConfig interface for unused signature
+// JSON paths.
 func (c testTxConfig) UnmarshalSignatureJSON([]byte) ([]signing.SignatureV2, error) {
 	return nil, nil
 }
 
+// NewTxBuilder satisfies the TxConfig interface for paths that do not build
+// transactions.
 func (c testTxConfig) NewTxBuilder() client.TxBuilder {
 	return nil
 }
 
+// WrapTxBuilder satisfies the TxConfig interface for paths that do not build
+// transactions.
 func (c testTxConfig) WrapTxBuilder(sdk.Tx) (client.TxBuilder, error) {
 	return nil, nil
 }
 
+// SignModeHandler satisfies the TxConfig interface for unused signing paths.
 func (c testTxConfig) SignModeHandler() *txsigning.HandlerMap {
 	return nil
 }
 
+// SigningContext satisfies the TxConfig interface for unused signing paths.
 func (c testTxConfig) SigningContext() *txsigning.Context {
 	return nil
 }

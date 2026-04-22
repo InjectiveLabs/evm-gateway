@@ -56,6 +56,8 @@ var (
 	}
 )
 
+// TransferEvent is the normalized form of a Cosmos x/bank event that can be
+// emitted as an Ethereum-compatible virtual log.
 type TransferEvent struct {
 	Type      string
 	Sender    common.Hash
@@ -67,6 +69,8 @@ type TransferEvent struct {
 	Mode      string
 }
 
+// LogContext carries block and transaction metadata used when materializing
+// virtual bank events into RPC logs.
 type LogContext struct {
 	BlockHash     common.Hash
 	BlockNumber   uint64
@@ -106,6 +110,8 @@ type rpcLogJSON struct {
 	CosmosHash  *common.Hash   `json:"cosmos_hash,omitempty"`
 }
 
+// LogMatches reports whether an RPC log satisfies Ethereum address and topic
+// filter clauses.
 func LogMatches(log *RPCLog, addresses []common.Address, topics [][]common.Hash) bool {
 	if log == nil {
 		return false
@@ -140,6 +146,8 @@ func LogMatches(log *RPCLog, addresses []common.Address, topics [][]common.Hash)
 	return true
 }
 
+// UnmarshalJSON decodes an Ethereum log while preserving the optional virtual
+// Cosmos metadata fields.
 func (l *RPCLog) UnmarshalJSON(input []byte) error {
 	var dec rpcLogJSON
 	if err := sonic.Unmarshal(input, &dec); err != nil {
@@ -159,6 +167,8 @@ func (l *RPCLog) UnmarshalJSON(input []byte) error {
 	return nil
 }
 
+// mustABIType resolves an ABI type name and panics if the hard-coded type is
+// invalid.
 func mustABIType(name string) abi.Type {
 	t, err := abi.NewType(name, "", nil)
 	if err != nil {
@@ -239,6 +249,8 @@ func ParseEvents(events []types.Event) ([]TransferEvent, error) {
 	return out, nil
 }
 
+// SplitBlockEvents separates FinalizeBlock x/bank events into begin-block and
+// end-block virtual event groups.
 func SplitBlockEvents(events []types.Event) (begin []TransferEvent, end []TransferEvent, err error) {
 	parsed, err := ParseEvents(events)
 	if err != nil {
@@ -254,6 +266,8 @@ func SplitBlockEvents(events []types.Event) (begin []TransferEvent, end []Transf
 	return begin, end, nil
 }
 
+// IsTrackedEventType reports whether a Cosmos event type is emitted as a
+// virtual native bank transfer log.
 func IsTrackedEventType(eventType string) bool {
 	switch eventType {
 	case EventTypeTransfer, EventTypeCoinSpent, EventTypeCoinReceived, EventTypeCoinbase, EventTypeBurn:
@@ -263,6 +277,7 @@ func IsTrackedEventType(eventType string) bool {
 	}
 }
 
+// eventAttrs converts Comet event attributes into a lookup map.
 func eventAttrs(attrs []types.EventAttribute) map[string]string {
 	out := make(map[string]string, len(attrs))
 	for _, attr := range attrs {
@@ -271,6 +286,7 @@ func eventAttrs(attrs []types.EventAttribute) map[string]string {
 	return out
 }
 
+// parseMsgIndex extracts the optional Cosmos msg_index attribute.
 func parseMsgIndex(attrs map[string]string) (*int, error) {
 	raw, ok := attrs[AttributeMsgIndex]
 	if !ok || strings.TrimSpace(raw) == "" {
@@ -286,6 +302,7 @@ func parseMsgIndex(attrs map[string]string) (*int, error) {
 	return &idx, nil
 }
 
+// requiredAddress extracts and normalizes a required event address attribute.
 func requiredAddress(attrs map[string]string, key string, eventType string, eventIndex int) (common.Hash, error) {
 	raw, ok := attrs[key]
 	if !ok || strings.TrimSpace(raw) == "" {
@@ -298,6 +315,7 @@ func requiredAddress(attrs map[string]string, key string, eventType string, even
 	return value, nil
 }
 
+// coinAmountBigInt returns a copy of the SDK integer as a big.Int.
 func coinAmountBigInt(amount sdkmath.Int) *big.Int {
 	return new(big.Int).Set(amount.BigInt())
 }
@@ -325,6 +343,7 @@ func AddressBytes32(value string) (common.Hash, error) {
 	return bytesToHash32([]byte(value))
 }
 
+// decodeHexAddress decodes explicit or plain even-length hex address strings.
 func decodeHexAddress(value string) ([]byte, bool, error) {
 	raw := value
 	if strings.HasPrefix(raw, "0x") || strings.HasPrefix(raw, "0X") {
@@ -338,6 +357,7 @@ func decodeHexAddress(value string) ([]byte, bool, error) {
 	return bz, true, err
 }
 
+// isHex reports whether a string contains only hexadecimal characters.
 func isHex(value string) bool {
 	if value == "" {
 		return false
@@ -351,6 +371,7 @@ func isHex(value string) bool {
 	return true
 }
 
+// bytesToHash32 right-aligns an address byte slice into a bytes32 hash.
 func bytesToHash32(bz []byte) (common.Hash, error) {
 	if len(bz) > common.HashLength {
 		return common.Hash{}, fmt.Errorf("address is %d bytes, max %d", len(bz), common.HashLength)
@@ -358,6 +379,8 @@ func bytesToHash32(bz []byte) (common.Hash, error) {
 	return common.BytesToHash(bz), nil
 }
 
+// Logs materializes normalized Cosmos x/bank events into virtual Ethereum log
+// objects using the supplied block and transaction context.
 func Logs(events []TransferEvent, ctx LogContext) ([]*RPCLog, error) {
 	logs := make([]*RPCLog, 0, len(events))
 	for i, event := range events {
@@ -387,6 +410,8 @@ func Logs(events []TransferEvent, ctx LogContext) ([]*RPCLog, error) {
 	return logs, nil
 }
 
+// NewRPCLog copies a go-ethereum log into the RPC log shape and annotates
+// whether it is virtualized.
 func NewRPCLog(log *ethtypes.Log, virtual bool, cosmosHash *common.Hash) *RPCLog {
 	if log == nil {
 		return nil
@@ -406,6 +431,7 @@ func NewRPCLog(log *ethtypes.Log, virtual bool, cosmosHash *common.Hash) *RPCLog
 	}
 }
 
+// WrapLogs converts go-ethereum logs into RPC logs with shared virtual metadata.
 func WrapLogs(logs []*ethtypes.Log, virtual bool, cosmosHash *common.Hash) []*RPCLog {
 	if logs == nil {
 		return nil
@@ -417,6 +443,8 @@ func WrapLogs(logs []*ethtypes.Log, virtual bool, cosmosHash *common.Hash) []*RP
 	return out
 }
 
+// EthLog converts an RPC log back to a go-ethereum log, dropping virtual-only
+// metadata.
 func EthLog(log *RPCLog) *ethtypes.Log {
 	if log == nil {
 		return nil
@@ -434,6 +462,8 @@ func EthLog(log *RPCLog) *ethtypes.Log {
 	}
 }
 
+// EthLogs converts RPC logs back to go-ethereum logs for bloom calculation and
+// native helpers.
 func EthLogs(logs []*RPCLog) []*ethtypes.Log {
 	if logs == nil {
 		return nil
@@ -447,6 +477,7 @@ func EthLogs(logs []*RPCLog) []*ethtypes.Log {
 	return out
 }
 
+// FlattenEthLogs converts grouped RPC logs into a flat go-ethereum log slice.
 func FlattenEthLogs(groups [][]*RPCLog) []*ethtypes.Log {
 	out := make([]*ethtypes.Log, 0)
 	for _, group := range groups {
@@ -455,6 +486,7 @@ func FlattenEthLogs(groups [][]*RPCLog) []*ethtypes.Log {
 	return out
 }
 
+// eventTopics returns the ABI topic list for a normalized virtual bank event.
 func eventTopics(event TransferEvent) ([]common.Hash, error) {
 	switch event.Type {
 	case EventTypeTransfer:
@@ -472,6 +504,8 @@ func eventTopics(event TransferEvent) ([]common.Hash, error) {
 	}
 }
 
+// SetLogMetadata applies block, transaction, and log-index metadata to logs
+// decoded from native EVM transaction results.
 func SetLogMetadata(logs []*RPCLog, ctx LogContext) {
 	for i, log := range logs {
 		if log == nil {
@@ -485,23 +519,33 @@ func SetLogMetadata(logs []*RPCLog, ctx LogContext) {
 	}
 }
 
+// OriginalCosmosTxHash returns the Comet transaction hash for a raw Cosmos
+// transaction.
 func OriginalCosmosTxHash(tx cmtypes.Tx) common.Hash {
 	return common.BytesToHash(tx.Hash())
 }
 
+// CosmosTxHash derives the Ethereum-visible virtual transaction hash for a
+// non-EVM Cosmos transaction.
 func CosmosTxHash(tx cmtypes.Tx) common.Hash {
 	original := OriginalCosmosTxHash(tx)
 	return crypto.Keccak256Hash(original.Bytes())
 }
 
+// BeginBlockHash returns the deterministic virtual transaction hash for
+// begin-block events at a height.
 func BeginBlockHash(height int64) common.Hash {
 	return blockPhaseHash(blockPhaseBegin, height)
 }
 
+// EndBlockHash returns the deterministic virtual transaction hash for end-block
+// events at a height.
 func EndBlockHash(height int64) common.Hash {
 	return blockPhaseHash(blockPhaseEnd, height)
 }
 
+// blockPhaseHash derives a deterministic virtual transaction hash for block
+// phase events.
 func blockPhaseHash(phase string, height int64) common.Hash {
 	payload := make([]byte, len(phase)+8)
 	copy(payload, phase)
@@ -509,6 +553,8 @@ func blockPhaseHash(phase string, height int64) common.Hash {
 	return crypto.Keccak256Hash(payload)
 }
 
+// NewRPCTransaction builds the placeholder Ethereum transaction returned for a
+// synthesized Cosmos bank event group.
 func NewRPCTransaction(hash common.Hash, blockHash common.Hash, blockNumber uint64, index uint64, chainID *big.Int, cosmosHash *common.Hash) *rpctypes.RPCTransaction {
 	to := ContractAddress
 	txIndex := hexutil.Uint64(index)
@@ -541,6 +587,7 @@ func NewRPCTransaction(hash common.Hash, blockHash common.Hash, blockNumber uint
 	}
 }
 
+// copyHashPtr returns an independent copy of a hash pointer.
 func copyHashPtr(hash *common.Hash) *common.Hash {
 	if hash == nil {
 		return nil
@@ -549,6 +596,8 @@ func copyHashPtr(hash *common.Hash) *common.Hash {
 	return &value
 }
 
+// EventsForMsg selects virtual bank events that belong to a specific Cosmos
+// message, including the single-message fallback when msg_index is absent.
 func EventsForMsg(events []TransferEvent, msgIndex int, totalMsgs int) []TransferEvent {
 	out := make([]TransferEvent, 0)
 	for _, event := range events {
@@ -565,6 +614,8 @@ func EventsForMsg(events []TransferEvent, msgIndex int, totalMsgs int) []Transfe
 	return out
 }
 
+// EventsForNonEthMessages selects virtual bank events that should become
+// standalone virtual transactions because they do not belong to an EVM message.
 func EventsForNonEthMessages(events []TransferEvent, ethMsgIndexes map[int]bool, totalMsgs int) []TransferEvent {
 	out := make([]TransferEvent, 0)
 	for _, event := range events {

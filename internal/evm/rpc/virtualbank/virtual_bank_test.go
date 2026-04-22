@@ -10,6 +10,8 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 )
 
+// TestParseEventsAndBuildLogsForTrackedBankEvents verifies tracked x/bank
+// events are normalized and emitted as virtual Ethereum logs.
 func TestParseEventsAndBuildLogsForTrackedBankEvents(t *testing.T) {
 	addr20 := "0x1111111111111111111111111111111111111111"
 	addr32Bz := []byte("12345678901234567890123456789012")
@@ -116,6 +118,8 @@ func TestParseEventsAndBuildLogsForTrackedBankEvents(t *testing.T) {
 	}
 }
 
+// TestSplitBlockEventsUsesModeAttribute verifies finalize-block events are
+// split by their begin/end block mode attribute.
 func TestSplitBlockEventsUsesModeAttribute(t *testing.T) {
 	begin, end, err := SplitBlockEvents([]types.Event{
 		{
@@ -146,12 +150,15 @@ func TestSplitBlockEventsUsesModeAttribute(t *testing.T) {
 	}
 }
 
+// TestAddressBytes32RejectsOversizedRawAddress verifies raw address strings
+// cannot exceed the bytes32 virtual log ABI field.
 func TestAddressBytes32RejectsOversizedRawAddress(t *testing.T) {
 	if _, err := AddressBytes32("123456789012345678901234567890123"); err == nil {
 		t.Fatal("expected oversized raw address to fail")
 	}
 }
 
+// unpackDenomAmount decodes the ABI payload used by virtual bank log data.
 func unpackDenomAmount(t *testing.T, data []byte) []interface{} {
 	t.Helper()
 	stringType, err := abi.NewType("string", "", nil)

@@ -64,6 +64,8 @@ type rangeStats struct {
 	items map[string]encodingCounts
 }
 
+// main opens the configured indexer database and dispatches the requested KV
+// inspection command.
 func main() {
 	log.SetFlags(0)
 
@@ -132,6 +134,7 @@ func main() {
 	}
 }
 
+// usage prints the supported kvinspect commands and shared flags.
 func usage(fs *flag.FlagSet) {
 	fmt.Fprintf(fs.Output(), "usage: %s [flags] summary\n", fs.Name())
 	fmt.Fprintf(fs.Output(), "       %s [flags] range START:END\n", fs.Name())
@@ -139,10 +142,13 @@ func usage(fs *flag.FlagSet) {
 	fs.PrintDefaults()
 }
 
+// openIndexerDB opens the evmindexer database below the gateway data directory.
 func openIndexerDB(rootDir string, backend string) (dbm.DB, error) {
 	return dbm.NewDB("evmindexer", dbm.BackendType(backend), filepath.Join(rootDir, "data"))
 }
 
+// runSummary scans every KV entry and prints per-prefix encoding and height
+// coverage information.
 func runSummary(db dbm.DB) error {
 	stats := make(map[byte]*prefixStats)
 	for prefix, info := range prefixes {
@@ -217,6 +223,8 @@ func runSummary(db dbm.DB) error {
 	return nil
 }
 
+// runRange inspects cache records for a contiguous block range and reports
+// their stored encodings.
 func runRange(db dbm.DB, start, end int64) error {
 	stats := rangeStats{
 		start: start,
@@ -260,6 +268,8 @@ func runRange(db dbm.DB, start, end int64) error {
 	return nil
 }
 
+// runFindJSONRange picks a contiguous range whose block metadata still uses the
+// legacy JSON encoding.
 func runFindJSONRange(db dbm.DB, blocks int, seed int64) error {
 	type candidate struct {
 		start int64
@@ -329,6 +339,7 @@ func runFindJSONRange(db dbm.DB, blocks int, seed int64) error {
 	return nil
 }
 
+// countHeightValue records the encoding for a height-addressed cache value.
 func countHeightValue(db dbm.DB, stats *rangeStats, name string, key []byte, prefix byte) {
 	value, err := db.Get(key)
 	if err != nil {
@@ -342,6 +353,7 @@ func countHeightValue(db dbm.DB, stats *rangeStats, name string, key []byte, pre
 	stats.add(name, classifyValue(prefix, value))
 }
 
+// countHashValue records the encoding for a hash-addressed cache value.
 func countHashValue(db dbm.DB, stats *rangeStats, name string, key []byte, prefix byte) {
 	value, err := db.Get(key)
 	if err != nil {
@@ -355,6 +367,7 @@ func countHashValue(db dbm.DB, stats *rangeStats, name string, key []byte, prefi
 	stats.add(name, classifyValue(prefix, value))
 }
 
+// add increments the observed encoding count for a named cache item.
 func (s *rangeStats) add(name, encoding string) {
 	counts := s.items[name]
 	if counts == nil {
@@ -364,6 +377,7 @@ func (s *rangeStats) add(name, encoding string) {
 	counts[encoding]++
 }
 
+// hashesByHeight returns tx hashes stored under a height-prefixed index.
 func hashesByHeight(db dbm.DB, prefix byte, height int64) ([]common.Hash, error) {
 	start := heightPrefix(prefix, height)
 	end := heightPrefix(prefix, height+1)
@@ -383,6 +397,7 @@ func hashesByHeight(db dbm.DB, prefix byte, height int64) ([]common.Hash, error)
 	return hashes, nil
 }
 
+// parseRange parses either a single height or a START:END height range.
 func parseRange(raw string) (int64, int64, error) {
 	startRaw, endRaw, ok := strings.Cut(raw, ":")
 	if !ok {
@@ -406,6 +421,8 @@ func parseRange(raw string) (int64, int64, error) {
 	return start, end, nil
 }
 
+// classifyValue labels a raw KV value as Cap'n Proto, legacy JSON/proto, raw,
+// or unknown based on its prefix metadata and payload header.
 func classifyValue(prefix byte, value []byte) string {
 	if bytes.HasPrefix(value, kvCapnpMagic) {
 		return "capnp"
@@ -433,6 +450,7 @@ func classifyValue(prefix byte, value []byte) string {
 	return "unknown"
 }
 
+// heightFromKey extracts the height portion from height-addressed indexer keys.
 func heightFromKey(prefix byte, key []byte) (int64, bool) {
 	info, ok := prefixes[prefix]
 	if !ok || !info.heightKey || len(key) < 9 {
@@ -441,6 +459,7 @@ func heightFromKey(prefix byte, key []byte) (int64, bool) {
 	return int64(binary.BigEndian.Uint64(key[1:9])), true
 }
 
+// heightPrefix builds the inclusive iterator prefix for height-addressed keys.
 func heightPrefix(prefix byte, height int64) []byte {
 	out := make([]byte, 9)
 	out[0] = prefix
@@ -448,6 +467,7 @@ func heightPrefix(prefix byte, height int64) []byte {
 	return out
 }
 
+// formatCounts renders encoding counts in stable key order for CLI output.
 func formatCounts(counts encodingCounts) string {
 	keys := make([]string, 0, len(counts))
 	for key := range counts {

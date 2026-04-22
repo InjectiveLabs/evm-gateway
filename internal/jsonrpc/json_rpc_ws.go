@@ -159,6 +159,8 @@ func (w *wsConn) WriteJSON(v interface{}) error {
 	return w.WriteMessage(websocket.TextMessage, bz)
 }
 
+// WriteMessage serializes websocket writes so concurrent subscription senders
+// cannot interleave frames on the same connection.
 func (w *wsConn) WriteMessage(messageType int, data []byte) error {
 	w.mux.Lock()
 	defer w.mux.Unlock()
