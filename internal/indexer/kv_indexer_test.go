@@ -5,6 +5,7 @@ import (
 
 	txsigning "cosmossdk.io/x/tx/signing"
 	abci "github.com/cometbft/cometbft/abci/types"
+	"github.com/cometbft/cometbft/crypto/merkle"
 	coretypes "github.com/cometbft/cometbft/rpc/core/types"
 	tmtypes "github.com/cometbft/cometbft/types"
 	dbm "github.com/cosmos/cosmos-db"
@@ -247,6 +248,17 @@ func TestKVIndexerIndexesVirtualBankTransfersForCosmosAndFinalizeEvents(t *testi
 	}
 	if hashes[2] != virtualbank.EndBlockHash(7) {
 		t.Fatalf("unexpected finalize virtual hash: got %s want %s", hashes[2], virtualbank.EndBlockHash(7))
+	}
+	expectedRoot := common.BytesToHash(merkle.HashFromByteSlices([][]byte{
+		virtualbank.BeginBlockHash(7).Bytes(),
+		virtualbank.CosmosTxHash(block.Txs[0]).Bytes(),
+		virtualbank.EndBlockHash(7).Bytes(),
+	})).Hex()
+	if meta.TransactionsRoot != expectedRoot {
+		t.Fatalf("unexpected transactions root: got %s want %s", meta.TransactionsRoot, expectedRoot)
+	}
+	if meta.TransactionsRoot == common.BytesToHash(block.Header.DataHash).Hex() {
+		t.Fatalf("transactions root still uses raw comet data hash: %s", meta.TransactionsRoot)
 	}
 
 	rpcTx, err := kv.GetRPCTransactionByBlockAndIndex(7, 1)

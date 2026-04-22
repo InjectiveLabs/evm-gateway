@@ -9,6 +9,7 @@ import (
 
 	errorsmod "cosmossdk.io/errors"
 	abci "github.com/cometbft/cometbft/abci/types"
+	"github.com/cometbft/cometbft/crypto/merkle"
 	coretypes "github.com/cometbft/cometbft/rpc/core/types"
 	cmtypes "github.com/cometbft/cometbft/types"
 	dbm "github.com/cosmos/cosmos-db"
@@ -179,9 +180,15 @@ func (kv *KVIndexer) indexBlockWithStats(block *cmtypes.Block, blockResults *cor
 	// record index of valid eth tx during the iteration
 	var ethTxIndex int32
 	var rpcTxIndex int32
+	visibleRPCTxHashes := make([]common.Hash, 0)
 	appendLogGroup := func(logs []*virtualbank.RPCLog) {
 		blockLogs = append(blockLogs, logs)
 		flatLogs = append(flatLogs, logs...)
+	}
+	appendVisibleRPCTxHash := func(txHash common.Hash) {
+		if kv.virtualBankTransfers {
+			visibleRPCTxHashes = append(visibleRPCTxHashes, txHash)
+		}
 	}
 	virtualLogContext := func(txHash common.Hash, txIndex int32) virtualbank.LogContext {
 		return virtualbank.LogContext{
@@ -206,6 +213,7 @@ func (kv *KVIndexer) indexBlockWithStats(block *cmtypes.Block, blockResults *cor
 		if err := kv.saveVirtualRPCTransaction(batch, block.Height, txIndex, txHash, blockHash, receipt, cosmosHash); err != nil {
 			return errorsmod.Wrapf(err, "IndexBlock %d", block.Height)
 		}
+		appendVisibleRPCTxHash(txHash)
 		appendLogGroup(logs)
 		return nil
 	}
@@ -464,6 +472,7 @@ func (kv *KVIndexer) indexBlockWithStats(block *cmtypes.Block, blockResults *cor
 				return stats, errorsmod.Wrapf(err, "IndexBlock %d, set rpc tx index", block.Height)
 			}
 
+			appendVisibleRPCTxHash(txHash)
 			appendLogGroup(logs)
 			stats.IndexedEthTxs++
 			ethTxIndex++
@@ -525,7 +534,20 @@ func (kv *KVIndexer) indexBlockWithStats(block *cmtypes.Block, blockResults *cor
 		visibleTxCount = rpcTxIndex
 	}
 	if visibleTxCount > 0 {
-		transactionsRoot = common.BytesToHash(block.Header.DataHash).Hex()
+		if kv.virtualBankTransfers {
+			if int32(len(visibleRPCTxHashes)) != visibleTxCount {
+				return stats, newBlockParseError(
+					nil,
+					"block %d: visible rpc tx root count mismatch (expected=%d found=%d)",
+					block.Height,
+					visibleTxCount,
+					len(visibleRPCTxHashes),
+				)
+			}
+			transactionsRoot = visibleRPCTxsRoot(visibleRPCTxHashes).Hex()
+		} else {
+			transactionsRoot = common.BytesToHash(block.Header.DataHash).Hex()
+		}
 	}
 	meta := CachedBlockMeta{
 		Height:                  block.Height,
@@ -787,6 +809,17 @@ func encodeOptionalBig(v *big.Int) string {
 		return ""
 	}
 	return hexutil.EncodeBig(v)
+}
+
+func visibleRPCTxsRoot(txHashes []common.Hash) common.Hash {
+	if len(txHashes) == 0 {
+		return ethtypes.EmptyRootHash
+	}
+	leaves := make([][]byte, len(txHashes))
+	for i := range txHashes {
+		leaves[i] = txHashes[i].Bytes()
+	}
+	return common.BytesToHash(merkle.HashFromByteSlices(leaves))
 }
 
 func (kv *KVIndexer) resetBlock(batch dbm.Batch, height int64) error {
