@@ -339,7 +339,7 @@ func (kv *KVIndexer) indexBlockWithStats(block *cmtypes.Block, blockResults *cor
 				Height:     block.Height,
 				TxIndex:    uint32(txIndex),
 				MsgIndex:   uint32(msgIndex),
-				EthTxIndex: visibleTxIndex,
+				EthTxIndex: ethTxIndex,
 			}
 			if result.Code != abci.CodeTypeOK && result.Codespace != evmtypes.ModuleName {
 				// exceeds block gas limit scenario, set gas used to gas limit because that's what's charged by ante handler.

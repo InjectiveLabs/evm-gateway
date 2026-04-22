@@ -1,20 +1,26 @@
 package indexer
 
 import (
+	"math/big"
 	"testing"
 
 	txsigning "cosmossdk.io/x/tx/signing"
+	evmtypes "github.com/InjectiveLabs/sdk-go/chain/evm/types"
 	abci "github.com/cometbft/cometbft/abci/types"
 	"github.com/cometbft/cometbft/crypto/merkle"
 	coretypes "github.com/cometbft/cometbft/rpc/core/types"
 	tmtypes "github.com/cometbft/cometbft/types"
 	dbm "github.com/cosmos/cosmos-db"
 	"github.com/cosmos/cosmos-sdk/client"
+	codectypes "github.com/cosmos/cosmos-sdk/codec/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/cosmos-sdk/types/tx/signing"
 	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
+	gogoproto "github.com/cosmos/gogoproto/proto"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
+	ethtypes "github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
 	protov2 "google.golang.org/protobuf/proto"
 
 	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtualbank"
@@ -328,6 +334,131 @@ func TestKVIndexerIndexesVirtualBankTransfersForCosmosAndFinalizeEvents(t *testi
 	}
 }
 
+func TestKVIndexerKeepsEthTxIndexEVMOrdinalWhenVirtualTransfersShiftRPCIndex(t *testing.T) {
+	db := dbm.NewMemDB()
+	chainID := big.NewInt(1337)
+	signer := ethtypes.LatestSignerForChainID(chainID)
+	key, err := crypto.HexToECDSA("4c0883a69102937d6231471b5dbb6204fe51296170827965fb7b05b8a9e7f6f2")
+	if err != nil {
+		t.Fatalf("HexToECDSA: %v", err)
+	}
+	to := common.HexToAddress("0x1000000000000000000000000000000000000001")
+	ethTx := ethtypes.NewTx(&ethtypes.LegacyTx{
+		Nonce:    1,
+		To:       &to,
+		Value:    big.NewInt(0),
+		Gas:      21000,
+		GasPrice: big.NewInt(1),
+	})
+	signedTx, err := ethtypes.SignTx(ethTx, signer, key)
+	if err != nil {
+		t.Fatalf("SignTx: %v", err)
+	}
+	ethMsg := &evmtypes.MsgEthereumTx{}
+	if err := ethMsg.FromSignedEthereumTx(signedTx, signer); err != nil {
+		t.Fatalf("FromSignedEthereumTx: %v", err)
+	}
+
+	decodedTx := testSDKTx{
+		msgs:             []sdk.Msg{ethMsg},
+		extensionOptions: evmExtensionOptions(),
+	}
+	kv := NewKVIndexer(
+		db,
+		testLogger(),
+		client.Context{TxConfig: testTxConfig{tx: decodedTx}},
+		WithVirtualBankTransfers(true, chainID.String()),
+	)
+
+	height := int64(8)
+	block := tmtypes.MakeBlock(height, []tmtypes.Tx{tmtypes.Tx("eth-tx")}, &tmtypes.Commit{Height: height - 1}, nil)
+	block.Header.ValidatorsHash = common.HexToHash("0x08").Bytes()
+	ethHash := ethMsg.Hash()
+	blockResults := &coretypes.ResultBlockResults{
+		Height: height,
+		TxResults: []*abci.ExecTxResult{
+			{
+				Code:    abci.CodeTypeOK,
+				GasUsed: 21000,
+				Data: mustMarshalIndexerTxMsgData(t, &evmtypes.MsgEthereumTxResponse{
+					Hash: ethHash.Hex(),
+				}),
+				Events: []abci.Event{
+					{
+						Type: evmtypes.EventTypeEthereumTx,
+						Attributes: []abci.EventAttribute{
+							{Key: evmtypes.AttributeKeyEthereumTxHash, Value: ethHash.Hex()},
+							{Key: evmtypes.AttributeKeyTxIndex, Value: "0"},
+							{Key: evmtypes.AttributeKeyTxGasUsed, Value: "21000"},
+						},
+					},
+				},
+			},
+		},
+		FinalizeBlockEvents: []abci.Event{
+			{
+				Type: virtualbank.EventTypeCoinReceived,
+				Attributes: []abci.EventAttribute{
+					{Key: "receiver", Value: "0x4444444444444444444444444444444444444444"},
+					{Key: "amount", Value: "6inj"},
+					{Key: virtualbank.AttributeMode, Value: virtualbank.ModeBeginBlock},
+				},
+			},
+		},
+	}
+
+	if err := kv.IndexBlockWithResults(block, blockResults); err != nil {
+		t.Fatalf("IndexBlockWithResults returned error: %v", err)
+	}
+
+	indexedByHash, err := kv.GetByTxHash(ethHash)
+	if err != nil {
+		t.Fatalf("GetByTxHash returned error: %v", err)
+	}
+	if indexedByHash.EthTxIndex != 0 {
+		t.Fatalf("tx result used visible RPC index: got %d want 0", indexedByHash.EthTxIndex)
+	}
+
+	indexedByEVMOrdinal, err := kv.GetByBlockAndIndex(height, 0)
+	if err != nil {
+		t.Fatalf("GetByBlockAndIndex with EVM ordinal returned error: %v", err)
+	}
+	if indexedByEVMOrdinal.EthTxIndex != 0 || indexedByEVMOrdinal.TxIndex != 0 {
+		t.Fatalf("unexpected EVM ordinal lookup result: %#v", indexedByEVMOrdinal)
+	}
+	if _, err := kv.GetByBlockAndIndex(height, 1); err == nil {
+		t.Fatal("expected visible RPC index to be absent from the EVM tx index collection")
+	}
+
+	beginRPC, err := kv.GetRPCTransactionByBlockAndIndex(height, 0)
+	if err != nil {
+		t.Fatalf("GetRPCTransactionByBlockAndIndex for begin block virtual tx returned error: %v", err)
+	}
+	if beginRPC.Hash != virtualbank.BeginBlockHash(height) {
+		t.Fatalf("unexpected begin block RPC hash: got %s want %s", beginRPC.Hash.Hex(), virtualbank.BeginBlockHash(height).Hex())
+	}
+
+	rpcTx, err := kv.GetRPCTransactionByBlockAndIndex(height, 1)
+	if err != nil {
+		t.Fatalf("GetRPCTransactionByBlockAndIndex for EVM tx returned error: %v", err)
+	}
+	if rpcTx.Hash != ethHash {
+		t.Fatalf("unexpected RPC tx hash: got %s want %s", rpcTx.Hash.Hex(), ethHash.Hex())
+	}
+	if rpcTx.TransactionIndex == nil || uint64(*rpcTx.TransactionIndex) != 1 {
+		t.Fatalf("unexpected RPC transaction index: got %v want 1", rpcTx.TransactionIndex)
+	}
+
+	receipt, err := kv.GetReceiptByTxHash(ethHash)
+	if err != nil {
+		t.Fatalf("GetReceiptByTxHash returned error: %v", err)
+	}
+	receiptIndex, ok := receipt["transactionIndex"].(hexutil.Uint64)
+	if !ok || uint64(receiptIndex) != 1 {
+		t.Fatalf("unexpected receipt transaction index: got %#v want 1", receipt["transactionIndex"])
+	}
+}
+
 func TestKVIndexerTraceCacheRoundTrip(t *testing.T) {
 	db := dbm.NewMemDB()
 	kv := &KVIndexer{db: db, logger: testLogger()}
@@ -362,7 +493,8 @@ func TestKVIndexerTraceCacheRoundTrip(t *testing.T) {
 }
 
 type testSDKTx struct {
-	msgs []sdk.Msg
+	msgs             []sdk.Msg
+	extensionOptions []*codectypes.Any
 }
 
 // GetMsgs returns the messages supplied to the stub SDK transaction.
@@ -374,6 +506,40 @@ func (t testSDKTx) GetMsgs() []sdk.Msg {
 // legacy message access.
 func (t testSDKTx) GetMsgsV2() ([]protov2.Message, error) {
 	return nil, nil
+}
+
+func (t testSDKTx) GetExtensionOptions() []*codectypes.Any {
+	return t.extensionOptions
+}
+
+func (t testSDKTx) GetNonCriticalExtensionOptions() []*codectypes.Any {
+	return nil
+}
+
+func evmExtensionOptions() []*codectypes.Any {
+	return []*codectypes.Any{
+		{TypeUrl: "/injective.evm.v1.ExtensionOptionsEthereumTx"},
+	}
+}
+
+func mustMarshalIndexerTxMsgData(t *testing.T, responses ...*evmtypes.MsgEthereumTxResponse) []byte {
+	t.Helper()
+
+	msgResponses := make([]*codectypes.Any, 0, len(responses))
+	for _, response := range responses {
+		anyRsp, err := codectypes.NewAnyWithValue(response)
+		if err != nil {
+			t.Fatalf("NewAnyWithValue: %v", err)
+		}
+		msgResponses = append(msgResponses, anyRsp)
+	}
+
+	txMsgData := sdk.TxMsgData{MsgResponses: msgResponses}
+	data, err := gogoproto.Marshal(&txMsgData)
+	if err != nil {
+		t.Fatalf("Marshal TxMsgData: %v", err)
+	}
+	return data
 }
 
 type testTxConfig struct {
