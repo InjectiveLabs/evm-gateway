@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"time"
 
 	rpcfilters "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/namespaces/ethereum/eth/filters"
 	rpcstream "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/stream"
@@ -18,7 +19,6 @@ import (
 	"github.com/bytedance/sonic"
 	"github.com/cosmos/cosmos-sdk/client"
 	"github.com/ethereum/go-ethereum/common"
-	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/eth/filters"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/gorilla/mux"
@@ -50,8 +50,13 @@ type SubscriptionNotification struct {
 }
 
 type SubscriptionResult struct {
-	Subscription rpc.ID      `json:"subscription"`
-	Result       interface{} `json:"result"`
+	Subscription rpc.ID               `json:"subscription"`
+	Result       interface{}          `json:"result"`
+	Metadata     SubscriptionMetadata `json:"metadata"`
+}
+
+type SubscriptionMetadata struct {
+	EmittedAtUnixNano int64 `json:"emittedAtUnixNano"`
 }
 
 type ErrorResponseJSON struct {
@@ -195,7 +200,11 @@ func (s *websocketsServer) readLoop(wsConn *wsConn) {
 		_, mb, err := wsConn.ReadMessage()
 		if err != nil {
 			_ = wsConn.Close()
-			s.logger.Error("read message error, breaking read loop", "error", err.Error())
+			if isExpectedWebsocketClose(err) {
+				s.logger.Debug("websocket peer closed", "error", err.Error())
+			} else {
+				s.logger.Error("read message error, breaking read loop", "error", err.Error())
+			}
 			return
 		}
 
@@ -281,6 +290,11 @@ func (s *websocketsServer) readLoop(wsConn *wsConn) {
 			}
 		}
 	}
+}
+
+func isExpectedWebsocketClose(err error) bool {
+	return websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) ||
+		errors.Is(err, net.ErrClosed)
 }
 
 // getParamsAndCheckValid sends an error response to the client if params are invalid.
@@ -376,24 +390,7 @@ func (api *pubSubAPI) subscribeNewHeads(wsConn *wsConn, subID rpc.ID) (context.C
 	//nolint:errcheck // for one liner
 	go api.events.HeaderStream().Subscribe(ctx, func(headers []rpcstream.RPCHeader, _ int) error {
 		for _, header := range headers {
-			// write to ws conn
-			res := &SubscriptionNotification{
-				Jsonrpc: "2.0",
-				Method:  "eth_subscription",
-				Params: &SubscriptionResult{
-					Subscription: subID,
-					Result:       header.EthHeader,
-				},
-			}
-
-			if err := wsConn.WriteJSON(res); err != nil {
-				api.logger.Error("error writing header, will drop peer", "error", err.Error())
-
-				try(func() {
-					if !errors.Is(err, websocket.ErrCloseSent) {
-						_ = wsConn.Close()
-					}
-				}, api.logger, "closing websocket peer sub")
+			if err := api.writeSubscriptionResult(wsConn, subID, header.EthHeader); err != nil {
 				return err
 			}
 		}
@@ -401,6 +398,31 @@ func (api *pubSubAPI) subscribeNewHeads(wsConn *wsConn, subID rpc.ID) (context.C
 	})
 
 	return cancel, nil
+}
+
+func (api *pubSubAPI) writeSubscriptionResult(wsConn *wsConn, subID rpc.ID, result interface{}) error {
+	res := &SubscriptionNotification{
+		Jsonrpc: "2.0",
+		Method:  "eth_subscription",
+		Params: &SubscriptionResult{
+			Subscription: subID,
+			Result:       result,
+			Metadata: SubscriptionMetadata{
+				EmittedAtUnixNano: time.Now().UnixNano(),
+			},
+		},
+	}
+
+	if err := wsConn.WriteJSON(res); err != nil {
+		api.logger.Debug("subscription write failed; closing peer", "error", err.Error())
+		try(func() {
+			if !errors.Is(err, websocket.ErrCloseSent) {
+				_ = wsConn.Close()
+			}
+		}, api.logger, "closing websocket peer sub")
+		return err
+	}
+	return nil
 }
 
 func try(fn func(), l *slog.Logger, desc string) {
@@ -515,30 +537,14 @@ func (api *pubSubAPI) subscribeLogs(wsConn *wsConn, subID rpc.ID, extra interfac
 
 	ctx, cancel := context.WithCancel(context.Background())
 	//nolint:errcheck // one liner
-	go api.events.LogStream().Subscribe(ctx, func(txLogs []*ethtypes.Log, _ int) error {
-		logs := rpcfilters.FilterLogs(virtualbank.WrapLogs(txLogs, false, nil), crit.FromBlock, crit.ToBlock, crit.Addresses, crit.Topics)
+	go api.events.LogStream().Subscribe(ctx, func(txLogs []*virtualbank.RPCLog, _ int) error {
+		logs := rpcfilters.FilterLogs(txLogs, crit.FromBlock, crit.ToBlock, crit.Addresses, crit.Topics)
 		if len(logs) == 0 {
 			return nil
 		}
 
 		for _, ethLog := range logs {
-			res := &SubscriptionNotification{
-				Jsonrpc: "2.0",
-				Method:  "eth_subscription",
-				Params: &SubscriptionResult{
-					Subscription: subID,
-					Result:       ethLog,
-				},
-			}
-
-			err := wsConn.WriteJSON(res)
-			if err != nil {
-				try(func() {
-					if !errors.Is(err, websocket.ErrCloseSent) {
-						_ = wsConn.Close()
-					}
-				}, api.logger, "closing websocket peer sub")
-
+			if err := api.writeSubscriptionResult(wsConn, subID, ethLog); err != nil {
 				return err
 			}
 		}
@@ -553,25 +559,7 @@ func (api *pubSubAPI) subscribePendingTransactions(wsConn *wsConn, subID rpc.ID)
 	//nolint:errcheck // one liner
 	go api.events.PendingTxStream().Subscribe(ctx, func(items []common.Hash, _ int) error {
 		for _, hash := range items {
-			// write to ws conn
-			res := &SubscriptionNotification{
-				Jsonrpc: "2.0",
-				Method:  "eth_subscription",
-				Params: &SubscriptionResult{
-					Subscription: subID,
-					Result:       hash,
-				},
-			}
-
-			err := wsConn.WriteJSON(res)
-			if err != nil {
-				api.logger.Debug("error writing header, will drop peer", "error", err.Error())
-
-				try(func() {
-					if !errors.Is(err, websocket.ErrCloseSent) {
-						_ = wsConn.Close()
-					}
-				}, api.logger, "closing websocket peer sub")
+			if err := api.writeSubscriptionResult(wsConn, subID, hash); err != nil {
 				return err
 			}
 		}

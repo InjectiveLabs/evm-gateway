@@ -2,11 +2,9 @@ package jsonrpc
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
-	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/pkg/errors"
@@ -20,36 +18,12 @@ import (
 	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/stream"
 	txindexer "github.com/InjectiveLabs/evm-gateway/internal/indexer"
 	"github.com/InjectiveLabs/evm-gateway/internal/syncstatus"
-	rpcclient "github.com/cometbft/cometbft/rpc/client"
 	"github.com/cosmos/cosmos-sdk/client"
 	ethlog "github.com/ethereum/go-ethereum/log"
 	ethrpc "github.com/ethereum/go-ethereum/rpc"
 )
 
 var jsonRPCTraceTag = gotracer.NewTag("component", "jsonrpc")
-
-type eventStreamStarter interface {
-	IsRunning() bool
-	Start() error
-}
-
-func eventClientForStreams(client any) (rpcclient.EventsClient, error) {
-	evtClient, ok := client.(rpcclient.EventsClient)
-	if !ok {
-		return nil, nil
-	}
-
-	starter, ok := client.(eventStreamStarter)
-	if !ok || starter.IsRunning() {
-		return evtClient, nil
-	}
-
-	if err := starter.Start(); err != nil {
-		return nil, err
-	}
-
-	return evtClient, nil
-}
 
 func handleHTTPServerExit(logger *slog.Logger, done chan struct{}, err error) error {
 	if err == nil {
@@ -78,58 +52,19 @@ func Start(
 	jsonRPCConfig config.JSONRPCConfig,
 	indexer txindexer.TxIndexer,
 	status *syncstatus.Tracker,
+	rpcStream *stream.RPCStream,
 ) (*http.Server, chan struct{}, error) {
 	ctx := context.Background()
 	defer gotracer.Traceless(&ctx, jsonRPCTraceTag)()
 
 	logger = logger.With("module", "jsonrpc")
 
-	var rpcStream *stream.RPCStream
-	if cfg.VirtualizeCosmosEvents {
+	if rpcStream == nil {
 		logger.Warn(
-			"cosmos transfer virtualization enabled; continuing in polling-only mode for log filters",
+			"indexed rpc streams unavailable; continuing in polling-only mode",
 			"eth_subscribe_available", false,
 			"eth_new_filter_available", false,
 		)
-	} else {
-		evtClient, err := eventClientForStreams(clientCtx.Client)
-		if err != nil {
-			logger.Warn(
-				"comet event streams unavailable; continuing in polling-only mode",
-				"client_type", fmt.Sprintf("%T", clientCtx.Client),
-				"error", err,
-				"eth_subscribe_available", false,
-				"eth_new_filter_available", false,
-			)
-		} else if evtClient != nil {
-			var rpcStreamOpenAttempts = 6
-			for i := 0; i < rpcStreamOpenAttempts; i++ {
-				rpcStream, err = stream.NewRPCStreams(evtClient, logger, clientCtx.TxConfig.TxDecoder())
-				if err == nil {
-					break
-				}
-
-				time.Sleep(time.Second)
-			}
-
-			if err != nil {
-				logger.Warn(
-					"comet event streams unavailable; continuing in polling-only mode",
-					"client_type", fmt.Sprintf("%T", clientCtx.Client),
-					"error", err,
-					"eth_subscribe_available", false,
-					"eth_new_filter_available", false,
-				)
-				rpcStream = nil
-			}
-		} else {
-			logger.Warn(
-				"client does not implement EventsClient; continuing in polling-only mode",
-				"client_type", fmt.Sprintf("%T", clientCtx.Client),
-				"eth_subscribe_available", false,
-				"eth_new_filter_available", false,
-			)
-		}
 	}
 
 	handler := NewWrappedSdkLogger(logger)

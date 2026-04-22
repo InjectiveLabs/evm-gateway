@@ -376,14 +376,14 @@ func (api *PublicFilterAPI) GetFilterChanges(id rpc.ID) (interface{}, error) {
 	case filters.LogsSubscription:
 		var (
 			logs  []*virtualbank.RPCLog
-			chunk []*ethtypes.Log
+			chunk []*virtualbank.RPCLog
 		)
 		for {
 			chunk, f.offset = api.events.LogStream().ReadNonBlocking(f.offset)
 			if len(chunk) == 0 {
 				break
 			}
-			filtered := FilterLogs(virtualbank.WrapLogs(chunk, false, nil), f.crit.FromBlock, f.crit.ToBlock, f.crit.Addresses, f.crit.Topics)
+			filtered := FilterLogs(chunk, f.crit.FromBlock, f.crit.ToBlock, f.crit.Addresses, f.crit.Topics)
 			logs = append(logs, filtered...)
 		}
 		return returnLogs(logs), nil

@@ -2,134 +2,16 @@ package jsonrpc
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bytedance/sonic"
-	coretypes "github.com/cometbft/cometbft/rpc/core/types"
 	"github.com/pkg/errors"
 )
-
-type fakeEventClient struct {
-	running    bool
-	startErr   error
-	startCalls int
-}
-
-func (c *fakeEventClient) Start() error {
-	c.startCalls++
-	if c.startErr != nil {
-		return c.startErr
-	}
-
-	c.running = true
-	return nil
-}
-
-func (c *fakeEventClient) IsRunning() bool {
-	return c.running
-}
-
-func (c *fakeEventClient) Subscribe(context.Context, string, string, ...int) (<-chan coretypes.ResultEvent, error) {
-	return nil, nil
-}
-
-func (c *fakeEventClient) Unsubscribe(context.Context, string, string) error {
-	return nil
-}
-
-func (c *fakeEventClient) UnsubscribeAll(context.Context, string) error {
-	return nil
-}
-
-type passiveEventClient struct{}
-
-func (c *passiveEventClient) Subscribe(context.Context, string, string, ...int) (<-chan coretypes.ResultEvent, error) {
-	return nil, nil
-}
-
-func (c *passiveEventClient) Unsubscribe(context.Context, string, string) error {
-	return nil
-}
-
-func (c *passiveEventClient) UnsubscribeAll(context.Context, string) error {
-	return nil
-}
-
-func TestEventClientForStreamsStartsStoppedClient(t *testing.T) {
-	client := &fakeEventClient{}
-
-	evtClient, err := eventClientForStreams(client)
-	if err != nil {
-		t.Fatalf("eventClientForStreams returned error: %v", err)
-	}
-	if evtClient != client {
-		t.Fatalf("expected returned event client to match input, got %T", evtClient)
-	}
-	if client.startCalls != 1 {
-		t.Fatalf("expected one Start call, got %d", client.startCalls)
-	}
-	if !client.running {
-		t.Fatal("expected client to be running after Start")
-	}
-}
-
-func TestEventClientForStreamsSkipsStartForRunningClient(t *testing.T) {
-	client := &fakeEventClient{running: true}
-
-	evtClient, err := eventClientForStreams(client)
-	if err != nil {
-		t.Fatalf("eventClientForStreams returned error: %v", err)
-	}
-	if evtClient != client {
-		t.Fatalf("expected returned event client to match input, got %T", evtClient)
-	}
-	if client.startCalls != 0 {
-		t.Fatalf("expected no Start calls, got %d", client.startCalls)
-	}
-}
-
-func TestEventClientForStreamsReturnsStartError(t *testing.T) {
-	expectedErr := errors.New("ws unavailable")
-	client := &fakeEventClient{startErr: expectedErr}
-
-	evtClient, err := eventClientForStreams(client)
-	if !errors.Is(err, expectedErr) {
-		t.Fatalf("expected start error %v, got %v", expectedErr, err)
-	}
-	if evtClient != nil {
-		t.Fatalf("expected nil event client on start failure, got %T", evtClient)
-	}
-	if client.startCalls != 1 {
-		t.Fatalf("expected one Start call, got %d", client.startCalls)
-	}
-}
-
-func TestEventClientForStreamsAllowsPassiveEventClient(t *testing.T) {
-	client := &passiveEventClient{}
-
-	evtClient, err := eventClientForStreams(client)
-	if err != nil {
-		t.Fatalf("eventClientForStreams returned error: %v", err)
-	}
-	if evtClient != client {
-		t.Fatalf("expected returned event client to match input, got %T", evtClient)
-	}
-}
-
-func TestEventClientForStreamsReturnsNilForNonEventClient(t *testing.T) {
-	evtClient, err := eventClientForStreams(struct{}{})
-	if err != nil {
-		t.Fatalf("eventClientForStreams returned error: %v", err)
-	}
-	if evtClient != nil {
-		t.Fatalf("expected nil event client, got %T", evtClient)
-	}
-}
 
 func TestSubscriptionResponsePreservesRequestID(t *testing.T) {
 	tests := []struct {
@@ -180,6 +62,38 @@ func TestSubscriptionResponsePreservesRequestID(t *testing.T) {
 				t.Fatalf("expected response id %s, got %s in %s", tt.wantID, got, response)
 			}
 		})
+	}
+}
+
+func TestSubscriptionNotificationIncludesLatencyMetadata(t *testing.T) {
+	emittedAt := time.Unix(0, 123456789)
+	notification, err := sonic.Marshal(&SubscriptionNotification{
+		Jsonrpc: "2.0",
+		Method:  "eth_subscription",
+		Params: &SubscriptionResult{
+			Subscription: "0x1",
+			Result:       map[string]string{"number": "0x2"},
+			Metadata: SubscriptionMetadata{
+				EmittedAtUnixNano: emittedAt.UnixNano(),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal notification: %v", err)
+	}
+
+	var decoded struct {
+		Params struct {
+			Metadata struct {
+				EmittedAtUnixNano int64 `json:"emittedAtUnixNano"`
+			} `json:"metadata"`
+		} `json:"params"`
+	}
+	if err := sonic.Unmarshal(notification, &decoded); err != nil {
+		t.Fatalf("unmarshal notification: %v", err)
+	}
+	if decoded.Params.Metadata.EmittedAtUnixNano != emittedAt.UnixNano() {
+		t.Fatalf("unexpected emitted timestamp: got %d want %d", decoded.Params.Metadata.EmittedAtUnixNano, emittedAt.UnixNano())
 	}
 }
 

@@ -560,6 +560,50 @@ func TestSyncerRunSerialDoesNotStartTipUntilGapsComplete(t *testing.T) {
 	}
 }
 
+func TestSyncerPublishesOnlyForwardTipBlocks(t *testing.T) {
+	db := dbm.NewMemDB()
+	if err := db.Set(BlockMetaKey(2), mustJSON(CachedBlockMeta{Height: 2, Hash: common.HexToHash("0x02").Hex()})); err != nil {
+		t.Fatalf("set block meta: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	indexer := &concurrentTxIndexer{
+		blockTxs: make(map[int64][]string),
+		onIndex: func(height int64) {
+			if height == 3 {
+				cancel()
+			}
+		},
+	}
+	publisher := &recordingTipPublisher{}
+
+	syncer := NewSyncer(
+		config.Config{
+			EnableSync:             true,
+			Earliest:               1,
+			FetchJobs:              1,
+			AllowGaps:              false,
+			ParallelSyncTipAndGaps: false,
+		},
+		testLogger(),
+		testSyncClientWithHead(2, nil),
+		db,
+		indexer,
+		nil,
+		WithTipBlockPublisher(publisher),
+	)
+
+	err := syncer.Run(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected syncer to stop on context cancel, got %v", err)
+	}
+	if got, want := publisher.Heights(), []int64{3}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected published tip heights: got %v want %v", got, want)
+	}
+}
+
 func TestSyncerRunParallelTipErrorDoesNotStopGapSync(t *testing.T) {
 	indexer := &concurrentTxIndexer{
 		blockTxs:    make(map[int64][]string),
@@ -871,6 +915,24 @@ type concurrentTxIndexer struct {
 	blockTxs    map[int64][]string
 	failHeights map[int64]error
 	onIndex     func(int64)
+}
+
+type recordingTipPublisher struct {
+	mu      sync.Mutex
+	heights []int64
+}
+
+func (r *recordingTipPublisher) PublishIndexedBlock(height int64) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.heights = append(r.heights, height)
+	return nil
+}
+
+func (r *recordingTipPublisher) Heights() []int64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]int64(nil), r.heights...)
 }
 
 func (c *concurrentTxIndexer) WithContext(context.Context) TxIndexer { return c }

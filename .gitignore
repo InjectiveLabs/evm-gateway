@@ -3,3 +3,4 @@ build/
 .env
 .codex
 var/
+.evm-gateway

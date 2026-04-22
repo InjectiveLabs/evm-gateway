@@ -1,28 +1,16 @@
 package stream
 
 import (
-	"context"
 	"fmt"
-	"sync"
 
-	"log/slog"
-
-	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
-	evmtypes "github.com/InjectiveLabs/sdk-go/chain/evm/types"
-	cmtquery "github.com/cometbft/cometbft/libs/pubsub/query"
-	rpcclient "github.com/cometbft/cometbft/rpc/client"
-	coretypes "github.com/cometbft/cometbft/rpc/core/types"
-	cmtypes "github.com/cometbft/cometbft/types"
-	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/ethereum/go-ethereum/common"
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
-	"upd.dev/xlab/gotracer"
+
+	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtualbank"
+	txindexer "github.com/InjectiveLabs/evm-gateway/internal/indexer"
 )
 
 const (
-	streamSubscriberName = "eth-json-rpc"
-	subscribBufferSize   = 1024
-
 	headerStreamSegmentSize = 128
 	headerStreamCapacity    = 128 * 32
 	txStreamSegmentSize     = 1024
@@ -31,79 +19,40 @@ const (
 	logStreamCapacity       = 2048 * 32
 )
 
-var (
-	evmEvents = cmtquery.MustCompile(fmt.Sprintf("%s='%s' AND %s.%s='%s'",
-		cmtypes.EventTypeKey,
-		cmtypes.EventTx,
-		sdk.EventTypeMessage,
-		sdk.AttributeKeyModule, evmtypes.ModuleName)).String()
-	blockEvents  = cmtypes.QueryForEvent(cmtypes.EventNewBlock).String()
-	evmTxHashKey = fmt.Sprintf("%s.%s", evmtypes.TypeMsgEthereumTx, evmtypes.AttributeKeyEthereumTxHash)
-	rpcStreamTag = gotracer.NewTag("component", "rpc_stream")
-)
+type IndexedBlockReader interface {
+	GetBlockMetaByHeight(height int64) (*txindexer.CachedBlockMeta, error)
+	GetLogsByBlockHeight(height int64) ([][]*virtualbank.RPCLog, error)
+	GetRPCTransactionHashesByBlockHeight(height int64) ([]common.Hash, error)
+}
 
 type RPCHeader struct {
 	EthHeader *ethtypes.Header
 	Hash      common.Hash
 }
 
-// RPCStream provides data streams for newHeads, logs, and pendingTransactions.
+// RPCStream provides data streams for newHeads, logs, and newPendingTransactions.
+// Streams are published only after the indexer has committed the
+// enriched block view to KV, so websocket clients observe the same virtualized
+// data that polling RPC methods read.
 type RPCStream struct {
-	evtClient rpcclient.EventsClient
-	logger    *slog.Logger
-	txDecoder sdk.TxDecoder
+	reader IndexedBlockReader
 
 	headerStream    *Stream[RPCHeader]
 	pendingTxStream *Stream[common.Hash]
-	logStream       *Stream[*ethtypes.Log]
-
-	wg sync.WaitGroup
+	logStream       *Stream[*virtualbank.RPCLog]
 }
 
-func NewRPCStreams(
-	evtClient rpcclient.EventsClient,
-	logger *slog.Logger,
-	txDecoder sdk.TxDecoder,
-) (*RPCStream, error) {
-	ctx := context.Background()
-	defer gotracer.Traceless(&ctx, rpcStreamTag)()
-
-	s := &RPCStream{
-		evtClient: evtClient,
-		logger:    logger,
-		txDecoder: txDecoder,
+func NewRPCStream(reader IndexedBlockReader) *RPCStream {
+	return &RPCStream{
+		reader: reader,
 
 		headerStream:    NewStream[RPCHeader](headerStreamSegmentSize, headerStreamCapacity),
 		pendingTxStream: NewStream[common.Hash](txStreamSegmentSize, txStreamCapacity),
-		logStream:       NewStream[*ethtypes.Log](logStreamSegmentSize, logStreamCapacity),
+		logStream:       NewStream[*virtualbank.RPCLog](logStreamSegmentSize, logStreamCapacity),
 	}
-
-	chBlocks, err := s.evtClient.Subscribe(ctx, streamSubscriberName, blockEvents, subscribBufferSize)
-	if err != nil {
-		return nil, err
-	}
-
-	chLogs, err := s.evtClient.Subscribe(ctx, streamSubscriberName, evmEvents, subscribBufferSize)
-	if err != nil {
-		if err := s.evtClient.UnsubscribeAll(context.Background(), streamSubscriberName); err != nil {
-			s.logger.Error("failed to unsubscribe", "err", err)
-		}
-		return nil, err
-	}
-
-	go s.start(&s.wg, chBlocks, chLogs)
-
-	return s, nil
 }
 
 func (s *RPCStream) Close() error {
-	ctx := context.Background()
-	defer gotracer.Traceless(&ctx, rpcStreamTag)()
-
-	if err := s.evtClient.UnsubscribeAll(context.Background(), streamSubscriberName); err != nil {
-		return err
-	}
-	s.wg.Wait()
 	return nil
 }
 
@@ -115,76 +64,56 @@ func (s *RPCStream) PendingTxStream() *Stream[common.Hash] {
 	return s.pendingTxStream
 }
 
-func (s *RPCStream) LogStream() *Stream[*ethtypes.Log] {
+func (s *RPCStream) LogStream() *Stream[*virtualbank.RPCLog] {
 	return s.logStream
 }
 
-// ListenPendingTx is a callback passed to application to listen for pending transactions in CheckTx.
+// ListenPendingTx publishes a transaction hash to the pending transaction
+// compatibility stream.
 func (s *RPCStream) ListenPendingTx(hash common.Hash) {
+	if s == nil {
+		return
+	}
 	s.pendingTxStream.Add(hash)
 }
 
-func (s *RPCStream) start(
-	wg *sync.WaitGroup,
-	chBlocks <-chan coretypes.ResultEvent,
-	chLogs <-chan coretypes.ResultEvent,
-) {
-	wg.Add(1)
-	defer func() {
-		wg.Done()
-		if err := s.evtClient.UnsubscribeAll(context.Background(), streamSubscriberName); err != nil {
-			s.logger.Error("failed to unsubscribe", "err", err)
-		}
-	}()
-
-	for {
-		select {
-		case ev, ok := <-chBlocks:
-			if !ok {
-				chBlocks = nil
-				break
-			}
-
-			data, ok := ev.Data.(cmtypes.EventDataNewBlock)
-			if !ok {
-				s.logger.Error("event data type mismatch", "type", fmt.Sprintf("%T", ev.Data))
-				continue
-			}
-
-			baseFee := types.BaseFeeFromEvents(data.ResultFinalizeBlock.Events)
-
-			// TODO: fetch bloom from events
-			header := types.EthHeaderFromTendermint(data.Block.Header, ethtypes.Bloom{}, baseFee)
-			s.headerStream.Add(RPCHeader{EthHeader: header, Hash: common.BytesToHash(data.Block.Header.Hash())})
-
-		case ev, ok := <-chLogs:
-			if !ok {
-				chLogs = nil
-				break
-			}
-
-			if _, ok := ev.Events[evmTxHashKey]; !ok {
-				// ignore transaction as it's not from the evm module
-				continue
-			}
-
-			// get transaction result data
-			dataTx, ok := ev.Data.(cmtypes.EventDataTx)
-			if !ok {
-				s.logger.Error("event data type mismatch", "type", fmt.Sprintf("%T", ev.Data))
-				continue
-			}
-			txLogs, err := evmtypes.DecodeTxLogs(dataTx.Result.Data, uint64(dataTx.Height))
-			if err != nil {
-				s.logger.Error("fail to decode evm tx response", "error", err.Error())
-				continue
-			}
-
-			s.logStream.Add(txLogs...)
-		}
-
-		if chBlocks == nil && chLogs == nil {
-			break
-		}
+// PublishIndexedBlock broadcasts the cached header and logs for a block that
+// the forward tip sync queue has just written to KV.
+func (s *RPCStream) PublishIndexedBlock(height int64) error {
+	if s == nil || s.reader == nil {
+		return nil
 	}
+
+	meta, err := s.reader.GetBlockMetaByHeight(height)
+	if err != nil {
+		return fmt.Errorf("load indexed block meta %d: %w", height, err)
+	}
+	header, err := txindexer.HeaderFromCachedBlockMeta(meta)
+	if err != nil {
+		return err
+	}
+	logGroups, err := s.reader.GetLogsByBlockHeight(height)
+	if err != nil {
+		return fmt.Errorf("load indexed block logs %d: %w", height, err)
+	}
+	txHashes, err := s.reader.GetRPCTransactionHashesByBlockHeight(height)
+	if err != nil {
+		return fmt.Errorf("load indexed block tx hashes %d: %w", height, err)
+	}
+
+	s.headerStream.Add(RPCHeader{
+		EthHeader: header,
+		Hash:      common.HexToHash(meta.Hash),
+	})
+	s.pendingTxStream.Add(txHashes...)
+	s.logStream.Add(flattenRPCLogs(logGroups)...)
+	return nil
+}
+
+func flattenRPCLogs(groups [][]*virtualbank.RPCLog) []*virtualbank.RPCLog {
+	out := make([]*virtualbank.RPCLog, 0)
+	for _, group := range groups {
+		out = append(out, group...)
+	}
+	return out
 }

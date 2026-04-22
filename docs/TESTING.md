@@ -13,6 +13,9 @@ There is also a heavier benchmark flow:
 
 It is gated separately behind `WEB3INJ_E2E_BENCH=1`.
 
+The websocket stream reliability benchmark is gated separately behind
+`WEB3INJ_E2E_WS_BENCH=1`.
+
 ## Local Environment
 
 The current local testing workflow assumes:
@@ -185,6 +188,72 @@ WEB3INJ_COMET_RPC=http://localhost:26657 \
 WEB3INJ_E2E_SOURCE_RPC=http://localhost:8545 \
 WEB3INJ_GRPC_ADDR=127.0.0.1:9900 \
 go test -vet=off ./e2e -run TestHistoricalRPCBenchmarkSuite -count=1 -v -timeout 20m
+```
+
+## Run Websocket Stream Benchmark
+
+This benchmark exercises live JSON-RPC websocket subscriptions from a fresh
+standalone `evm-gateway` while `chain-stresser` sends mixed native bank and EVM
+traffic to the local node. The gateway is always started with
+`WEB3INJ_VIRTUALIZE_COSMOS_EVENTS=true`; if that env var is explicitly set to a
+false value, the benchmark fails.
+
+The measured websocket methods are:
+
+- `eth_subscribe` `newHeads`
+- `eth_subscribe` `logs`
+- `eth_subscribe` `newPendingTransactions`
+- `eth_subscribe` `syncing` is probed and reported; it is currently unsupported
+
+Each subscription notification includes `params.metadata.emittedAtUnixNano`,
+which is a server-side Unix nanosecond timestamp captured immediately before
+the websocket response is written. The benchmark uses that value to measure
+server-emission-to-client-receive latency.
+
+Default run shape:
+
+- 100 websocket clients
+- 10s warmup
+- 30s measured window
+- mixed native/EVM stresser traffic
+- artifacts under `docs/benchmarks/ws-stream-<timestamp>/report.json`
+
+```bash
+WEB3INJ_E2E_WS_BENCH=1 \
+WEB3INJ_VIRTUALIZE_COSMOS_EVENTS=true \
+WEB3INJ_COMET_RPC=http://localhost:26657 \
+WEB3INJ_E2E_SOURCE_RPC=http://localhost:8545 \
+WEB3INJ_GRPC_ADDR=127.0.0.1:9900 \
+go test -vet=off ./e2e -run TestWSStreamBenchmarkSuite -count=1 -v -timeout 20m
+```
+
+Useful websocket benchmark controls:
+
+- `WEB3INJ_WS_BENCH_CLIENTS`
+- `WEB3INJ_WS_BENCH_WARMUP_SEC`
+- `WEB3INJ_WS_BENCH_DURATION_SEC`
+- `WEB3INJ_WS_BENCH_SEED_ACCOUNTS_NUM`
+- `WEB3INJ_WS_BENCH_TRANSACTIONS`
+- `WEB3INJ_WS_BENCH_RATE_TPS`
+- `WEB3INJ_WS_BENCH_FETCH_JOBS`
+- `WEB3INJ_WS_BENCH_GATEWAY_RPC_PORT`
+- `WEB3INJ_WS_BENCH_GATEWAY_WS_PORT`
+- `WEB3INJ_WS_BENCH_MIN_NOFILE`
+- `WEB3INJ_WS_BENCH_OUTPUT_DIR`
+
+For a faster smoke run:
+
+```bash
+WEB3INJ_E2E_WS_BENCH=1 \
+WEB3INJ_VIRTUALIZE_COSMOS_EVENTS=true \
+WEB3INJ_WS_BENCH_CLIENTS=20 \
+WEB3INJ_WS_BENCH_WARMUP_SEC=3 \
+WEB3INJ_WS_BENCH_DURATION_SEC=10 \
+WEB3INJ_WS_BENCH_TRANSACTIONS=20 \
+WEB3INJ_COMET_RPC=http://localhost:26657 \
+WEB3INJ_E2E_SOURCE_RPC=http://localhost:8545 \
+WEB3INJ_GRPC_ADDR=127.0.0.1:9900 \
+go test -vet=off ./e2e -run TestWSStreamBenchmarkSuite -count=1 -v -timeout 10m
 ```
 
 ## File Limit Handling

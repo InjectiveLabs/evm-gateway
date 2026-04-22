@@ -50,7 +50,7 @@ The implementation uses numeric key prefixes internally. The logical collections
 - `debug_traceTransaction` can reuse a cached block trace when a dedicated tx trace entry is missing but the block trace for that config already exists.
 - Cache reads are mode-aware. If a block was indexed with a different Cosmos event virtualization setting than the current gateway process, online mode falls back to live reconstruction and offline mode returns a mode-mismatch error for affected paths.
 - When Cosmos event virtualization is enabled, `eth_getLogs`, block queries, receipt queries, block receipts, and transaction lookup paths return the virtualized block view.
-- Live Comet event streams are disabled for log filters in virtualized mode. The existing event stream only carries native EVM logs and cannot produce complete begin/end blocker logs or stable virtual log ordering.
+- Live JSON-RPC subscriptions are sourced from newly indexed tip blocks in KV. `newHeads`, log filters, and `eth_getFilterChanges` consume the same cached block metadata and grouped RPC logs as polling paths, including virtualized Cosmos logs when enabled.
 
 ## Cosmos Event Virtualization
 

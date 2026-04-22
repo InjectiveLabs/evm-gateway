@@ -38,6 +38,7 @@ import (
 
 	"github.com/InjectiveLabs/evm-gateway/internal/blocksync"
 	"github.com/InjectiveLabs/evm-gateway/internal/config"
+	rpcstream "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/stream"
 	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
 	txindexer "github.com/InjectiveLabs/evm-gateway/internal/indexer"
 	"github.com/InjectiveLabs/evm-gateway/internal/jsonrpc"
@@ -102,8 +103,17 @@ func Run(cfg config.Config, logger *slog.Logger) error {
 
 	g, gctx := errgroup.WithContext(ctx)
 
+	var rpcStream *rpcstream.RPCStream
+	if cfg.JSONRPC.Enable && cfg.EnableSync && txIndexer != nil {
+		rpcStream = rpcstream.NewRPCStream(txIndexer)
+	}
+
 	if txIndexer != nil && cfg.EnableSync {
-		syncer := txindexer.NewSyncer(cfg, logger, rpcClient, idxDB, txIndexer, statusTracker)
+		var syncerOpts []txindexer.SyncerOption
+		if rpcStream != nil {
+			syncerOpts = append(syncerOpts, txindexer.WithTipBlockPublisher(rpcStream))
+		}
+		syncer := txindexer.NewSyncer(cfg, logger, rpcClient, idxDB, txIndexer, statusTracker, syncerOpts...)
 		g.Go(func() error {
 			return syncer.Run(gctx)
 		})
@@ -113,7 +123,7 @@ func Run(cfg config.Config, logger *slog.Logger) error {
 	var httpSrvDone chan struct{}
 	if cfg.JSONRPC.Enable {
 		var err error
-		httpSrv, httpSrvDone, err = jsonrpc.Start(logger, cfg, clientCtx, g, cfg.JSONRPC, txIndexer, statusTracker)
+		httpSrv, httpSrvDone, err = jsonrpc.Start(logger, cfg, clientCtx, g, cfg.JSONRPC, txIndexer, statusTracker, rpcStream)
 		if err != nil {
 			return err
 		}

@@ -25,12 +25,25 @@ type syncClient interface {
 
 // Syncer manages historical gap sync and forward indexing.
 type Syncer struct {
-	cfg     config.Config
-	logger  *slog.Logger
-	client  syncClient
-	db      dbm.DB
-	indexer TxIndexer
-	status  *syncstatus.Tracker
+	cfg          config.Config
+	logger       *slog.Logger
+	client       syncClient
+	db           dbm.DB
+	indexer      TxIndexer
+	status       *syncstatus.Tracker
+	tipPublisher TipBlockPublisher
+}
+
+type TipBlockPublisher interface {
+	PublishIndexedBlock(height int64) error
+}
+
+type SyncerOption func(*Syncer)
+
+func WithTipBlockPublisher(publisher TipBlockPublisher) SyncerOption {
+	return func(s *Syncer) {
+		s.tipPublisher = publisher
+	}
 }
 
 type ResyncStats struct {
@@ -54,8 +67,16 @@ const paceInterval = 10 * time.Second
 
 var txIndexerSyncerTraceTag = gotracer.NewTag("component", "tx_indexer_syncer")
 
-func NewSyncer(cfg config.Config, logger *slog.Logger, client syncClient, db dbm.DB, indexer TxIndexer, status *syncstatus.Tracker) *Syncer {
-	return &Syncer{
+func NewSyncer(
+	cfg config.Config,
+	logger *slog.Logger,
+	client syncClient,
+	db dbm.DB,
+	indexer TxIndexer,
+	status *syncstatus.Tracker,
+	opts ...SyncerOption,
+) *Syncer {
+	syncer := &Syncer{
 		cfg:     cfg,
 		logger:  logger.With("module", "indexer"),
 		client:  client,
@@ -63,6 +84,12 @@ func NewSyncer(cfg config.Config, logger *slog.Logger, client syncClient, db dbm
 		indexer: indexer,
 		status:  status,
 	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(syncer)
+		}
+	}
+	return syncer
 }
 
 // Run starts the indexer sync loop and blocks until context cancellation.
@@ -196,7 +223,7 @@ func (s *Syncer) syncGaps(ctx context.Context, gaps []BlockRange, parallel bool)
 			s.status.StartSegment("gap", gap.Start, &end)
 		}
 		err := rangeSyncer.SyncRange(ctx, gap.Start, gap.End, func(block blocksync.NewBlockData) error {
-			return s.handleSyncedBlock(block, pace)
+			return s.handleSyncedBlock(block, pace, false)
 		})
 		pace.Stop()
 		if err != nil {
@@ -229,7 +256,7 @@ func (s *Syncer) runForwardSync(ctx context.Context, start int64, manageStatus b
 
 	forwardSyncer := blocksync.NewSyncer(s.client, s.logger, s.cfg.FetchJobs, false, false)
 	err := forwardSyncer.SyncForward(ctx, start, func(block blocksync.NewBlockData) error {
-		return s.handleSyncedBlock(block, pace)
+		return s.handleSyncedBlock(block, pace, true)
 	})
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
@@ -325,7 +352,7 @@ func toStatusRanges(ranges []BlockRange) []syncstatus.Range {
 	return out
 }
 
-func (s *Syncer) handleSyncedBlock(block blocksync.NewBlockData, pace *blocksync.Pace) error {
+func (s *Syncer) handleSyncedBlock(block blocksync.NewBlockData, pace *blocksync.Pace, publishTip bool) error {
 	ctx := context.Background()
 	defer gotracer.Traceless(&ctx, txIndexerSyncerTraceTag)()
 
@@ -354,6 +381,11 @@ func (s *Syncer) handleSyncedBlock(block blocksync.NewBlockData, pace *blocksync
 		s.status.MarkBlock(block.Height, true)
 	}
 	pace.Add(1)
+	if publishTip && s.tipPublisher != nil {
+		if err := s.tipPublisher.PublishIndexedBlock(block.Height); err != nil {
+			s.logger.Warn("failed to publish indexed tip block", "height", block.Height, "error", err)
+		}
+	}
 	return nil
 }
 

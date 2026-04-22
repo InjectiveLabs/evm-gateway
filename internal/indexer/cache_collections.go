@@ -46,6 +46,109 @@ type CachedBlockMeta struct {
 	VirtualizedCosmosEvents bool   `json:"virtualized_cosmos_events,omitempty"`
 }
 
+func HeaderFromCachedBlockMeta(meta *CachedBlockMeta) (*ethtypes.Header, error) {
+	if err := ValidateCachedBlockMeta(meta); err != nil {
+		return nil, err
+	}
+
+	header := &ethtypes.Header{
+		ParentHash:  common.HexToHash(meta.ParentHash),
+		UncleHash:   ethtypes.EmptyUncleHash,
+		Coinbase:    CachedMiner(meta),
+		Root:        common.BytesToHash(CachedStateRoot(meta)),
+		TxHash:      CachedTransactionsRoot(meta, meta.EthTxCount > 0),
+		ReceiptHash: ethtypes.EmptyRootHash,
+		Bloom:       ethtypes.BytesToBloom(common.FromHex(meta.Bloom)),
+		Difficulty:  big.NewInt(0),
+		Number:      big.NewInt(meta.Height),
+		GasLimit:    meta.GasLimit,
+		GasUsed:     meta.GasUsed,
+		Time:        uint64(meta.Timestamp),
+		Extra:       []byte{},
+		MixDigest:   common.Hash{},
+		Nonce:       ethtypes.BlockNonce{},
+	}
+	if meta.BaseFee != "" {
+		baseFee, err := hexutil.DecodeBig(meta.BaseFee)
+		if err != nil {
+			return nil, fmt.Errorf("cached block meta has invalid base fee for height %d: %w", meta.Height, err)
+		}
+		header.BaseFee = baseFee
+	}
+	return header, nil
+}
+
+func ValidateCachedBlockMeta(meta *CachedBlockMeta) error {
+	if meta == nil {
+		return fmt.Errorf("cached block meta is nil")
+	}
+	if meta.Height < 1 {
+		return fmt.Errorf("cached block meta has invalid height: %d", meta.Height)
+	}
+	if meta.EthTxCount < 0 {
+		return fmt.Errorf("cached block meta has invalid eth tx count for height %d: %d", meta.Height, meta.EthTxCount)
+	}
+	if meta.TxCount < 0 {
+		return fmt.Errorf("cached block meta has invalid tx count for height %d: %d", meta.Height, meta.TxCount)
+	}
+	if !isHexHashString(meta.Hash) {
+		return fmt.Errorf("cached block meta has invalid hash for height %d: %q", meta.Height, meta.Hash)
+	}
+	if meta.ParentHash != "" && !isHexHashString(meta.ParentHash) {
+		return fmt.Errorf("cached block meta has invalid parent hash for height %d: %q", meta.Height, meta.ParentHash)
+	}
+	if meta.StateRoot != "" && !isHexHashString(meta.StateRoot) {
+		return fmt.Errorf("cached block meta has invalid state root for height %d: %q", meta.Height, meta.StateRoot)
+	}
+	if meta.Miner != "" && !common.IsHexAddress(meta.Miner) {
+		return fmt.Errorf("cached block meta has invalid miner for height %d: %q", meta.Height, meta.Miner)
+	}
+	if meta.TransactionsRoot != "" && !isHexHashString(meta.TransactionsRoot) {
+		return fmt.Errorf("cached block meta has invalid transactions root for height %d: %q", meta.Height, meta.TransactionsRoot)
+	}
+	if meta.Bloom != "" {
+		bloomBytes, err := hexutil.Decode(meta.Bloom)
+		if err != nil || len(bloomBytes) != ethtypes.BloomByteLength {
+			return fmt.Errorf("cached block meta has invalid bloom length for height %d: %d", meta.Height, len(bloomBytes))
+		}
+	}
+	if meta.BaseFee != "" {
+		if _, err := hexutil.DecodeBig(meta.BaseFee); err != nil {
+			return fmt.Errorf("cached block meta has invalid base fee for height %d: %w", meta.Height, err)
+		}
+	}
+	return nil
+}
+
+func CachedStateRoot(meta *CachedBlockMeta) hexutil.Bytes {
+	if meta == nil || meta.StateRoot == "" {
+		return hexutil.Bytes(common.Hash{}.Bytes())
+	}
+	return hexutil.Bytes(common.FromHex(meta.StateRoot))
+}
+
+func CachedTransactionsRoot(meta *CachedBlockMeta, hasTransactions bool) common.Hash {
+	if meta != nil && meta.TransactionsRoot != "" {
+		return common.HexToHash(meta.TransactionsRoot)
+	}
+	if hasTransactions {
+		return common.Hash{}
+	}
+	return ethtypes.EmptyRootHash
+}
+
+func CachedMiner(meta *CachedBlockMeta) common.Address {
+	if meta == nil || meta.Miner == "" {
+		return common.Address{}
+	}
+	return common.HexToAddress(meta.Miner)
+}
+
+func isHexHashString(value string) bool {
+	bz, err := hexutil.Decode(value)
+	return err == nil && len(bz) == common.HashLength
+}
+
 type CachedReceipt struct {
 	Status            uint64                `json:"status"`
 	CumulativeGasUsed uint64                `json:"cumulative_gas_used"`

@@ -87,7 +87,7 @@ func (b *Backend) cachedBlockReceipts(blockNrOrHash rpctypes.BlockNumberOrHash) 
 	if !b.cachedMetaMatchesVirtualization(meta) {
 		return nil, txindexer.ErrCacheMiss
 	}
-	if err := validateCachedBlockMeta(meta); err != nil {
+	if err := txindexer.ValidateCachedBlockMeta(meta); err != nil {
 		return nil, err
 	}
 	if meta.EthTxCount == 0 {
