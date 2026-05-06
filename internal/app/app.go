@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime/pprof"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -30,8 +31,10 @@ import (
 	"github.com/pkg/errors"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	grpcstatus "google.golang.org/grpc/status"
 
 	chaintypes "github.com/InjectiveLabs/sdk-go/chain/types"
 	chainclient "github.com/InjectiveLabs/sdk-go/client/chain"
@@ -366,12 +369,7 @@ func buildClientContext(ctx context.Context, cfg *config.Config, dataDir string,
 	clientCtx = clientCtx.WithGRPCClient(grpcConn)
 	logger.Info("grpc client ready", "address", cfg.GRPCAddr)
 
-	evmChainID, err := fetchEVMChainID(ctx, rpctypes.NewQueryClient(clientCtx))
-	if err != nil {
-		_ = grpcConn.Close()
-		return client.Context{}, nil, nil, err
-	}
-	if err := validateEVMChainID(cfg, evmChainID); err != nil {
+	if err := resolveEVMChainID(ctx, cfg, rpctypes.NewQueryClient(clientCtx), logger); err != nil {
 		_ = grpcConn.Close()
 		return client.Context{}, nil, nil, err
 	}
@@ -414,6 +412,44 @@ func validateCometChainID(cfg *config.Config, cometChainID string) error {
 
 	cfg.ChainID = cometChainID
 	return nil
+}
+
+func resolveEVMChainID(ctx context.Context, cfg *config.Config, queryClient evmParamsClient, logger *slog.Logger) error {
+	evmChainID, err := fetchEVMChainID(ctx, queryClient)
+	if err == nil {
+		return validateEVMChainID(cfg, evmChainID)
+	}
+	if !canUseVirtualBackfillEVMChainID(cfg, err) {
+		return err
+	}
+
+	if strings.TrimSpace(cfg.EVMChainID) != "" {
+		logger.Warn(
+			"evm params unavailable; using configured evm chain id for virtualized cosmos event indexing",
+			"evm_chain_id", cfg.EVMChainID,
+			"error", err,
+		)
+		return nil
+	}
+
+	cfg.EVMChainID = strconv.FormatInt(evmtypes.DefaultEIP155ChainID, 10)
+	logger.Warn(
+		"evm params unavailable; using default evm chain id for virtualized cosmos event indexing",
+		"evm_chain_id", cfg.EVMChainID,
+		"error", err,
+	)
+	return nil
+}
+
+func canUseVirtualBackfillEVMChainID(cfg *config.Config, err error) bool {
+	return cfg != nil && cfg.VirtualizeCosmosEvents && isGRPCCode(err, codes.Unimplemented)
+}
+
+func isGRPCCode(err error, code codes.Code) bool {
+	if grpcstatus.Code(err) == code {
+		return true
+	}
+	return grpcstatus.Code(errors.Cause(err)) == code
 }
 
 func fetchEVMChainID(ctx context.Context, queryClient evmParamsClient) (string, error) {

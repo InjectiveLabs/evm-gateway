@@ -9,6 +9,8 @@ import (
 	sdkmath "cosmossdk.io/math"
 	evmtypes "github.com/InjectiveLabs/sdk-go/chain/evm/types"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 
 	"github.com/InjectiveLabs/evm-gateway/internal/config"
 )
@@ -83,6 +85,57 @@ func TestFetchEVMChainID(t *testing.T) {
 	}
 	if got != "1776" {
 		t.Fatalf("unexpected evm chain id: got %q want 1776", got)
+	}
+}
+
+func TestResolveEVMChainIDUsesDefaultForVirtualizedBackfillWhenEVMParamsUnavailable(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.VirtualizeCosmosEvents = true
+
+	err := resolveEVMChainID(
+		context.Background(),
+		&cfg,
+		stubEVMParamsClient{err: grpcstatus.Error(codes.Unimplemented, "unknown service injective.evm.v1.Query")},
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+	if err != nil {
+		t.Fatalf("resolveEVMChainID returned error: %v", err)
+	}
+	if cfg.EVMChainID != "1776" {
+		t.Fatalf("unexpected fallback evm chain id: got %q want 1776", cfg.EVMChainID)
+	}
+}
+
+func TestResolveEVMChainIDUsesConfiguredIDForVirtualizedBackfillWhenEVMParamsUnavailable(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.VirtualizeCosmosEvents = true
+	cfg.EVMChainID = "999"
+
+	err := resolveEVMChainID(
+		context.Background(),
+		&cfg,
+		stubEVMParamsClient{err: grpcstatus.Error(codes.Unimplemented, "unknown service injective.evm.v1.Query")},
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+	if err != nil {
+		t.Fatalf("resolveEVMChainID returned error: %v", err)
+	}
+	if cfg.EVMChainID != "999" {
+		t.Fatalf("unexpected evm chain id: got %q want 999", cfg.EVMChainID)
+	}
+}
+
+func TestResolveEVMChainIDRequiresEVMParamsOutsideVirtualizedBackfill(t *testing.T) {
+	cfg := config.DefaultConfig()
+
+	err := resolveEVMChainID(
+		context.Background(),
+		&cfg,
+		stubEVMParamsClient{err: grpcstatus.Error(codes.Unimplemented, "unknown service injective.evm.v1.Query")},
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+	if err == nil {
+		t.Fatal("expected missing evm params to fail when virtualized cosmos events are disabled")
 	}
 }
 
