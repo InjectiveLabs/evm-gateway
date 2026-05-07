@@ -320,10 +320,16 @@ func startCPUProfileFromEnv(logger *slog.Logger) (func(), error) {
 // default MaxIdleConnsPerHost of 2 forces excess connections to close after
 // each request, leaving sockets in TIME_WAIT and eventually exhausting
 // ephemeral ports on the local interface.
-func newCometHTTPClient(fetchJobs int) *http.Client {
-	maxConns := fetchJobs * 4
-	if maxConns < 32 {
-		maxConns = 32
+//
+// idleConnsPerHost overrides the auto-derived pool size. Pass 0 to size from
+// fetchJobs (jobs * 4, floor 32).
+func newCometHTTPClient(fetchJobs, idleConnsPerHost int) *http.Client {
+	maxIdle := idleConnsPerHost
+	if maxIdle <= 0 {
+		maxIdle = fetchJobs * 4
+		if maxIdle < 32 {
+			maxIdle = 32
+		}
 	}
 	return &http.Client{
 		Timeout: 10 * time.Second,
@@ -334,9 +340,8 @@ func newCometHTTPClient(fetchJobs int) *http.Client {
 				KeepAlive: 30 * time.Second,
 			}).DialContext,
 			ForceAttemptHTTP2:     true,
-			MaxIdleConns:          maxConns,
-			MaxIdleConnsPerHost:   maxConns,
-			MaxConnsPerHost:       maxConns,
+			MaxIdleConns:          maxIdle,
+			MaxIdleConnsPerHost:   maxIdle,
 			IdleConnTimeout:       90 * time.Second,
 			TLSHandshakeTimeout:   10 * time.Second,
 			ExpectContinueTimeout: 1 * time.Second,
@@ -377,7 +382,7 @@ func buildClientContext(ctx context.Context, cfg *config.Config, dataDir string,
 
 	clientCtx = clientCtx.WithNodeURI(cfg.CometRPC)
 
-	rpcClient, err := rpchttp.NewWithClient(cfg.CometRPC, newCometHTTPClient(cfg.FetchJobs))
+	rpcClient, err := rpchttp.NewWithClient(cfg.CometRPC, newCometHTTPClient(cfg.FetchJobs, cfg.RPCMaxIdleConnsPerHost))
 	if err != nil {
 		return client.Context{}, nil, nil, errors.Wrap(err, "init comet rpc client")
 	}

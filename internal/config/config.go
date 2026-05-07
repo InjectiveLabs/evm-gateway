@@ -28,6 +28,7 @@ type Config struct {
 	GRPCAddr               string
 	Earliest               int64
 	FetchJobs              int
+	RPCMaxIdleConnsPerHost int
 	DataDir                string
 	DBBackend              string
 	AllowGaps              bool
@@ -87,6 +88,7 @@ func DefaultConfig() Config {
 		GRPCAddr:               "localhost:9090",
 		Earliest:               1,
 		FetchJobs:              4,
+		RPCMaxIdleConnsPerHost: 0,
 		DataDir:                "~/.evm-gateway",
 		DBBackend:              "goleveldb",
 		AllowGaps:              true,
@@ -258,6 +260,7 @@ func applyEnvOverrides(cfg *Config) {
 	cfg.GRPCAddr = getEnvString("GRPC_ADDR", cfg.GRPCAddr)
 	cfg.Earliest = getEnvInt64("EARLIEST_BLOCK", cfg.Earliest)
 	cfg.FetchJobs = getEnvInt("FETCH_JOBS", cfg.FetchJobs)
+	cfg.RPCMaxIdleConnsPerHost = getEnvInt("RPC_MAX_IDLE_CONNS_PER_HOST", cfg.RPCMaxIdleConnsPerHost)
 	cfg.DataDir = getEnvString("DATA_DIR", cfg.DataDir)
 	cfg.DBBackend = getEnvString("DB_BACKEND", cfg.DBBackend)
 	cfg.AllowGaps = getEnvBool("ALLOW_GAPS", cfg.AllowGaps)
