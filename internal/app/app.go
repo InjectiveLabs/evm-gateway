@@ -314,6 +314,41 @@ func startCPUProfileFromEnv(logger *slog.Logger) (func(), error) {
 	}, nil
 }
 
+// newCometHTTPClient builds an http.Client for the CometBFT RPC client with a
+// connection pool sized for the indexer's parallel fetchers. Each fetch job
+// fans out 3 concurrent RPC calls (Block/BlockResults/Validators), so the
+// default MaxIdleConnsPerHost of 2 forces excess connections to close after
+// each request, leaving sockets in TIME_WAIT and eventually exhausting
+// ephemeral ports on the local interface.
+//
+// idleConnsPerHost overrides the auto-derived pool size. Pass 0 to size from
+// fetchJobs (jobs * 4, floor 32).
+func newCometHTTPClient(fetchJobs, idleConnsPerHost int) *http.Client {
+	maxIdle := idleConnsPerHost
+	if maxIdle <= 0 {
+		maxIdle = fetchJobs * 4
+		if maxIdle < 32 {
+			maxIdle = 32
+		}
+	}
+	return &http.Client{
+		Timeout: 10 * time.Second,
+		Transport: &http.Transport{
+			Proxy: http.ProxyFromEnvironment,
+			DialContext: (&net.Dialer{
+				Timeout:   30 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
+			ForceAttemptHTTP2:     true,
+			MaxIdleConns:          maxIdle,
+			MaxIdleConnsPerHost:   maxIdle,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+		},
+	}
+}
+
 func buildClientContext(ctx context.Context, cfg *config.Config, dataDir string, logger *slog.Logger) (client.Context, *rpchttp.HTTP, *grpc.ClientConn, error) {
 	defer gotracer.Trace(&ctx, appTraceTag)()
 
@@ -347,7 +382,7 @@ func buildClientContext(ctx context.Context, cfg *config.Config, dataDir string,
 
 	clientCtx = clientCtx.WithNodeURI(cfg.CometRPC)
 
-	rpcClient, err := rpchttp.NewWithTimeout(cfg.CometRPC, 10)
+	rpcClient, err := rpchttp.NewWithClient(cfg.CometRPC, newCometHTTPClient(cfg.FetchJobs, cfg.RPCMaxIdleConnsPerHost))
 	if err != nil {
 		return client.Context{}, nil, nil, errors.Wrap(err, "init comet rpc client")
 	}
