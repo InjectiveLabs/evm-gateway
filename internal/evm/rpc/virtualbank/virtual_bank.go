@@ -188,7 +188,7 @@ func ParseEvents(events []types.Event) ([]TransferEvent, error) {
 
 		attrs := eventAttrs(event.Attributes)
 		amountRaw, ok := attrs["amount"]
-		if !ok || strings.TrimSpace(amountRaw) == "" {
+		if !ok {
 			return nil, fmt.Errorf("%s event %d missing amount", event.Type, eventIndex)
 		}
 		coins, err := sdk.ParseCoinsNormalized(amountRaw)

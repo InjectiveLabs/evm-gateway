@@ -118,6 +118,61 @@ func TestParseEventsAndBuildLogsForTrackedBankEvents(t *testing.T) {
 	}
 }
 
+// TestParseEventsSkipsTrackedEventsWithEmptyAmount verifies historical bank
+// events carrying an empty SDK Coins string do not abort block reconstruction.
+func TestParseEventsSkipsTrackedEventsWithEmptyAmount(t *testing.T) {
+	events, err := ParseEvents([]types.Event{
+		{
+			Type: EventTypeCoinSpent,
+			Attributes: []types.EventAttribute{
+				{Key: "spender", Value: "inj1glht96kr2rseywuvhhay894qw7ekuc4qqdy7m7"},
+				{Key: "amount", Value: ""},
+				{Key: AttributeMsgIndex, Value: "0"},
+			},
+		},
+		{
+			Type: EventTypeBurn,
+			Attributes: []types.EventAttribute{
+				{Key: "burner", Value: "inj1glht96kr2rseywuvhhay894qw7ekuc4qqdy7m7"},
+				{Key: "amount", Value: ""},
+			},
+		},
+		{
+			Type: EventTypeCoinReceived,
+			Attributes: []types.EventAttribute{
+				{Key: "receiver", Value: "0x1111111111111111111111111111111111111111"},
+				{Key: "amount", Value: "8inj"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ParseEvents returned error: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("unexpected event count: got %d want 1", len(events))
+	}
+	if events[0].Type != EventTypeCoinReceived {
+		t.Fatalf("unexpected event type: got %q want %q", events[0].Type, EventTypeCoinReceived)
+	}
+	if events[0].Denom != "inj" || events[0].Amount.Cmp(big.NewInt(8)) != 0 {
+		t.Fatalf("unexpected coin: %s %v", events[0].Denom, events[0].Amount)
+	}
+}
+
+func TestParseEventsRejectsMissingAmount(t *testing.T) {
+	_, err := ParseEvents([]types.Event{
+		{
+			Type: EventTypeBurn,
+			Attributes: []types.EventAttribute{
+				{Key: "burner", Value: "inj1glht96kr2rseywuvhhay894qw7ekuc4qqdy7m7"},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected missing amount to fail")
+	}
+}
+
 // TestSplitBlockEventsUsesModeAttribute verifies finalize-block events are
 // split by their begin/end block mode attribute.
 func TestSplitBlockEventsUsesModeAttribute(t *testing.T) {
