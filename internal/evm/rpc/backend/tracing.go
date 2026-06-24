@@ -239,13 +239,7 @@ func (b *Backend) TraceBlock(height rpctypes.BlockNumber,
 		}
 	}
 
-	// minus one to get the context at the beginning of the block
-	contextHeight := height - 1
-	if contextHeight < 1 {
-		// 0 is a special value for `ContextWithHeight`.
-		contextHeight = 1
-	}
-	ctxWithHeight := b.contextWithHeight(int64(contextHeight))
+	ctxWithHeight := b.contextWithHeight(traceBlockContextHeight(height, block))
 
 	traceBlockRequest := &evmtypes.QueryTraceBlockRequest{
 		Txs:             txsMessages,
@@ -273,6 +267,20 @@ func (b *Backend) TraceBlock(height rpctypes.BlockNumber,
 	}
 
 	return decodedResults, nil
+}
+
+func traceBlockContextHeight(height rpctypes.BlockNumber, block *cmrpctypes.ResultBlock) int64 {
+	traceHeight := int64(height)
+	if block != nil && block.Block != nil && block.Block.Height > 0 {
+		traceHeight = block.Block.Height
+	}
+	// Minus one to get the context at the beginning of the block.
+	contextHeight := traceHeight - 1
+	if contextHeight < 1 {
+		// 0 is a special value for `ContextWithHeight`.
+		return 1
+	}
+	return contextHeight
 }
 
 // TraceCall returns the structured logs created during the execution of EVM call
