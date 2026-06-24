@@ -444,7 +444,7 @@ func (kv *KVIndexer) indexBlockWithStats(block *cmtypes.Block, blockResults *cor
 				blockHash,
 				uint64(block.Height),
 				uint64(visibleTxIndex),
-				txData.GasPrice(),
+				receiptEffectiveGasPrice(txData, blockBaseFee),
 				from,
 				txData.To(),
 				uint64(txData.Type()),

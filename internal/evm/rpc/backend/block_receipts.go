@@ -2,6 +2,7 @@ package backend
 
 import (
 	"fmt"
+	"math/big"
 
 	abci "github.com/cometbft/cometbft/abci/types"
 	cmrpctypes "github.com/cometbft/cometbft/rpc/core/types"
@@ -187,7 +188,11 @@ func (b *Backend) liveBlockReceipts(resBlock *cmrpctypes.ResultBlock) ([]map[str
 	blockHash := common.BytesToHash(resBlock.Block.Hash()).Hex()
 	blockNumber := hexutil.Uint64(resBlock.Block.Height)
 
-	var cumulativeBlockGasUsed uint64
+	var (
+		cumulativeBlockGasUsed uint64
+		baseFee                *big.Int
+		baseFeeLoaded          bool
+	)
 	for txIndex, txBz := range resBlock.Block.Txs {
 		if txIndex >= len(normalizedTxResults) {
 			b.logger.Warn("block results shorter than tx list", "height", resBlock.Block.Height, "txIndex", txIndex)
@@ -269,6 +274,14 @@ func (b *Backend) liveBlockReceipts(resBlock *cmrpctypes.ResultBlock) ([]map[str
 				b.logger.Warn("failed to parse logs", "hash", txHash, "error", err.Error())
 			}
 
+			if txData.Type() == ethtypes.DynamicFeeTxType && !baseFeeLoaded {
+				baseFee, err = b.BaseFee(blockRes)
+				if err != nil {
+					baseFee = nil
+				}
+				baseFeeLoaded = true
+			}
+
 			receipt := map[string]interface{}{
 				"status":            status,
 				"cumulativeGasUsed": hexutil.Uint64(cumulativeBlockGasUsed + cumulativeTxEthGasUsed),
@@ -280,7 +293,7 @@ func (b *Backend) liveBlockReceipts(resBlock *cmrpctypes.ResultBlock) ([]map[str
 				"blockHash":         blockHash,
 				"blockNumber":       blockNumber,
 				"transactionIndex":  hexutil.Uint64(txPosition),
-				"effectiveGasPrice": (*hexutil.Big)(txData.GasPrice()),
+				"effectiveGasPrice": (*hexutil.Big)(effectiveGasPrice(txData, baseFee)),
 				"from":              from,
 				"to":                txData.To(),
 				"type":              hexutil.Uint(txData.Type()),
@@ -291,10 +304,6 @@ func (b *Backend) liveBlockReceipts(resBlock *cmrpctypes.ResultBlock) ([]map[str
 			}
 			if txData.To() == nil {
 				receipt["contractAddress"] = crypto.CreateAddress(from, txData.Nonce())
-			}
-			if txData.Type() == ethtypes.DynamicFeeTxType {
-				price := txData.GasPrice()
-				receipt["effectiveGasPrice"] = hexutil.Big(*price)
 			}
 
 			receipts = append(receipts, receipt)

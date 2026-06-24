@@ -2,6 +2,7 @@ package backend
 
 import (
 	"fmt"
+	"math/big"
 
 	errorsmod "cosmossdk.io/errors"
 	abci "github.com/cometbft/cometbft/abci/types"
@@ -351,6 +352,14 @@ func (b *Backend) GetTransactionReceipt(hash common.Hash) (map[string]interface{
 		return nil, errors.New("can't find index of ethereum tx")
 	}
 
+	var baseFee *big.Int
+	if txData.Type() == ethtypes.DynamicFeeTxType {
+		baseFee, err = b.BaseFee(blockRes)
+		if err != nil {
+			baseFee = nil
+		}
+	}
+
 	receipt := map[string]interface{}{
 		// Consensus fields: These fields are defined by the Yellow Paper
 		"status":            status,
@@ -371,7 +380,7 @@ func (b *Backend) GetTransactionReceipt(hash common.Hash) (map[string]interface{
 		"transactionIndex": hexutil.Uint64(res.EthTxIndex),
 
 		// https://github.com/foundry-rs/foundry/issues/7640
-		"effectiveGasPrice": (*hexutil.Big)(txData.GasPrice()),
+		"effectiveGasPrice": (*hexutil.Big)(effectiveGasPrice(txData, baseFee)),
 
 		// sender and receiver (contract or EOA) addreses
 		"from": from,
@@ -386,12 +395,6 @@ func (b *Backend) GetTransactionReceipt(hash common.Hash) (map[string]interface{
 	// If the ContractAddress is 20 0x0 bytes, assume it is not a contract creation
 	if txData.To() == nil {
 		receipt["contractAddress"] = crypto.CreateAddress(from, txData.Nonce())
-	}
-
-	if txData.Type() == ethtypes.DynamicFeeTxType {
-		tx := ethMsg.AsTransaction()
-		price := tx.GasPrice()
-		receipt["effectiveGasPrice"] = hexutil.Big(*price)
 	}
 
 	return receipt, nil

@@ -459,6 +459,101 @@ func TestKVIndexerKeepsEthTxIndexEVMOrdinalWhenVirtualTransfersShiftRPCIndex(t *
 	}
 }
 
+func TestKVIndexerDynamicFeeReceiptUsesEffectiveGasPrice(t *testing.T) {
+	db := dbm.NewMemDB()
+	chainID := big.NewInt(1337)
+	baseFee := big.NewInt(160000000)
+	feeCap := big.NewInt(1716000000)
+	tipCap := big.NewInt(1500000000)
+	expectedEffectiveGasPrice := big.NewInt(1660000000)
+	signer := ethtypes.LatestSignerForChainID(chainID)
+	key, err := crypto.HexToECDSA("4c0883a69102937d6231471b5dbb6204fe51296170827965fb7b05b8a9e7f6f2")
+	if err != nil {
+		t.Fatalf("HexToECDSA: %v", err)
+	}
+	to := common.HexToAddress("0x1000000000000000000000000000000000000001")
+	ethTx := ethtypes.NewTx(&ethtypes.DynamicFeeTx{
+		ChainID:   chainID,
+		Nonce:     1,
+		To:        &to,
+		Value:     big.NewInt(0),
+		Gas:       21000,
+		GasFeeCap: feeCap,
+		GasTipCap: tipCap,
+	})
+	signedTx, err := ethtypes.SignTx(ethTx, signer, key)
+	if err != nil {
+		t.Fatalf("SignTx: %v", err)
+	}
+	ethMsg := &evmtypes.MsgEthereumTx{}
+	if err := ethMsg.FromSignedEthereumTx(signedTx, signer); err != nil {
+		t.Fatalf("FromSignedEthereumTx: %v", err)
+	}
+
+	decodedTx := testSDKTx{
+		msgs:             []sdk.Msg{ethMsg},
+		extensionOptions: evmExtensionOptions(),
+	}
+	kv := NewKVIndexer(
+		db,
+		testLogger(),
+		client.Context{TxConfig: testTxConfig{tx: decodedTx}},
+	)
+
+	height := int64(9)
+	block := tmtypes.MakeBlock(height, []tmtypes.Tx{tmtypes.Tx("eth-tx")}, nil, nil)
+	ethHash := ethMsg.Hash()
+	blockResults := &coretypes.ResultBlockResults{
+		Height: height,
+		TxResults: []*abci.ExecTxResult{
+			{
+				Code:    abci.CodeTypeOK,
+				GasUsed: 21000,
+				Data: mustMarshalIndexerTxMsgData(t, &evmtypes.MsgEthereumTxResponse{
+					Hash: ethHash.Hex(),
+				}),
+				Events: []abci.Event{
+					{
+						Type: evmtypes.EventTypeEthereumTx,
+						Attributes: []abci.EventAttribute{
+							{Key: evmtypes.AttributeKeyEthereumTxHash, Value: ethHash.Hex()},
+							{Key: evmtypes.AttributeKeyTxIndex, Value: "0"},
+							{Key: evmtypes.AttributeKeyTxGasUsed, Value: "21000"},
+						},
+					},
+				},
+			},
+		},
+		FinalizeBlockEvents: []abci.Event{
+			{
+				Type: "txfees",
+				Attributes: []abci.EventAttribute{
+					{Key: "basefee", Value: baseFee.String()},
+				},
+			},
+		},
+	}
+
+	if err := kv.IndexBlockWithResults(block, blockResults); err != nil {
+		t.Fatalf("IndexBlockWithResults returned error: %v", err)
+	}
+
+	receipt, err := kv.GetReceiptByTxHash(ethHash)
+	if err != nil {
+		t.Fatalf("GetReceiptByTxHash returned error: %v", err)
+	}
+	effectiveGasPrice, ok := receipt["effectiveGasPrice"].(*hexutil.Big)
+	if !ok {
+		t.Fatalf("unexpected effectiveGasPrice type: %#v", receipt["effectiveGasPrice"])
+	}
+	if (*big.Int)(effectiveGasPrice).Cmp(expectedEffectiveGasPrice) != 0 {
+		t.Fatalf("unexpected effectiveGasPrice: got %s want %s", (*big.Int)(effectiveGasPrice), expectedEffectiveGasPrice)
+	}
+	if (*big.Int)(effectiveGasPrice).Cmp(feeCap) == 0 {
+		t.Fatalf("effectiveGasPrice echoed max fee cap: %s", feeCap)
+	}
+}
+
 func TestKVIndexerTraceCacheRoundTrip(t *testing.T) {
 	db := dbm.NewMemDB()
 	kv := &KVIndexer{db: db, logger: testLogger()}

@@ -581,6 +581,15 @@ func buildCachedReceipt(
 	}
 }
 
+func receiptEffectiveGasPrice(tx *ethtypes.Transaction, baseFee *big.Int) *big.Int {
+	gasPrice := tx.GasPrice()
+	if tx.Type() != ethtypes.DynamicFeeTxType || baseFee == nil {
+		return gasPrice
+	}
+
+	return evmtypes.EffectiveGasPrice(baseFee, tx.GasFeeCap(), tx.GasTipCap())
+}
+
 // evmLogsBloom calculates the Ethereum bloom for cached RPC logs, ignoring
 // virtual-only metadata.
 func evmLogsBloom(logs []*virtualbank.RPCLog) []byte {

@@ -299,7 +299,7 @@ func (b *Backend) liveVirtualBankBlockView(
 				blockHashHex,
 				blockNumber,
 				rpcTxIndex,
-				txData.GasPrice(),
+				effectiveGasPrice(txData, baseFee),
 				from,
 				txData.To(),
 				uint64(txData.Type()),
