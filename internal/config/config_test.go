@@ -35,6 +35,32 @@ func TestLoadOverridesCosmosEventVirtualization(t *testing.T) {
 	}
 }
 
+func TestLoadDefaultsCometBroadcastRPCToCometRPC(t *testing.T) {
+	t.Setenv("WEB3INJ_COMET_RPC", "http://sync:26657")
+	t.Setenv("WEB3INJ_COMET_BROADCAST_RPC", "")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if cfg.CometBroadcastRPC != cfg.CometRPC {
+		t.Fatalf("expected comet broadcast rpc to default to comet rpc: got %q want %q", cfg.CometBroadcastRPC, cfg.CometRPC)
+	}
+}
+
+func TestLoadOverridesCometBroadcastRPC(t *testing.T) {
+	t.Setenv("WEB3INJ_COMET_RPC", "http://sync:26657")
+	t.Setenv("WEB3INJ_COMET_BROADCAST_RPC", "http://broadcast:26657")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if cfg.CometBroadcastRPC != "http://broadcast:26657" {
+		t.Fatalf("unexpected comet broadcast rpc: got %q", cfg.CometBroadcastRPC)
+	}
+}
+
 func TestValidateOfflineRPCOnlyRequiresChainID(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.EnableSync = false

@@ -9,6 +9,7 @@ type gatewayCLIOptions struct {
 	chainID                *string
 	evmChainID             *string
 	cometRPC               *string
+	cometBroadcastRPC      *string
 	grpcAddr               *string
 	earliest               *int
 	fetchJobs              *int

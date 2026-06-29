@@ -48,6 +48,7 @@ func buildConfig(opts *gatewayCLIOptions) (config.Config, error) {
 	cfg.ChainID = *opts.chainID
 	cfg.EVMChainID = *opts.evmChainID
 	cfg.CometRPC = *opts.cometRPC
+	cfg.CometBroadcastRPC = *opts.cometBroadcastRPC
 	cfg.GRPCAddr = *opts.grpcAddr
 	cfg.Earliest = int64(*opts.earliest)
 	cfg.FetchJobs = *opts.fetchJobs
@@ -68,6 +69,7 @@ func buildConfig(opts *gatewayCLIOptions) (config.Config, error) {
 	cfg.Tracing.CollectorAuthorizationField = *opts.tracingCollectorAuthorizationName
 	cfg.Tracing.CollectorEnableTLS = *opts.tracingCollectorEnableTLS
 
+	cfg.Normalize()
 	cfg.Expand()
 
 	if err := cfg.Validate(); err != nil {

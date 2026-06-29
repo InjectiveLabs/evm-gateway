@@ -55,6 +55,8 @@ const cpuProfileEnvVar = "WEB3INJ_DEBUG_CPU_PROFILE_PATH"
 
 // Run starts the evm-gateway services and blocks until shutdown.
 func Run(cfg config.Config, logger *slog.Logger) error {
+	cfg.Normalize()
+
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
@@ -77,7 +79,18 @@ func Run(cfg config.Config, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	broadcastClientCtx := clientCtx
+	var broadcastRPCClient *rpchttp.HTTP
+	if cfg.JSONRPC.Enable {
+		broadcastClientCtx, broadcastRPCClient, err = buildBroadcastClientContext(&cfg, clientCtx, logger)
+		if err != nil {
+			return err
+		}
+	}
 	defer func() {
+		if broadcastRPCClient != nil {
+			_ = broadcastRPCClient.Stop()
+		}
 		if rpcClient != nil {
 			_ = rpcClient.Stop()
 		}
@@ -126,7 +139,7 @@ func Run(cfg config.Config, logger *slog.Logger) error {
 	var httpSrvDone chan struct{}
 	if cfg.JSONRPC.Enable {
 		var err error
-		httpSrv, httpSrvDone, err = jsonrpc.Start(logger, cfg, clientCtx, g, cfg.JSONRPC, txIndexer, statusTracker, rpcStream)
+		httpSrv, httpSrvDone, err = jsonrpc.Start(logger, cfg, clientCtx, broadcastClientCtx, g, cfg.JSONRPC, txIndexer, statusTracker, rpcStream)
 		if err != nil {
 			return err
 		}
@@ -171,6 +184,8 @@ func Run(cfg config.Config, logger *slog.Logger) error {
 
 // RunResync reindexes the requested block ranges and exits.
 func RunResync(cfg config.Config, logger *slog.Logger, targets []txindexer.BlockRange) error {
+	cfg.Normalize()
+
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	defer gotracer.Trace(&ctx, appTraceTag)()
@@ -351,6 +366,7 @@ func newCometHTTPClient(fetchJobs, idleConnsPerHost int) *http.Client {
 
 func buildClientContext(ctx context.Context, cfg *config.Config, dataDir string, logger *slog.Logger) (client.Context, *rpchttp.HTTP, *grpc.ClientConn, error) {
 	defer gotracer.Trace(&ctx, appTraceTag)()
+	cfg.Normalize()
 
 	clientCtx, err := baseClientContext(ctx, dataDir)
 	if err != nil {
@@ -411,6 +427,27 @@ func buildClientContext(ctx context.Context, cfg *config.Config, dataDir string,
 	logger.Info("resolved startup chain ids", "chain_id", cfg.ChainID, "evm_chain_id", cfg.EVMChainID)
 
 	return clientCtx, rpcClient, grpcConn, nil
+}
+
+func buildBroadcastClientContext(cfg *config.Config, clientCtx client.Context, logger *slog.Logger) (client.Context, *rpchttp.HTTP, error) {
+	cfg.Normalize()
+
+	if cfg.OfflineRPCOnly || cfg.CometBroadcastRPC == cfg.CometRPC {
+		return clientCtx, nil, nil
+	}
+
+	rpcClient, err := rpchttp.NewWithClient(cfg.CometBroadcastRPC, newCometHTTPClient(1, cfg.RPCMaxIdleConnsPerHost))
+	if err != nil {
+		return client.Context{}, nil, errors.Wrap(err, "init comet broadcast rpc client")
+	}
+
+	logger.Info(
+		"comet broadcast rpc client ready",
+		"comet_rpc", cfg.CometRPC,
+		"comet_broadcast_rpc", cfg.CometBroadcastRPC,
+	)
+
+	return clientCtx.WithNodeURI(cfg.CometBroadcastRPC).WithClient(rpcClient), rpcClient, nil
 }
 
 func baseClientContext(ctx context.Context, dataDir string) (client.Context, error) {

@@ -25,6 +25,7 @@ type Config struct {
 	ChainID                string
 	EVMChainID             string
 	CometRPC               string
+	CometBroadcastRPC      string
 	GRPCAddr               string
 	Earliest               int64
 	FetchJobs              int
@@ -85,6 +86,7 @@ func DefaultConfig() Config {
 		ChainID:                "",
 		EVMChainID:             "",
 		CometRPC:               "http://localhost:26657",
+		CometBroadcastRPC:      "",
 		GRPCAddr:               "localhost:9090",
 		Earliest:               1,
 		FetchJobs:              4,
@@ -141,6 +143,7 @@ func Load(envFile string) (Config, error) {
 	}
 
 	applyEnvOverrides(&cfg)
+	cfg.Normalize()
 	if err := cfg.Validate(); err != nil {
 		return cfg, err
 	}
@@ -257,6 +260,7 @@ func applyEnvOverrides(cfg *Config) {
 	cfg.ChainID = getEnvString("CHAIN_ID", cfg.ChainID)
 	cfg.EVMChainID = getEnvString("EVM_CHAIN_ID", cfg.EVMChainID)
 	cfg.CometRPC = getEnvString("COMET_RPC", cfg.CometRPC)
+	cfg.CometBroadcastRPC = getEnvString("COMET_BROADCAST_RPC", "")
 	cfg.GRPCAddr = getEnvString("GRPC_ADDR", cfg.GRPCAddr)
 	cfg.Earliest = getEnvInt64("EARLIEST_BLOCK", cfg.Earliest)
 	cfg.FetchJobs = getEnvInt("FETCH_JOBS", cfg.FetchJobs)
@@ -392,6 +396,14 @@ func getEnvDuration(key string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return parsed
+}
+
+// Normalize resolves derived defaults that depend on other configured values.
+func (c *Config) Normalize() {
+	c.CometBroadcastRPC = strings.TrimSpace(c.CometBroadcastRPC)
+	if c.CometBroadcastRPC == "" {
+		c.CometBroadcastRPC = c.CometRPC
+	}
 }
 
 // Expand resolves any path fields that support the ~ prefix.

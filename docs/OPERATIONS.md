@@ -40,6 +40,21 @@ In this mode the gateway prefers local KV reads for indexed heights and falls ba
 
 Set `WEB3INJ_PARALLEL_SYNC_TIP_AND_GAPS=false` to keep the legacy behavior: the gateway fills detected startup gaps first, then starts forward tip sync only after those gaps have completed or errored.
 
+## Separate CometBFT Endpoints
+
+`WEB3INJ_COMET_RPC` is the primary CometBFT endpoint used for chain reads, block fetching, sync, live fallbacks, and subscriptions.
+
+Set `WEB3INJ_COMET_BROADCAST_RPC` when transaction broadcasts should go to a different CometBFT node:
+
+```bash
+WEB3INJ_COMET_RPC=http://sync-node:26657
+WEB3INJ_COMET_BROADCAST_RPC=http://broadcast-node:26657
+```
+
+If `WEB3INJ_COMET_BROADCAST_RPC` is blank or unset, it defaults to the `WEB3INJ_COMET_RPC` value. Only transaction broadcast paths such as `eth_sendRawTransaction` use the broadcast endpoint; sync and cache-miss reads continue to use `WEB3INJ_COMET_RPC`.
+
+This split lets operators point high-volume block fetching at a sync or archival endpoint without making that traffic compete with mempool submission on the broadcast endpoint.
+
 ## Offline RPC-Only Mode
 
 Offline mode starts JSON-RPC against the indexed KV store without constructing live CometBFT or gRPC clients.

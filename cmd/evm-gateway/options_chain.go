@@ -28,6 +28,13 @@ func initChainOptions(app *cli.Cli, opts *gatewayCLIOptions, defaults config.Con
 		Value:  defaults.CometRPC,
 	})
 
+	opts.cometBroadcastRPC = app.String(cli.StringOpt{
+		Name:   "comet-broadcast-rpc",
+		Desc:   "CometBFT RPC endpoint used for transaction broadcasts. Defaults to comet-rpc when unset.",
+		EnvVar: "WEB3INJ_COMET_BROADCAST_RPC",
+		Value:  "",
+	})
+
 	opts.grpcAddr = app.String(cli.StringOpt{
 		Name:   "grpc-addr",
 		Desc:   "gRPC endpoint.",

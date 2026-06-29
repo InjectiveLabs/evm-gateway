@@ -149,6 +149,10 @@ func newReceiptTestBackend(t *testing.T, fixture dynamicFeeReceiptFixture, kv in
 			Client:   rpcClient,
 			TxConfig: backendReceiptTestTxConfig{tx: fixture.decodedTx},
 		},
+		client.Context{
+			Client:   rpcClient,
+			TxConfig: backendReceiptTestTxConfig{tx: fixture.decodedTx},
+		},
 		false,
 		kv,
 		nil,

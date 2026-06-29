@@ -151,6 +151,7 @@ type ProcessBlocker func(
 type Backend struct {
 	ctx                 context.Context
 	clientCtx           client.Context
+	broadcastClientCtx  client.Context
 	queryClient         *rpctypes.QueryClient // gRPC query client
 	logger              *slog.Logger
 	cfg                 appconfig.Config
@@ -168,6 +169,7 @@ func NewBackend(
 	logger *slog.Logger,
 	cfg appconfig.Config,
 	clientCtx client.Context,
+	broadcastClientCtx client.Context,
 	allowUnprotectedTxs bool,
 	indexer txindexer.TxIndexer,
 	syncStatus *syncstatus.Tracker,
@@ -177,10 +179,14 @@ func NewBackend(
 	if _, ok := chainID.SetString(rawChainID, 10); !ok || chainID.Sign() <= 0 {
 		panic("parse backend evm chain id: " + rawChainID)
 	}
+	if broadcastClientCtx.Client == nil && broadcastClientCtx.TxConfig == nil && broadcastClientCtx.NodeURI == "" {
+		broadcastClientCtx = clientCtx
+	}
 
 	b := &Backend{
 		ctx:                 nil,
 		clientCtx:           clientCtx,
+		broadcastClientCtx:  broadcastClientCtx,
 		queryClient:         rpctypes.NewQueryClient(clientCtx),
 		logger:              logger.With("module", "backend"),
 		cfg:                 cfg,

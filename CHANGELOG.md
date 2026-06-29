@@ -34,6 +34,74 @@ Ref: https://keepachangelog.com/en/1.1.0/
 
 # Changelog
 
+## [v1.4.2] - 2026-06-30
+
+### Features
+
+* (rpc) Added `WEB3INJ_COMET_BROADCAST_RPC` to route transaction broadcasts through a separate CometBFT endpoint while keeping sync and read traffic on `WEB3INJ_COMET_RPC`.
+
+## [v1.4.1] - 2026-06-24
+
+### Bug Fixes
+
+* (debug) Fixed latest-block trace context height handling.
+* (rpc) Corrected `eth_feeHistory` output and `effectiveGasPrice` calculation for cached receipts.
+
+## [v1.4.0] - 2026-06-02
+
+### Improvements
+
+* (app) Added a tuned CometBFT HTTP transport so high parallel block fetch counts can keep enough idle connections warm.
+* (deps) Updated `sdk-go` and related dependencies.
+
+### Bug Fixes
+
+* (rpc) Allowed an empty `coins_spent` amount when it represents a normalized zero value.
+
+## [v1.3.1] - 2026-05-06
+
+### Bug Fixes
+
+* (indexer) Allowed virtualized Cosmos events to sync before EVM genesis.
+
+## [v1.3.0] - 2026-04-23
+
+### Features
+
+* (rpc) Added native Cosmos x/bank event virtualization as JSON-RPC transactions and logs.
+* (jsonrpc) Added robust WebSocket subscriptions backed by indexed data, including virtualized logs.
+
+### Improvements
+
+* (indexer) Migrated the internal KV codec to Cap'n Proto and added `sonic` JSON handling for RPC payloads.
+* (tools) Added `kvinspect` for inspecting indexed gateway state.
+
+### Bug Fixes
+
+* (jsonrpc) Preserved connection IDs for JSON-RPC clients.
+* (indexer) Fixed virtual transaction Merkle root derivation when virtual transactions are present.
+* (indexer) Corrected `TxResult.EthTxIndex` handling for indexed transactions.
+
+## [v1.2.0] - 2026-04-18
+
+### Features
+
+* (indexer) Added parallel forward-tip syncing while historical gaps are still being filled.
+
+### Bug Fixes
+
+* (rpc) Made `eth_blockNumber` follow the latest indexed block.
+
+## [v1.1.1] - 2026-04-13
+
+### Improvements
+
+* (deps) Bumped the Go toolchain version and pinned `sdk-go`.
+
+### Bug Fixes
+
+* (config) Properly distinguished Cosmos chain ID from EVM chain ID.
+
 ## [v1.1.0] - 2026-04-09
 
 ### Features

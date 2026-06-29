@@ -18,6 +18,7 @@ func TestNewBackendUsesExplicitEVMChainID(t *testing.T) {
 			EVMChainID: "1776",
 		},
 		client.Context{}.WithChainID("injective-1"),
+		client.Context{}.WithChainID("injective-1"),
 		false,
 		nil,
 		nil,

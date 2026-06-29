@@ -46,6 +46,7 @@ type APICreator = func(
 	logger *slog.Logger,
 	cfg config.Config,
 	clientCtx client.Context,
+	broadcastClientCtx client.Context,
 	stream *stream.RPCStream,
 	allowUnprotectedTxs bool,
 	indexer txindexer.TxIndexer,
@@ -60,12 +61,13 @@ func init() {
 		EthNamespace: func(logger *slog.Logger,
 			cfg config.Config,
 			clientCtx client.Context,
+			broadcastClientCtx client.Context,
 			stream *stream.RPCStream,
 			allowUnprotectedTxs bool,
 			indexer txindexer.TxIndexer,
 			status *syncstatus.Tracker,
 		) []rpc.API {
-			evmBackend := backend.NewBackend(logger, cfg, clientCtx, allowUnprotectedTxs, indexer, status)
+			evmBackend := backend.NewBackend(logger, cfg, clientCtx, broadcastClientCtx, allowUnprotectedTxs, indexer, status)
 			return []rpc.API{
 				{
 					Namespace: EthNamespace,
@@ -79,7 +81,7 @@ func init() {
 				},
 			}
 		},
-		Web3Namespace: func(*slog.Logger, config.Config, client.Context, *stream.RPCStream, bool, txindexer.TxIndexer, *syncstatus.Tracker) []rpc.API {
+		Web3Namespace: func(*slog.Logger, config.Config, client.Context, client.Context, *stream.RPCStream, bool, txindexer.TxIndexer, *syncstatus.Tracker) []rpc.API {
 			return []rpc.API{
 				{
 					Namespace: Web3Namespace,
@@ -88,7 +90,7 @@ func init() {
 				},
 			}
 		},
-		NetNamespace: func(_ *slog.Logger, cfg config.Config, clientCtx client.Context, _ *stream.RPCStream, _ bool, _ txindexer.TxIndexer, _ *syncstatus.Tracker) []rpc.API {
+		NetNamespace: func(_ *slog.Logger, cfg config.Config, clientCtx client.Context, _ client.Context, _ *stream.RPCStream, _ bool, _ txindexer.TxIndexer, _ *syncstatus.Tracker) []rpc.API {
 			return []rpc.API{
 				{
 					Namespace: NetNamespace,
@@ -97,7 +99,7 @@ func init() {
 				},
 			}
 		},
-		TxPoolNamespace: func(logger *slog.Logger, _ config.Config, _ client.Context, _ *stream.RPCStream, _ bool, _ txindexer.TxIndexer, _ *syncstatus.Tracker) []rpc.API {
+		TxPoolNamespace: func(logger *slog.Logger, _ config.Config, _ client.Context, _ client.Context, _ *stream.RPCStream, _ bool, _ txindexer.TxIndexer, _ *syncstatus.Tracker) []rpc.API {
 			return []rpc.API{
 				{
 					Namespace: TxPoolNamespace,
@@ -109,12 +111,13 @@ func init() {
 		DebugNamespace: func(logger *slog.Logger,
 			cfg config.Config,
 			clientCtx client.Context,
+			broadcastClientCtx client.Context,
 			_ *stream.RPCStream,
 			allowUnprotectedTxs bool,
 			indexer txindexer.TxIndexer,
 			status *syncstatus.Tracker,
 		) []rpc.API {
-			evmBackend := backend.NewBackend(logger, cfg, clientCtx, allowUnprotectedTxs, indexer, status)
+			evmBackend := backend.NewBackend(logger, cfg, clientCtx, broadcastClientCtx, allowUnprotectedTxs, indexer, status)
 			return []rpc.API{
 				{
 					Namespace: DebugNamespace,
@@ -126,12 +129,13 @@ func init() {
 		MinerNamespace: func(logger *slog.Logger,
 			cfg config.Config,
 			clientCtx client.Context,
+			broadcastClientCtx client.Context,
 			_ *stream.RPCStream,
 			allowUnprotectedTxs bool,
 			indexer txindexer.TxIndexer,
 			status *syncstatus.Tracker,
 		) []rpc.API {
-			evmBackend := backend.NewBackend(logger, cfg, clientCtx, allowUnprotectedTxs, indexer, status)
+			evmBackend := backend.NewBackend(logger, cfg, clientCtx, broadcastClientCtx, allowUnprotectedTxs, indexer, status)
 			return []rpc.API{
 				{
 					Namespace: MinerNamespace,
@@ -143,12 +147,13 @@ func init() {
 		InjectiveNamespace: func(logger *slog.Logger,
 			cfg config.Config,
 			clientCtx client.Context,
+			broadcastClientCtx client.Context,
 			_ *stream.RPCStream,
 			allowUnprotectedTxs bool,
 			indexer txindexer.TxIndexer,
 			status *syncstatus.Tracker,
 		) []rpc.API {
-			evmBackend := backend.NewBackend(logger, cfg, clientCtx, allowUnprotectedTxs, indexer, status)
+			evmBackend := backend.NewBackend(logger, cfg, clientCtx, broadcastClientCtx, allowUnprotectedTxs, indexer, status)
 			return []rpc.API{
 				{
 					Namespace: InjectiveNamespace,
@@ -165,6 +170,7 @@ func GetRPCAPIs(
 	logger *slog.Logger,
 	cfg config.Config,
 	clientCtx client.Context,
+	broadcastClientCtx client.Context,
 	rpcStream *stream.RPCStream,
 	allowUnprotectedTxs bool,
 	indexer txindexer.TxIndexer,
@@ -175,7 +181,7 @@ func GetRPCAPIs(
 
 	for _, ns := range selectedAPIs {
 		if creator, ok := apiCreators[ns]; ok {
-			apis = append(apis, creator(logger, cfg, clientCtx, rpcStream, allowUnprotectedTxs, indexer, status)...)
+			apis = append(apis, creator(logger, cfg, clientCtx, broadcastClientCtx, rpcStream, allowUnprotectedTxs, indexer, status)...)
 		} else {
 			logger.Error("invalid namespace value", "namespace", ns)
 		}
