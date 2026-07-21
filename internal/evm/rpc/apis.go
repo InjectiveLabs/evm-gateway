@@ -15,6 +15,7 @@ import (
 	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/namespaces/ethereum/inj"
 	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/namespaces/ethereum/miner"
 	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/namespaces/ethereum/net"
+	traceapi "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/namespaces/ethereum/trace"
 	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/namespaces/ethereum/txpool"
 	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/namespaces/ethereum/web3"
 	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/stream"
@@ -35,6 +36,7 @@ const (
 	NetNamespace       = "net"
 	TxPoolNamespace    = "txpool"
 	DebugNamespace     = "debug"
+	TraceNamespace     = "trace"
 	MinerNamespace     = "miner"
 	InjectiveNamespace = "inj"
 
@@ -123,6 +125,24 @@ func init() {
 					Namespace: DebugNamespace,
 					Version:   apiVersion,
 					Service:   debug.NewAPI(logger, evmBackend),
+				},
+			}
+		},
+		TraceNamespace: func(logger *slog.Logger,
+			cfg config.Config,
+			clientCtx client.Context,
+			broadcastClientCtx client.Context,
+			_ *stream.RPCStream,
+			allowUnprotectedTxs bool,
+			indexer txindexer.TxIndexer,
+			status *syncstatus.Tracker,
+		) []rpc.API {
+			evmBackend := backend.NewBackend(logger, cfg, clientCtx, broadcastClientCtx, allowUnprotectedTxs, indexer, status)
+			return []rpc.API{
+				{
+					Namespace: TraceNamespace,
+					Version:   apiVersion,
+					Service:   traceapi.NewAPI(logger, evmBackend),
 				},
 			}
 		},
