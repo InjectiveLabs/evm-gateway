@@ -215,7 +215,7 @@ func (b *Backend) TraceBlock(height rpctypes.BlockNumber,
 
 	txsMessages, txHashes := b.traceBlockEthereumTransactions(block)
 	if len(txsMessages) == 0 {
-		decodedResults := b.alignTraceBlockResultsWithVisibleTransactions(nil, cacheHeight)
+		decodedResults := b.alignTraceBlockResultsWithVisibleTransactions([]*rpctypes.TxTraceResult{}, cacheHeight)
 		if b.indexer != nil && cacheable {
 			cacheData, err := sonic.Marshal(decodedResults)
 			if err != nil {
