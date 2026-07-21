@@ -102,6 +102,34 @@ func TestTraceBlockContextHeightUsesResolvedBlock(t *testing.T) {
 	}
 }
 
+func TestAlignTraceBlockResultsWithVisibleTransactions(t *testing.T) {
+	virtualBefore := common.HexToHash("0x01")
+	ethereumHash := common.HexToHash("0x02")
+	virtualAfter := common.HexToHash("0x03")
+	ethereumResult := &rpctypes.TxTraceResult{
+		TxHash: ethereumHash,
+		Result: map[string]interface{}{"type": "CALL"},
+	}
+
+	aligned := alignTraceBlockResults(
+		[]*rpctypes.TxTraceResult{ethereumResult},
+		[]common.Hash{virtualBefore, ethereumHash, virtualAfter},
+	)
+
+	if len(aligned) != 3 {
+		t.Fatalf("unexpected aligned trace result count: got %d want 3", len(aligned))
+	}
+	if aligned[0].TxHash != virtualBefore || aligned[1] != ethereumResult || aligned[2].TxHash != virtualAfter {
+		t.Fatalf("trace results are not aligned to visible transaction order")
+	}
+	for _, index := range []int{0, 2} {
+		result, ok := aligned[index].Result.(map[string]interface{})
+		if !ok || result["type"] != 0 {
+			t.Fatalf("expected an empty virtual trace at index %d, got %#v", index, aligned[index].Result)
+		}
+	}
+}
+
 func TestTraceBlockLatestSendsResolvedBlockContextHeight(t *testing.T) {
 	const blockHeight int64 = 171490488
 	key, err := crypto.GenerateKey()
@@ -160,6 +188,9 @@ func TestTraceBlockLatestSendsResolvedBlockContextHeight(t *testing.T) {
 	}
 	if len(got) != 1 {
 		t.Fatalf("unexpected trace result count: got %d want 1", len(got))
+	}
+	if got[0].TxHash != ethMsg.Hash() {
+		t.Fatalf("unexpected trace transaction hash: got %s want %s", got[0].TxHash.Hex(), ethMsg.Hash().Hex())
 	}
 	queryClient.AssertExpectations(t)
 }

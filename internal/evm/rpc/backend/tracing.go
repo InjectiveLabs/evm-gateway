@@ -181,7 +181,14 @@ func (b *Backend) TraceBlock(height rpctypes.BlockNumber,
 	if b.indexer != nil && cacheable {
 		cached, err := b.indexer.GetTraceBlockByHeight(cacheHeight, config)
 		if err == nil {
-			return decodeCachedTraceBlock(cached)
+			decoded, err := decodeCachedTraceBlock(cached)
+			if err != nil {
+				return nil, err
+			}
+			if err := b.populateTraceBlockTransactionHashes(decoded, cacheHeight, block); err != nil {
+				return nil, err
+			}
+			return b.alignTraceBlockResultsWithVisibleTransactions(decoded, cacheHeight), nil
 		}
 		if !isIndexerCacheMiss(err) {
 			if b.cfg.OfflineRPCOnly {
@@ -206,37 +213,19 @@ func (b *Backend) TraceBlock(height rpctypes.BlockNumber,
 		cacheable = true
 	}
 
-	txs := block.Block.Txs
-	txsLength := len(txs)
-
-	if txsLength == 0 {
-		// If there are no transactions return empty array
+	txsMessages, txHashes := b.traceBlockEthereumTransactions(block)
+	if len(txsMessages) == 0 {
+		decodedResults := b.alignTraceBlockResultsWithVisibleTransactions(nil, cacheHeight)
 		if b.indexer != nil && cacheable {
-			if err := b.indexer.SetTraceBlockByHeight(cacheHeight, config, json.RawMessage("[]")); err != nil {
-				b.logger.Debug("failed to cache empty block trace", "height", cacheHeight, "error", err.Error())
+			cacheData, err := sonic.Marshal(decodedResults)
+			if err != nil {
+				return nil, err
+			}
+			if err := b.indexer.SetTraceBlockByHeight(cacheHeight, config, cacheData); err != nil {
+				b.logger.Debug("failed to cache block trace without Ethereum transactions", "height", cacheHeight, "error", err.Error())
 			}
 		}
-		return []*rpctypes.TxTraceResult{}, nil
-	}
-
-	txDecoder := b.clientCtx.TxConfig.TxDecoder()
-
-	var txsMessages []*evmtypes.MsgEthereumTx
-	for i, tx := range txs {
-		decodedTx, err := txDecoder(tx)
-		if err != nil {
-			b.logger.Warn("failed to decode transaction", "hash", txs[i].Hash(), "error", err.Error())
-			continue
-		}
-
-		for _, msg := range decodedTx.GetMsgs() {
-			ethMessage, ok := msg.(*evmtypes.MsgEthereumTx)
-			if !ok {
-				// Just considers Ethereum transactions
-				continue
-			}
-			txsMessages = append(txsMessages, ethMessage)
-		}
+		return decodedResults, nil
 	}
 
 	ctxWithHeight := b.contextWithHeight(traceBlockContextHeight(height, block))
@@ -256,17 +245,153 @@ func (b *Backend) TraceBlock(height rpctypes.BlockNumber,
 		return nil, err
 	}
 
-	decodedResults := make([]*rpctypes.TxTraceResult, txsLength)
+	decodedResults := make([]*rpctypes.TxTraceResult, len(txsMessages))
 	if err := sonic.Unmarshal(res.Data, &decodedResults); err != nil {
 		return nil, err
 	}
+	if err := attachTraceBlockTransactionHashes(decodedResults, txHashes); err != nil {
+		return nil, err
+	}
+	decodedResults = b.alignTraceBlockResultsWithVisibleTransactions(decodedResults, cacheHeight)
 	if b.indexer != nil && cacheable {
-		if err := b.indexer.SetTraceBlockByHeight(cacheHeight, config, res.Data); err != nil {
+		cacheData, err := sonic.Marshal(decodedResults)
+		if err != nil {
+			return nil, err
+		}
+		if err := b.indexer.SetTraceBlockByHeight(cacheHeight, config, cacheData); err != nil {
 			b.logger.Debug("failed to cache block trace", "height", cacheHeight, "error", err.Error())
 		}
 	}
 
 	return decodedResults, nil
+}
+
+func (b *Backend) traceBlockEthereumTransactions(
+	block *cmrpctypes.ResultBlock,
+) ([]*evmtypes.MsgEthereumTx, []common.Hash) {
+	txDecoder := b.clientCtx.TxConfig.TxDecoder()
+	messages := make([]*evmtypes.MsgEthereumTx, 0)
+	hashes := make([]common.Hash, 0)
+
+	for _, tx := range block.Block.Txs {
+		decodedTx, err := txDecoder(tx)
+		if err != nil {
+			b.logger.Warn("failed to decode transaction", "hash", tx.Hash(), "error", err.Error())
+			continue
+		}
+
+		for _, msg := range decodedTx.GetMsgs() {
+			ethMessage, ok := msg.(*evmtypes.MsgEthereumTx)
+			if !ok {
+				continue
+			}
+			messages = append(messages, ethMessage)
+			hashes = append(hashes, ethMessage.Hash())
+		}
+	}
+
+	return messages, hashes
+}
+
+func (b *Backend) populateTraceBlockTransactionHashes(
+	results []*rpctypes.TxTraceResult,
+	height int64,
+	block *cmrpctypes.ResultBlock,
+) error {
+	if len(results) == 0 {
+		return nil
+	}
+
+	allPresent := true
+	for _, result := range results {
+		if result == nil || result.TxHash == (common.Hash{}) {
+			allPresent = false
+			break
+		}
+	}
+	if allPresent {
+		return nil
+	}
+
+	if block == nil {
+		var err error
+		block, err = b.TendermintBlockByNumber(rpctypes.BlockNumber(height))
+		if err != nil {
+			return errors.Wrap(err, "block not found while populating trace transaction hashes")
+		}
+		if block == nil || block.Block == nil {
+			return errors.New("block not found while populating trace transaction hashes")
+		}
+	}
+
+	_, hashes := b.traceBlockEthereumTransactions(block)
+	return attachTraceBlockTransactionHashes(results, hashes)
+}
+
+func attachTraceBlockTransactionHashes(results []*rpctypes.TxTraceResult, hashes []common.Hash) error {
+	if len(results) != len(hashes) {
+		return fmt.Errorf("trace result count %d does not match Ethereum transaction count %d", len(results), len(hashes))
+	}
+
+	for i, hash := range hashes {
+		if results[i] == nil {
+			results[i] = &rpctypes.TxTraceResult{}
+		}
+		results[i].TxHash = hash
+	}
+	return nil
+}
+
+func (b *Backend) alignTraceBlockResultsWithVisibleTransactions(
+	results []*rpctypes.TxTraceResult,
+	height int64,
+) []*rpctypes.TxTraceResult {
+	if b.indexer == nil {
+		return results
+	}
+
+	visibleHashes, err := b.indexer.GetRPCTransactionHashesByBlockHeight(height)
+	if err != nil {
+		b.logger.Debug("failed to load visible transaction hashes for block trace", "height", height, "error", err.Error())
+		return results
+	}
+	return alignTraceBlockResults(results, visibleHashes)
+}
+
+func alignTraceBlockResults(
+	results []*rpctypes.TxTraceResult,
+	visibleHashes []common.Hash,
+) []*rpctypes.TxTraceResult {
+	if len(visibleHashes) == 0 {
+		return results
+	}
+
+	resultsByHash := make(map[common.Hash]*rpctypes.TxTraceResult, len(results))
+	for _, result := range results {
+		if result == nil || result.TxHash == (common.Hash{}) {
+			return results
+		}
+		resultsByHash[result.TxHash] = result
+	}
+
+	aligned := make([]*rpctypes.TxTraceResult, 0, len(visibleHashes))
+	matched := 0
+	for _, hash := range visibleHashes {
+		if result, ok := resultsByHash[hash]; ok {
+			aligned = append(aligned, result)
+			matched++
+			continue
+		}
+		aligned = append(aligned, &rpctypes.TxTraceResult{
+			TxHash: hash,
+			Result: map[string]interface{}{"type": 0},
+		})
+	}
+
+	if matched != len(results) {
+		return results
+	}
+	return aligned
 }
 
 func traceBlockContextHeight(height rpctypes.BlockNumber, block *cmrpctypes.ResultBlock) int64 {
@@ -401,6 +526,10 @@ func (b *Backend) traceTransactionFromCachedBlock(hash common.Hash, config *rpct
 	if err != nil {
 		return nil, err
 	}
+	if err := b.populateTraceBlockTransactionHashes(blockTrace, tx.Height, nil); err != nil {
+		return nil, err
+	}
+	blockTrace = b.alignTraceBlockResultsWithVisibleTransactions(blockTrace, tx.Height)
 
 	txIndex := int(tx.EthTxIndex)
 	if txIndex < 0 {
