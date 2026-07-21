@@ -57,13 +57,17 @@ func TestTraceConfigUsesOpcodeAndPrestateTracers(t *testing.T) {
 		t.Fatalf("unexpected mux config: %s", config.TracerConfig)
 	}
 	var opcodeConfig struct {
-		WithLog bool `json:"withLog"`
+		StackTopItemsSize int  `json:"stackTopItemsSize"`
+		WithLog           bool `json:"withLog"`
 	}
 	if err := json.Unmarshal(mux["erc7562Tracer"], &opcodeConfig); err != nil {
 		t.Fatalf("decode opcode tracer config: %v", err)
 	}
 	if !opcodeConfig.WithLog {
 		t.Fatal("opcode tracer must collect logs")
+	}
+	if opcodeConfig.StackTopItemsSize != 3 {
+		t.Fatalf("opcode tracer stack size = %d, want 3", opcodeConfig.StackTopItemsSize)
 	}
 }
 
@@ -413,10 +417,158 @@ func TestFrameExecutionAddressUsesCallerStorageForDelegateVariants(t *testing.T)
 	for _, callType := range []string{"DELEGATECALL", "EXTDELEGATECALL", "CALLCODE"} {
 		t.Run(callType, func(t *testing.T) {
 			frame := &callFrame{Type: callType, From: caller, To: &callee}
-			if got := frameExecutionAddress(frame); got != caller {
+			got, ok := frameExecutionAddress(frame)
+			if !ok || got != caller {
 				t.Fatalf("execution address = %s, want caller %s", got, caller)
 			}
 		})
+	}
+}
+
+func TestAppendTransactionArtifactsSkipsRevertedLogsWhenAssigningReceiptIndexes(t *testing.T) {
+	txHash := common.HexToHash("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa04")
+	rootAddress := common.HexToAddress("0x1000000000000000000000000000000000000001")
+	childAddress := common.HexToAddress("0x2000000000000000000000000000000000000002")
+	revertedTopic := common.HexToHash("0x401")
+	persistedTopic := common.HexToHash("0x402")
+
+	root := &callFrame{
+		Type: "CALL",
+		To:   &rootAddress,
+		Logs: []*callLog{{
+			Address:  rootAddress,
+			Topics:   []common.Hash{persistedTopic},
+			Position: 1,
+		}},
+		Calls: []*callFrame{{
+			Type:  "CALL",
+			To:    &childAddress,
+			Error: "execution reverted",
+			Logs: []*callLog{{
+				Address: childAddress,
+				Topics:  []common.Hash{revertedTopic},
+			}},
+		}},
+	}
+	receipt := &rpcReceipt{
+		Status: hexutil.Uint64(ethtypes.ReceiptStatusSuccessful),
+		Logs: []*virtualbank.RPCLog{{
+			Address: rootAddress,
+			Topics:  []common.Hash{persistedTopic},
+			Index:   17,
+		}},
+	}
+	blockFile := &BlockFile{}
+	appendTransactionArtifacts(blockFile, txHash, root, receipt, make(map[common.Address]struct{}))
+
+	if len(blockFile.Events) != 1 || blockFile.Events[0].Selector != persistedTopic.Hex() || blockFile.Events[0].LogIndex != 17 {
+		t.Fatalf("persisted events = %#v, want surviving log at index 17", blockFile.Events)
+	}
+	if len(blockFile.ErrorEvents) != 1 || blockFile.ErrorEvents[0].Selector != revertedTopic.Hex() || blockFile.ErrorEvents[0].LogIndex != 0 {
+		t.Fatalf("error events = %#v, want reverted log at index zero", blockFile.ErrorEvents)
+	}
+}
+
+func TestAppendTransactionArtifactsSkipsLogsWhoseParentReverted(t *testing.T) {
+	txHash := common.HexToHash("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa05")
+	rootAddress := common.HexToAddress("0x1000000000000000000000000000000000000001")
+	childAddress := common.HexToAddress("0x2000000000000000000000000000000000000002")
+	discardedTopic := common.HexToHash("0x501")
+
+	root := &callFrame{
+		Type:  "CALL",
+		To:    &rootAddress,
+		Error: "execution reverted",
+		Calls: []*callFrame{{
+			Type: "CALL",
+			To:   &childAddress,
+			Logs: []*callLog{{
+				Address: childAddress,
+				Topics:  []common.Hash{discardedTopic},
+			}},
+		}},
+	}
+	// A virtual event can survive a reverted EVM payload, but it must not be
+	// consumed as the descendant's reverted native EVM log.
+	receipt := &rpcReceipt{
+		Status: hexutil.Uint64(ethtypes.ReceiptStatusFailed),
+		Logs: []*virtualbank.RPCLog{{
+			Address: virtualbank.ContractAddress,
+			Topics:  []common.Hash{virtualbank.TopicTransfer},
+			Index:   21,
+			Virtual: true,
+		}},
+	}
+	blockFile := &BlockFile{}
+	appendTransactionArtifacts(blockFile, txHash, root, receipt, make(map[common.Address]struct{}))
+
+	if len(blockFile.ErrorEvents) != 1 || blockFile.ErrorEvents[0].Selector != discardedTopic.Hex() || blockFile.ErrorEvents[0].LogIndex != 0 {
+		t.Fatalf("error events = %#v, want parent-reverted log at index zero", blockFile.ErrorEvents)
+	}
+	if len(blockFile.Events) != 1 || blockFile.Events[0].Selector != virtualbank.TopicTransfer.Hex() || blockFile.Events[0].LogIndex != 21 {
+		t.Fatalf("persisted virtual events = %#v", blockFile.Events)
+	}
+}
+
+func TestAppendTransactionArtifactsClampsLogPositionWhenAssigningIndex(t *testing.T) {
+	txHash := common.HexToHash("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa06")
+	address := common.HexToAddress("0x1000000000000000000000000000000000000001")
+	topic := common.HexToHash("0x601")
+	root := &callFrame{
+		Type: "CALL",
+		To:   &address,
+		Logs: []*callLog{{Address: address, Topics: []common.Hash{topic}, Position: 99}},
+	}
+	receipt := &rpcReceipt{
+		Status: hexutil.Uint64(ethtypes.ReceiptStatusSuccessful),
+		Logs:   []*virtualbank.RPCLog{{Address: address, Topics: []common.Hash{topic}, Index: 23}},
+	}
+	blockFile := &BlockFile{}
+	appendTransactionArtifacts(blockFile, txHash, root, receipt, make(map[common.Address]struct{}))
+
+	if len(blockFile.Events) != 1 || blockFile.Events[0].LogIndex != 23 {
+		t.Fatalf("events = %#v, want one clamped log at index 23", blockFile.Events)
+	}
+}
+
+func TestBuildDoesNotRecordZeroStorageContractForFailedCreate(t *testing.T) {
+	txHash := common.HexToHash("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa07")
+	block := rpcBlock{
+		Number:     42,
+		Hash:       common.HexToHash("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb07"),
+		ParentHash: common.HexToHash("0x01"),
+		StateRoot:  common.HexToHash("0x02"),
+		Difficulty: hexBig(0),
+		Transactions: []*rpctypes.RPCTransaction{{
+			Hash: txHash, Gas: 200_000, GasPrice: hexBig(1), Value: hexBig(0),
+		}},
+	}
+	frame := &callFrame{Type: "CREATE", Error: "execution reverted"}
+	frame.AccessedSlots.Writes = map[common.Hash]uint64{common.HexToHash("0x01"): 1}
+	receipt := rpcReceipt{
+		Status:          hexutil.Uint64(ethtypes.ReceiptStatusFailed),
+		GasUsed:         50_000,
+		TransactionHash: txHash,
+	}
+	reader := &fakeStateReader{proofs: map[common.Address]*rpctypes.AccountResult{}, codes: map[common.Address]hexutil.Bytes{}}
+	output, err := Build(BuildInput{
+		Block:        asMap(t, block),
+		Receipts:     []map[string]interface{}{asMap(t, receipt)},
+		TraceResults: []*rpctypes.TxTraceResult{{TxHash: txHash, Result: asValue(t, &muxTraceResult{CallTracer: frame, PrestateTracer: map[common.Address]*traceAccount{}})}},
+		StateReader:  reader,
+	})
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+
+	if len(output.BlockFile.StorageContracts) != 0 {
+		t.Fatalf("failed constructor storage contracts = %#v, want none", output.BlockFile.StorageContracts)
+	}
+	if len(output.BlockFile.ErrorTraces) != 1 || !output.BlockFile.ErrorTraces[0].SelfStorageChange {
+		t.Fatalf("failed constructor traces = %#v", output.BlockFile.ErrorTraces)
+	}
+	if _, ok := frameExecutionAddress(frame); ok {
+		t.Fatal("failed CREATE without a destination must not resolve to the zero address")
 	}
 }
 

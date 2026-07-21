@@ -152,7 +152,10 @@ func BlockHeight(raw map[string]interface{}) (rpctypes.BlockNumber, error) {
 func TraceConfig() *rpctypes.TraceConfig {
 	config := &rpctypes.TraceConfig{}
 	config.Tracer = "muxTracer"
-	config.TracerConfig = json.RawMessage(`{"erc7562Tracer":{"withLog":true},"prestateTracer":{}}`)
+	// Keep the tracer's effective default explicit. Besides documenting the
+	// required stack capture, this versions the trace-cache key so results made
+	// before ordered mixed-block validation cannot be reused in offline mode.
+	config.TracerConfig = json.RawMessage(`{"erc7562Tracer":{"stackTopItemsSize":3,"withLog":true},"prestateTracer":{}}`)
 	return config
 }
 
@@ -653,10 +656,11 @@ func annotateFrame(frame *callFrame, txID string, parentFailed bool, changedStor
 	frame.parentFailed = parentFailed
 	assignTimelinePositions(frame, txID)
 
-	executionAddress := frameExecutionAddress(frame)
 	frame.selfStorageChange = len(frame.AccessedSlots.Writes) > 0
 	if frame.selfStorageChange {
-		changedStorage[executionAddress] = struct{}{}
+		if executionAddress, ok := frameExecutionAddress(frame); ok {
+			changedStorage[executionAddress] = struct{}{}
+		}
 	}
 	frame.storageChange = frame.selfStorageChange
 	for _, child := range frame.Calls {
@@ -710,19 +714,27 @@ func assignLogIndexes(
 ) {
 	logsByCallCount := make(map[int][]*callLog)
 	for _, log := range frame.Logs {
-		if log != nil {
-			logsByCallCount[int(log.Position)] = append(logsByCallCount[int(log.Position)], log)
+		if log == nil {
+			continue
 		}
+		position := int(log.Position)
+		if position < 0 || position > len(frame.Calls) {
+			position = len(frame.Calls)
+		}
+		logsByCallCount[position] = append(logsByCallCount[position], log)
 	}
+	frameLogsPersisted := !frame.failed() && !frame.parentFailed
 	for callIndex := 0; callIndex <= len(frame.Calls); callIndex++ {
-		for _, log := range logsByCallCount[callIndex] {
-			if *cursor >= len(nativeLogs) {
-				return
+		if frameLogsPersisted {
+			for _, log := range logsByCallCount[callIndex] {
+				if *cursor >= len(nativeLogs) {
+					return
+				}
+				rpcLog := nativeLogs[*cursor]
+				log.logIndex = int64(rpcLog.Index)
+				consumed[rpcLog] = true
+				*cursor = *cursor + 1
 			}
-			rpcLog := nativeLogs[*cursor]
-			log.logIndex = int64(rpcLog.Index)
-			consumed[rpcLog] = true
-			*cursor = *cursor + 1
 		}
 		if callIndex < len(frame.Calls) && frame.Calls[callIndex] != nil {
 			assignLogIndexes(frame.Calls[callIndex], nativeLogs, cursor, consumed)
@@ -761,15 +773,15 @@ func appendNestedArtifacts(blockFile *BlockFile, frame *callFrame, txID string) 
 	}
 }
 
-func frameExecutionAddress(frame *callFrame) common.Address {
+func frameExecutionAddress(frame *callFrame) (common.Address, bool) {
 	switch strings.ToUpper(frame.Type) {
 	case "DELEGATECALL", "EXTDELEGATECALL", "CALLCODE", "SELFDESTRUCT":
-		return frame.From
+		return frame.From, true
 	default:
 		if frame.To != nil {
-			return *frame.To
+			return *frame.To, true
 		}
-		return common.Address{}
+		return common.Address{}, false
 	}
 }
 

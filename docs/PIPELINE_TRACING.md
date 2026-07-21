@@ -39,6 +39,20 @@ queries at the traced height. Native x/bank effects, including MTS tokens and
 Circle's Injective USDC implementation, are represented by the gateway's
 virtual bank logs at `0x0000000000000000000000000000000000000800`.
 
+## Ordered replay safety
+
+The current Injective EVM gRPC `TraceBlock`/`TraceTx` contract accepts only
+`MsgEthereumTx`; it cannot execute a native Cosmos message in the same mutable
+replay context. To prevent returning frames or state diffs from a different
+transition, the gateway validates the original Cosmos message order before
+tracing. It returns an `ordered Cosmos/EVM block replay is unavailable` error
+when a native (or undecodable) message precedes a later EVM message.
+
+Native-only blocks and blocks whose native messages occur after the final EVM
+message remain supported. Supporting every mixed ordering requires a future
+injective-core tracing API that replays complete Cosmos transactions, including
+their native message transitions, from the beginning-of-block state.
+
 Run the focused live compatibility check against an already-running gateway:
 
 ```bash
