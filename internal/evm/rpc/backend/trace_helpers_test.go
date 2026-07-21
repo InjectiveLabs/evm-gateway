@@ -11,6 +11,7 @@ import (
 	rpcmocks "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/backend/mocks"
 	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
 	evmtypes "github.com/InjectiveLabs/sdk-go/chain/evm/types"
+	"github.com/bytedance/sonic"
 	cmrpctypes "github.com/cometbft/cometbft/rpc/core/types"
 	tmtypes "github.com/cometbft/cometbft/types"
 	"github.com/cosmos/cosmos-sdk/client"
@@ -127,6 +128,51 @@ func TestAlignTraceBlockResultsWithVisibleTransactions(t *testing.T) {
 		if !ok || result["type"] != 0 {
 			t.Fatalf("expected an empty virtual trace at index %d, got %#v", index, aligned[index].Result)
 		}
+	}
+}
+
+func TestTraceBlockWithoutEthereumTransactionsReturnsEmptyArray(t *testing.T) {
+	const blockHeight int64 = 123
+	backend := &Backend{
+		logger: backendTestLogger(),
+		cfg:    appconfig.Config{},
+		clientCtx: client.Context{}.WithTxConfig(backendTraceTestTxConfig{
+			decoder: func([]byte) (sdk.Tx, error) {
+				return backendTraceTestTx{}, nil
+			},
+		}),
+	}
+
+	tests := []struct {
+		name string
+		txs  []tmtypes.Tx
+	}{
+		{name: "empty block"},
+		{name: "block without Ethereum messages", txs: []tmtypes.Tx{[]byte("encoded-cosmos-tx")}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			block := &cmrpctypes.ResultBlock{
+				Block: tmtypes.MakeBlock(blockHeight, tc.txs, nil, nil),
+			}
+
+			got, err := backend.TraceBlock(rpctypes.BlockNumber(blockHeight), nil, block)
+			if err != nil {
+				t.Fatalf("TraceBlock returned error: %v", err)
+			}
+			if got == nil {
+				t.Fatal("TraceBlock returned a nil result slice")
+			}
+
+			encoded, err := sonic.Marshal(got)
+			if err != nil {
+				t.Fatalf("marshal trace result: %v", err)
+			}
+			if string(encoded) != "[]" {
+				t.Fatalf("unexpected encoded trace result: got %s want []", encoded)
+			}
+		})
 	}
 }
 
