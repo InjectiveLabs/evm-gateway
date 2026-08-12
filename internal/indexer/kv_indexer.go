@@ -53,9 +53,6 @@ func WithCachedBlockGasLimit(gasLimit uint64) KVIndexerOption {
 func WithVirtualBankTransfers(enabled bool, chainID string) KVIndexerOption {
 	return func(kv *KVIndexer) {
 		kv.virtualBankTransfers = enabled
-		if !enabled {
-			return
-		}
 		chainID = strings.TrimSpace(chainID)
 		if chainID == "" {
 			return
@@ -178,6 +175,7 @@ func (kv *KVIndexer) indexBlockWithStats(block *cmtypes.Block, blockResults *cor
 	}
 
 	// record index of valid eth tx during the iteration
+	var nativeEthTxIndex int32
 	var ethTxIndex int32
 	var rpcTxIndex int32
 	visibleRPCTxHashes := make([]common.Hash, 0)
@@ -186,9 +184,7 @@ func (kv *KVIndexer) indexBlockWithStats(block *cmtypes.Block, blockResults *cor
 		flatLogs = append(flatLogs, logs...)
 	}
 	appendVisibleRPCTxHash := func(txHash common.Hash) {
-		if kv.virtualBankTransfers {
-			visibleRPCTxHashes = append(visibleRPCTxHashes, txHash)
-		}
+		visibleRPCTxHashes = append(visibleRPCTxHashes, txHash)
 	}
 	virtualLogContext := func(txHash common.Hash, txIndex int32) virtualbank.LogContext {
 		return virtualbank.LogContext{
@@ -269,6 +265,11 @@ func (kv *KVIndexer) indexBlockWithStats(block *cmtypes.Block, blockResults *cor
 		}
 
 		msgs := tx.GetMsgs()
+		hookEventsByMsgIndex, err := rpctypes.IBCEVMHookTxEventsByMsgIndex(tx, result)
+		if err != nil {
+			return stats, newBlockParseError(err, "block %d txIndex %d: failed to parse IBC EVM hook event", block.Height, txIndex)
+		}
+		hasEthTx := isEthTx(tx)
 		ethMsgIndexes := make(map[int]bool)
 		for msgIndex, msg := range msgs {
 			if _, ok := msg.(*evmtypes.MsgEthereumTx); ok {
@@ -284,7 +285,7 @@ func (kv *KVIndexer) indexBlockWithStats(block *cmtypes.Block, blockResults *cor
 			}
 		}
 
-		if !isEthTx(tx) {
+		if !hasEthTx && len(hookEventsByMsgIndex) == 0 {
 			if kv.virtualBankTransfers {
 				events := virtualbank.EventsForNonEthMessages(bankEvents, ethMsgIndexes, len(msgs))
 				if len(events) > 0 {
@@ -313,170 +314,215 @@ func (kv *KVIndexer) indexBlockWithStats(block *cmtypes.Block, blockResults *cor
 			continue
 		}
 
-		txs, err := rpctypes.ParseTxResult(result, tx)
-		if err != nil {
-			return stats, newBlockParseError(err, "block %d txIndex %d: failed to parse tx result", block.Height, txIndex)
+		var txs *rpctypes.ParsedTxs
+		if hasEthTx {
+			txs, err = rpctypes.ParseTxResult(result, tx)
+			if err != nil {
+				return stats, newBlockParseError(err, "block %d txIndex %d: failed to parse tx result", block.Height, txIndex)
+			}
 		}
 
-		var cumulativeTxEthGasUsed uint64
+		var (
+			cumulativeTxEthGasUsed uint64
+			ethMsgOrdinal          int
+		)
 		for msgIndex, msg := range msgs {
 			ethMsg, ok := msg.(*evmtypes.MsgEthereumTx)
-			if !ok {
-				// NOTE: non-evm msgs are ignored and excluded from cumulativeGasUsed.
-				continue
-			}
+			if ok {
+				currentEthMsgOrdinal := ethMsgOrdinal
+				ethMsgOrdinal++
 
-			var txHash common.Hash
-			var txReason string
-			var txVMError string
+				var txHash common.Hash
+				var txReason string
+				var txVMError string
 
-			visibleTxIndex := ethTxIndex
-			if kv.virtualBankTransfers {
-				visibleTxIndex = rpcTxIndex
-			}
+				visibleTxIndex := rpcTxIndex
 
-			txResult := chaintypes.TxResult{
-				Height:     block.Height,
-				TxIndex:    uint32(txIndex),
-				MsgIndex:   uint32(msgIndex),
-				EthTxIndex: ethTxIndex,
-			}
-			if result.Code != abci.CodeTypeOK && result.Codespace != evmtypes.ModuleName {
-				// exceeds block gas limit scenario, set gas used to gas limit because that's what's charged by ante handler.
-				// some old versions don't emit any events, so workaround here directly.
-				txResult.GasUsed = ethMsg.GetGas()
-				txResult.Failed = true
-				txHash = ethMsg.Hash()
-			} else {
-				// success or fail due to VM error
-
-				parsedTx := txs.GetTxByMsgIndex(msgIndex)
-				if parsedTx == nil {
-					return stats, newBlockParseError(nil, "block %d txIndex %d msgIndex %d: msg index not found in results", block.Height, txIndex, msgIndex)
+				txResult := chaintypes.TxResult{
+					Height:     block.Height,
+					TxIndex:    uint32(txIndex),
+					MsgIndex:   uint32(msgIndex),
+					EthTxIndex: ethTxIndex,
 				}
-				if parsedTx.EthTxIndex >= 0 && parsedTx.EthTxIndex != ethTxIndex {
-					return stats, newBlockParseError(
-						nil,
-						"block %d txIndex %d msgIndex %d: eth tx index mismatch (expected=%d found=%d)",
-						block.Height,
-						txIndex,
-						msgIndex,
-						ethTxIndex,
-						parsedTx.EthTxIndex,
-					)
+				if result.Code != abci.CodeTypeOK && result.Codespace != evmtypes.ModuleName {
+					// exceeds block gas limit scenario, set gas used to gas limit because that's what's charged by ante handler.
+					// some old versions don't emit any events, so workaround here directly.
+					txResult.GasUsed = ethMsg.GetGas()
+					txResult.Failed = true
+					txHash = ethMsg.Hash()
+				} else {
+					// success or fail due to VM error
+
+					parsedTx := txs.GetTxByMsgIndex(currentEthMsgOrdinal)
+					if parsedTx == nil {
+						return stats, newBlockParseError(nil, "block %d txIndex %d msgIndex %d: msg index not found in results", block.Height, txIndex, msgIndex)
+					}
+					if parsedTx.EthTxIndex >= 0 && parsedTx.EthTxIndex != nativeEthTxIndex {
+						return stats, newBlockParseError(
+							nil,
+							"block %d txIndex %d msgIndex %d: eth tx index mismatch (expected=%d found=%d)",
+							block.Height,
+							txIndex,
+							msgIndex,
+							nativeEthTxIndex,
+							parsedTx.EthTxIndex,
+						)
+					}
+					txResult.GasUsed = parsedTx.GasUsed
+					txResult.Failed = parsedTx.Failed
+					txHash = parsedTx.Hash
+					txReason = parsedTx.Reason
+					txVMError = parsedTx.VMError
 				}
-				txResult.GasUsed = parsedTx.GasUsed
-				txResult.Failed = parsedTx.Failed
-				txHash = parsedTx.Hash
-				txReason = parsedTx.Reason
-				txVMError = parsedTx.VMError
-			}
 
-			cumulativeTxEthGasUsed += txResult.GasUsed
-			txResult.CumulativeGasUsed = cumulativeTxEthGasUsed
+				cumulativeTxEthGasUsed += txResult.GasUsed
+				txResult.CumulativeGasUsed = cumulativeTxEthGasUsed
 
-			if err := saveTxResult(kv.clientCtx.Codec, batch, txHash, &txResult); err != nil {
-				return stats, errorsmod.Wrapf(err, "IndexBlock %d", block.Height)
-			}
-
-			txData := ethMsg.AsTransaction()
-			if txData == nil {
-				return stats, newBlockParseError(nil, "block %d txIndex %d msgIndex %d: failed to unpack eth tx data", block.Height, txIndex, msgIndex)
-			}
-
-			var logs []*virtualbank.RPCLog
-			if len(result.Data) > 0 {
-				evmLogs, err := evmtypes.DecodeMsgLogs(result.Data, msgIndex, uint64(block.Height))
-				if err != nil {
-					return stats, newBlockParseError(err, "block %d txIndex %d msgIndex %d: failed to decode msg logs", block.Height, txIndex, msgIndex)
+				if err := saveTxResult(kv.clientCtx.Codec, batch, txHash, &txResult); err != nil {
+					return stats, errorsmod.Wrapf(err, "IndexBlock %d", block.Height)
 				}
-				logs = virtualbank.WrapLogs(evmLogs, false, nil)
-			} else if !txResult.Failed {
-				return stats, newBlockParseError(nil, "block %d txIndex %d msgIndex %d: missing tx response data", block.Height, txIndex, msgIndex)
-			}
 
-			if kv.virtualBankTransfers {
+				txData := ethMsg.AsTransaction()
+				if txData == nil {
+					return stats, newBlockParseError(nil, "block %d txIndex %d msgIndex %d: failed to unpack eth tx data", block.Height, txIndex, msgIndex)
+				}
+
+				var logs []*virtualbank.RPCLog
+				if len(result.Data) > 0 {
+					evmLogs, err := evmtypes.DecodeMsgLogs(result.Data, currentEthMsgOrdinal, uint64(block.Height))
+					if err != nil {
+						return stats, newBlockParseError(err, "block %d txIndex %d msgIndex %d: failed to decode msg logs", block.Height, txIndex, msgIndex)
+					}
+					logs = virtualbank.WrapLogs(evmLogs, false, nil)
+				} else if !txResult.Failed {
+					return stats, newBlockParseError(nil, "block %d txIndex %d msgIndex %d: missing tx response data", block.Height, txIndex, msgIndex)
+				}
+
 				virtualbank.SetLogMetadata(logs, virtualLogContext(txHash, visibleTxIndex))
 				logIndex += uint(len(logs))
 
-				events := virtualbank.EventsForMsg(bankEvents, msgIndex, len(msgs))
-				if len(events) > 0 {
-					virtualLogs, err := virtualbank.Logs(events, virtualLogContext(txHash, visibleTxIndex))
-					if err != nil {
-						return stats, newBlockParseError(err, "block %d txIndex %d msgIndex %d: failed to build virtual bank logs", block.Height, txIndex, msgIndex)
+				if kv.virtualBankTransfers {
+					events := virtualbank.EventsForMsg(bankEvents, msgIndex, len(msgs))
+					if len(events) > 0 {
+						virtualLogs, err := virtualbank.Logs(events, virtualLogContext(txHash, visibleTxIndex))
+						if err != nil {
+							return stats, newBlockParseError(err, "block %d txIndex %d msgIndex %d: failed to build virtual bank logs", block.Height, txIndex, msgIndex)
+						}
+						logIndex += uint(len(virtualLogs))
+						logs = append(logs, virtualLogs...)
 					}
-					logIndex += uint(len(virtualLogs))
-					logs = append(logs, virtualLogs...)
 				}
+
+				status := uint64(ethtypes.ReceiptStatusSuccessful)
+				if txResult.Failed {
+					status = uint64(ethtypes.ReceiptStatusFailed)
+				}
+
+				var signer ethtypes.Signer
+				if txData.Protected() {
+					signer = ethtypes.LatestSignerForChainID(txData.ChainId())
+				} else {
+					signer = ethtypes.FrontierSigner{}
+				}
+				from, err := ethMsg.GetSenderLegacy(signer)
+				if err != nil {
+					return stats, newBlockParseError(err, "block %d txIndex %d msgIndex %d txHash %s: failed to derive tx sender", block.Height, txIndex, msgIndex, txHash.Hex())
+				}
+
+				var contractAddress *common.Address
+				if txData.To() == nil {
+					addr := crypto.CreateAddress(from, txData.Nonce())
+					contractAddress = &addr
+				}
+
+				receipt := buildCachedReceipt(
+					status,
+					blockResultGasUsedBeforeTx+cumulativeTxEthGasUsed,
+					txResult.GasUsed,
+					txReason,
+					txVMError,
+					logs,
+					txHash,
+					contractAddress,
+					blockHash,
+					uint64(block.Height),
+					uint64(visibleTxIndex),
+					receiptEffectiveGasPrice(txData, blockBaseFee),
+					from,
+					txData.To(),
+					uint64(txData.Type()),
+				)
+				if err := batch.Set(ReceiptKey(txHash), mustMarshalReceipt(receipt)); err != nil {
+					return stats, errorsmod.Wrapf(err, "IndexBlock %d, set receipt", block.Height)
+				}
+
+				rpcTx, err := rpctypes.NewRPCTransaction(
+					ethMsg,
+					blockHash,
+					uint64(block.Height),
+					uint64(visibleTxIndex),
+					blockBaseFee,
+					txData.ChainId(),
+				)
+				if err != nil {
+					return stats, newBlockParseError(err, "block %d txIndex %d msgIndex %d txHash %s: failed to build rpc tx", block.Height, txIndex, msgIndex, txHash.Hex())
+				}
+				rpcTx.Hash = txHash
+				if err := batch.Set(RPCtxHashKey(txHash), mustMarshalRPCTransaction(rpcTx)); err != nil {
+					return stats, errorsmod.Wrapf(err, "IndexBlock %d, set rpc tx hash", block.Height)
+				}
+				if err := batch.Set(RPCtxIndexKey(block.Height, visibleTxIndex), txHash.Bytes()); err != nil {
+					return stats, errorsmod.Wrapf(err, "IndexBlock %d, set rpc tx index", block.Height)
+				}
+
+				appendVisibleRPCTxHash(txHash)
+				appendLogGroup(logs)
+				stats.IndexedEthTxs++
+				nativeEthTxIndex++
+				ethTxIndex++
+				rpcTxIndex++
 			}
 
-			status := uint64(ethtypes.ReceiptStatusSuccessful)
-			if txResult.Failed {
-				status = uint64(ethtypes.ReceiptStatusFailed)
-			}
+			for _, event := range hookEventsByMsgIndex[msgIndex] {
+				if event.GetResponse() == nil {
+					return stats, newBlockParseError(nil, "block %d txIndex %d msgIndex %d: IBC EVM hook event has no response", block.Height, txIndex, msgIndex)
+				}
 
-			var signer ethtypes.Signer
-			if txData.Protected() {
-				signer = ethtypes.LatestSignerForChainID(txData.ChainId())
-			} else {
-				signer = ethtypes.FrontierSigner{}
-			}
-			from, err := ethMsg.GetSenderLegacy(signer)
-			if err != nil {
-				return stats, newBlockParseError(err, "block %d txIndex %d msgIndex %d txHash %s: failed to derive tx sender", block.Height, txIndex, msgIndex, txHash.Hex())
-			}
+				txHash := common.HexToHash(event.Response.Hash)
+				hookLogs := rpctypes.IBCEVMHookLogs(event, uint64(block.Height), blockHash, uint64(rpcTxIndex), logIndex)
+				logs := virtualbank.WrapLogs(hookLogs, false, nil)
+				logIndex += uint(len(logs))
+				cumulativeTxEthGasUsed += event.Response.GasUsed
 
-			var contractAddress *common.Address
-			if txData.To() == nil {
-				addr := crypto.CreateAddress(from, txData.Nonce())
-				contractAddress = &addr
+				txResult := chaintypes.TxResult{
+					Height:            block.Height,
+					TxIndex:           uint32(txIndex),
+					MsgIndex:          uint32(msgIndex),
+					EthTxIndex:        ethTxIndex,
+					GasUsed:           event.Response.GasUsed,
+					CumulativeGasUsed: cumulativeTxEthGasUsed,
+					Failed:            event.Response.Failed(),
+				}
+				if err := saveTxResult(kv.clientCtx.Codec, batch, txHash, &txResult); err != nil {
+					return stats, errorsmod.Wrapf(err, "IndexBlock %d", block.Height)
+				}
+				if err := kv.saveIBCEVMHookRPCTransaction(
+					batch,
+					block.Height,
+					rpcTxIndex,
+					event,
+					blockHash,
+					blockResultGasUsedBeforeTx+cumulativeTxEthGasUsed,
+					logs,
+				); err != nil {
+					return stats, errorsmod.Wrapf(err, "IndexBlock %d", block.Height)
+				}
+				appendVisibleRPCTxHash(txHash)
+				appendLogGroup(logs)
+				stats.IndexedEthTxs++
+				ethTxIndex++
+				rpcTxIndex++
 			}
-
-			receipt := buildCachedReceipt(
-				status,
-				blockResultGasUsedBeforeTx+cumulativeTxEthGasUsed,
-				txResult.GasUsed,
-				txReason,
-				txVMError,
-				logs,
-				txHash,
-				contractAddress,
-				blockHash,
-				uint64(block.Height),
-				uint64(visibleTxIndex),
-				receiptEffectiveGasPrice(txData, blockBaseFee),
-				from,
-				txData.To(),
-				uint64(txData.Type()),
-			)
-			if err := batch.Set(ReceiptKey(txHash), mustMarshalReceipt(receipt)); err != nil {
-				return stats, errorsmod.Wrapf(err, "IndexBlock %d, set receipt", block.Height)
-			}
-
-			rpcTx, err := rpctypes.NewRPCTransaction(
-				ethMsg,
-				blockHash,
-				uint64(block.Height),
-				uint64(visibleTxIndex),
-				blockBaseFee,
-				txData.ChainId(),
-			)
-			if err != nil {
-				return stats, newBlockParseError(err, "block %d txIndex %d msgIndex %d txHash %s: failed to build rpc tx", block.Height, txIndex, msgIndex, txHash.Hex())
-			}
-			rpcTx.Hash = txHash
-			if err := batch.Set(RPCtxHashKey(txHash), mustMarshalRPCTransaction(rpcTx)); err != nil {
-				return stats, errorsmod.Wrapf(err, "IndexBlock %d, set rpc tx hash", block.Height)
-			}
-			if err := batch.Set(RPCtxIndexKey(block.Height, visibleTxIndex), txHash.Bytes()); err != nil {
-				return stats, errorsmod.Wrapf(err, "IndexBlock %d, set rpc tx index", block.Height)
-			}
-
-			appendVisibleRPCTxHash(txHash)
-			appendLogGroup(logs)
-			stats.IndexedEthTxs++
-			ethTxIndex++
-			rpcTxIndex++
 		}
 
 		if kv.virtualBankTransfers {
@@ -529,12 +575,9 @@ func (kv *KVIndexer) indexBlockWithStats(block *cmtypes.Block, blockResults *cor
 
 	blockBloom := evmtypes.LogsBloom(virtualbank.EthLogs(flatLogs))
 	transactionsRoot := ethtypes.EmptyRootHash.Hex()
-	visibleTxCount := ethTxIndex
-	if kv.virtualBankTransfers {
-		visibleTxCount = rpcTxIndex
-	}
+	visibleTxCount := rpcTxIndex
 	if visibleTxCount > 0 {
-		if kv.virtualBankTransfers {
+		if kv.virtualBankTransfers || visibleTxCount != nativeEthTxIndex {
 			if int32(len(visibleRPCTxHashes)) != visibleTxCount {
 				return stats, newBlockParseError(
 					nil,

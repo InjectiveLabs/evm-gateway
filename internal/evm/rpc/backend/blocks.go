@@ -225,22 +225,18 @@ func (b *Backend) GetBlockTransactionCountByHash(hash common.Hash) *hexutil.Uint
 		return nil
 	}
 
-	if b.virtualBankEnabled() {
-		blockRes, err := b.TendermintBlockResultByNumber(&block.Block.Height)
-		if err != nil {
-			b.logger.Debug("block result not found", "height", block.Block.Height, "error", err.Error())
-			return nil
-		}
-		view, err := b.liveVirtualBankBlockView(block, blockRes)
-		if err != nil {
-			b.logger.Debug("virtualized block tx count failed", "height", block.Block.Height, "error", err.Error())
-			return nil
-		}
-		n := hexutil.Uint(len(view.Transactions))
-		return &n
+	blockRes, err := b.TendermintBlockResultByNumber(&block.Block.Height)
+	if err != nil {
+		b.logger.Debug("block result not found", "height", block.Block.Height, "error", err.Error())
+		return nil
 	}
-
-	return b.GetBlockTransactionCount(block)
+	view, err := b.liveVirtualBankBlockView(block, blockRes)
+	if err != nil {
+		b.logger.Debug("RPC-visible block tx count failed", "height", block.Block.Height, "error", err.Error())
+		return nil
+	}
+	n := hexutil.Uint(len(view.Transactions))
+	return &n
 }
 
 // GetBlockTransactionCountByNumber returns the number of Ethereum transactions
@@ -271,29 +267,35 @@ func (b *Backend) GetBlockTransactionCountByNumber(blockNum rpctypes.BlockNumber
 		return nil
 	}
 
-	if b.virtualBankEnabled() {
-		blockRes, err := b.TendermintBlockResultByNumber(&block.Block.Height)
-		if err != nil {
-			b.logger.Debug("block result not found", "height", block.Block.Height, "error", err.Error())
-			return nil
-		}
-		view, err := b.liveVirtualBankBlockView(block, blockRes)
-		if err != nil {
-			b.logger.Debug("virtualized block tx count failed", "height", block.Block.Height, "error", err.Error())
-			return nil
-		}
-		n := hexutil.Uint(len(view.Transactions))
-		return &n
+	blockRes, err := b.TendermintBlockResultByNumber(&block.Block.Height)
+	if err != nil {
+		b.logger.Debug("block result not found", "height", block.Block.Height, "error", err.Error())
+		return nil
 	}
-
-	return b.GetBlockTransactionCount(block)
+	view, err := b.liveVirtualBankBlockView(block, blockRes)
+	if err != nil {
+		b.logger.Debug("RPC-visible block tx count failed", "height", block.Block.Height, "error", err.Error())
+		return nil
+	}
+	n := hexutil.Uint(len(view.Transactions))
+	return &n
 }
 
 // GetBlockTransactionCount returns the number of Ethereum transactions in a
 // given block.
 func (b *Backend) GetBlockTransactionCount(block *cmrpctypes.ResultBlock) *hexutil.Uint {
-	ethMsgs := b.EthMsgsFromTendermintBlock(block)
-	n := hexutil.Uint(len(ethMsgs))
+	if block == nil || block.Block == nil {
+		return nil
+	}
+	blockRes, err := b.TendermintBlockResultByNumber(&block.Block.Height)
+	if err != nil {
+		return nil
+	}
+	view, err := b.liveVirtualBankBlockView(block, blockRes)
+	if err != nil {
+		return nil
+	}
+	n := hexutil.Uint(len(view.Transactions))
 	return &n
 }
 
@@ -605,15 +607,13 @@ func (b *Backend) BlockBloom(blockRes *cmrpctypes.ResultBlockResults) (ethtypes.
 		}
 	}
 
-	if b.virtualBankEnabled() {
-		resBlock, err := b.TendermintBlockByNumber(rpctypes.BlockNumber(blockRes.Height))
-		if err == nil && resBlock != nil && resBlock.Block != nil {
-			view, err := b.liveVirtualBankBlockView(resBlock, blockRes)
-			if err == nil {
-				return ethtypes.BytesToBloom(evmtypes.LogsBloom(virtualbank.FlattenEthLogs(view.Logs))), nil
-			}
-			b.logger.Debug("virtualized BlockBloom derivation failed", "height", blockRes.Height, "error", err.Error())
+	resBlock, err := b.TendermintBlockByNumber(rpctypes.BlockNumber(blockRes.Height))
+	if err == nil && resBlock != nil && resBlock.Block != nil {
+		view, err := b.liveVirtualBankBlockView(resBlock, blockRes)
+		if err == nil {
+			return ethtypes.BytesToBloom(evmtypes.LogsBloom(virtualbank.FlattenEthLogs(view.Logs))), nil
 		}
+		b.logger.Debug("RPC-visible BlockBloom derivation failed", "height", blockRes.Height, "error", err.Error())
 	}
 
 	for _, event := range blockRes.FinalizeBlockEvents {
@@ -673,39 +673,15 @@ func (b *Backend) RPCBlockFromTendermintBlock(
 		b.logger.Error("failed to fetch Base Fee from prunned block. Check node prunning configuration", "height", block.Height, "error", err)
 	}
 
-	if b.virtualBankEnabled() {
-		view, err := b.liveVirtualBankBlockView(resBlock, blockRes)
-		if err != nil {
-			return nil, err
-		}
-		for _, rpcTx := range view.Transactions {
-			if fullTx {
-				ethRPCTxs = append(ethRPCTxs, rpcTx)
-			} else {
-				ethRPCTxs = append(ethRPCTxs, rpcTx.Hash)
-			}
-		}
-	} else {
-		msgs := b.EthMsgsFromTendermintBlock(resBlock)
-		for txIndex, ethMsg := range msgs {
-			if !fullTx {
-				ethRPCTxs = append(ethRPCTxs, ethMsg.Hash())
-				continue
-			}
-
-			rpcTx, err := rpctypes.NewRPCTransaction(
-				ethMsg,
-				common.BytesToHash(block.Hash()),
-				uint64(block.Height),
-				uint64(txIndex),
-				baseFee,
-				b.ChainID().ToInt(),
-			)
-			if err != nil {
-				b.logger.Debug("NewTransactionFromData for receipt failed", "hash", ethMsg.Hash, "error", err.Error())
-				continue
-			}
+	view, err := b.liveVirtualBankBlockView(resBlock, blockRes)
+	if err != nil {
+		return nil, err
+	}
+	for _, rpcTx := range view.Transactions {
+		if fullTx {
 			ethRPCTxs = append(ethRPCTxs, rpcTx)
+		} else {
+			ethRPCTxs = append(ethRPCTxs, rpcTx.Hash)
 		}
 	}
 

@@ -168,22 +168,18 @@ func (b *Backend) GetLogsByHeight(height *int64) ([][]*virtualbank.RPCLog, error
 		return nil, err
 	}
 
-	if b.virtualBankEnabled() {
-		resBlock, err := b.TendermintBlockByNumber(rpctypes.BlockNumber(*height))
-		if err != nil {
-			return nil, err
-		}
-		if resBlock == nil || resBlock.Block == nil {
-			return nil, errors.Errorf("block not found for height %d", *height)
-		}
-		view, err := b.liveVirtualBankBlockView(resBlock, blockRes)
-		if err != nil {
-			return nil, err
-		}
-		return view.Logs, nil
+	resBlock, err := b.TendermintBlockByNumber(rpctypes.BlockNumber(*height))
+	if err != nil {
+		return nil, err
 	}
-
-	return GetLogsFromBlockResults(blockRes)
+	if resBlock == nil || resBlock.Block == nil {
+		return nil, errors.Errorf("block not found for height %d", *height)
+	}
+	view, err := b.liveVirtualBankBlockView(resBlock, blockRes)
+	if err != nil {
+		return nil, err
+	}
+	return view.Logs, nil
 }
 
 // GetFilteredLogsByHeight returns filtered logs for a block height using

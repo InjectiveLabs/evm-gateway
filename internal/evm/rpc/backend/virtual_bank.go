@@ -102,9 +102,8 @@ func (b *Backend) cachedReceiptMatchesVirtualization(receipt map[string]interfac
 }
 
 // liveVirtualBankBlockView builds the RPC-visible block view directly from live
-// Comet block data when Cosmos event virtualization is enabled. It merges native
-// EVM logs with synthesized x/bank logs and creates virtual transactions for
-// non-EVM Cosmos messages and begin/end block events.
+// Comet block data. IBC hook executions are always included; optional Cosmos
+// x/bank event virtualization is layered into the same ordered view.
 func (b *Backend) liveVirtualBankBlockView(
 	resBlock *cmrpctypes.ResultBlock,
 	blockRes *cmrpctypes.ResultBlockResults,
@@ -161,10 +160,45 @@ func (b *Backend) liveVirtualBankBlockView(
 		view.Receipts = append(view.Receipts, virtualReceiptMap(status, cumulativeGasUsed, gasUsed, logs, txHash, blockHashHex, blockNumber, txIndex))
 		appendLogs(logs)
 	}
+	appendHookTx := func(event *evmtypes.EventIBCEVMHookTx, logs []*virtualbank.RPCLog, cumulativeGasUsed uint64) {
+		response := event.Response
+		txHash := common.HexToHash(response.Hash)
+		status := uint64(ethtypes.ReceiptStatusSuccessful)
+		if response.Failed() {
+			status = uint64(ethtypes.ReceiptStatusFailed)
+		}
+		to := common.HexToAddress(event.Contract)
+		view.Transactions = append(view.Transactions, rpctypes.NewIBCEVMHookRPCTransaction(
+			event,
+			blockHash,
+			blockNumber,
+			rpcTxIndex,
+			b.ChainID().ToInt(),
+		))
+		view.Receipts = append(view.Receipts, liveReceiptMap(
+			status,
+			cumulativeGasUsed,
+			response.GasUsed,
+			logs,
+			txHash,
+			nil,
+			blockHashHex,
+			blockNumber,
+			rpcTxIndex,
+			big.NewInt(0),
+			common.HexToAddress(event.From),
+			&to,
+			uint64(ethtypes.LegacyTxType),
+		))
+		appendLogs(logs)
+	}
 
-	beginBlockEvents, endBlockEvents, err := virtualbank.SplitBlockEvents(blockRes.FinalizeBlockEvents)
-	if err != nil {
-		return nil, err
+	var beginBlockEvents, endBlockEvents []virtualbank.TransferEvent
+	if b.virtualBankEnabled() {
+		beginBlockEvents, endBlockEvents, err = virtualbank.SplitBlockEvents(blockRes.FinalizeBlockEvents)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if len(beginBlockEvents) > 0 {
 		txHash := virtualbank.BeginBlockHash(block.Height)
@@ -195,6 +229,10 @@ func (b *Backend) liveVirtualBankBlockView(
 		}
 
 		msgs := tx.GetMsgs()
+		hookEventsByMsgIndex, err := rpctypes.IBCEVMHookTxEventsByMsgIndex(tx, txResult)
+		if err != nil {
+			return nil, err
+		}
 		ethMsgIndexes := make(map[int]bool)
 		for msgIndex, msg := range msgs {
 			if _, ok := msg.(*evmtypes.MsgEthereumTx); ok {
@@ -202,9 +240,12 @@ func (b *Backend) liveVirtualBankBlockView(
 			}
 		}
 
-		bankEvents, err := virtualbank.ParseEvents(txResult.Events)
-		if err != nil {
-			return nil, err
+		var bankEvents []virtualbank.TransferEvent
+		if b.virtualBankEnabled() {
+			bankEvents, err = virtualbank.ParseEvents(txResult.Events)
+			if err != nil {
+				return nil, err
+			}
 		}
 
 		parsedTxs, parsedErr := rpctypes.ParseTxResult(txResult, tx)
@@ -212,121 +253,141 @@ func (b *Backend) liveVirtualBankBlockView(
 			b.logger.Warn("failed to parse tx result", "height", block.Height, "txIndex", txIndex, "error", parsedErr.Error())
 		}
 
-		var cumulativeTxEthGasUsed uint64
+		var (
+			cumulativeTxEthGasUsed uint64
+			ethMsgOrdinal          int
+		)
 		for msgIndex, msg := range msgs {
 			ethMsg, ok := msg.(*evmtypes.MsgEthereumTx)
-			if !ok {
-				continue
-			}
+			if ok {
+				currentEthMsgOrdinal := ethMsgOrdinal
+				ethMsgOrdinal++
 
-			txData := ethMsg.AsTransaction()
-			if txData == nil {
-				return nil, fmt.Errorf("failed to unpack tx data")
-			}
-
-			txHash := ethMsg.Hash()
-			txFailed := false
-			txGasUsed := ethMsg.GetGas()
-			if txResult.Code != abci.CodeTypeOK && txResult.Codespace != evmtypes.ModuleName {
-				txFailed = true
-			} else if parsedTxs != nil {
-				parsedTx := parsedTxs.GetTxByMsgIndex(msgIndex)
-				if parsedTx == nil {
-					b.logger.Warn("msg index not found in parsed tx result", "height", block.Height, "txIndex", txIndex, "msgIndex", msgIndex)
-					txFailed = txResult.Code != abci.CodeTypeOK
-				} else {
-					txHash = parsedTx.Hash
-					txGasUsed = parsedTx.GasUsed
-					txFailed = parsedTx.Failed
+				txData := ethMsg.AsTransaction()
+				if txData == nil {
+					return nil, fmt.Errorf("failed to unpack tx data")
 				}
-			}
 
-			cumulativeTxEthGasUsed += txGasUsed
+				txHash := ethMsg.Hash()
+				txFailed := false
+				txGasUsed := ethMsg.GetGas()
+				if txResult.Code != abci.CodeTypeOK && txResult.Codespace != evmtypes.ModuleName {
+					txFailed = true
+				} else if parsedTxs != nil {
+					parsedTx := parsedTxs.GetTxByMsgIndex(currentEthMsgOrdinal)
+					if parsedTx == nil {
+						b.logger.Warn("msg index not found in parsed tx result", "height", block.Height, "txIndex", txIndex, "msgIndex", msgIndex)
+						txFailed = txResult.Code != abci.CodeTypeOK
+					} else {
+						txHash = parsedTx.Hash
+						txGasUsed = parsedTx.GasUsed
+						txFailed = parsedTx.Failed
+					}
+				}
 
-			evmLogs, err := evmtypes.DecodeMsgLogs(txResult.Data, msgIndex, blockNumber)
-			if err != nil {
-				b.logger.Warn("failed to parse logs", "hash", txHash, "error", err.Error())
-			}
-			logs := virtualbank.WrapLogs(evmLogs, false, nil)
-			virtualbank.SetLogMetadata(logs, virtualLogContext(txHash, rpcTxIndex))
-			logIndex += uint(len(logs))
+				cumulativeTxEthGasUsed += txGasUsed
 
-			events := virtualbank.EventsForMsg(bankEvents, msgIndex, len(msgs))
-			if len(events) > 0 {
-				virtualLogs, err := virtualbank.Logs(events, virtualLogContext(txHash, rpcTxIndex))
+				evmLogs, err := evmtypes.DecodeMsgLogs(txResult.Data, currentEthMsgOrdinal, blockNumber)
+				if err != nil {
+					b.logger.Warn("failed to parse logs", "hash", txHash, "error", err.Error())
+				}
+				logs := virtualbank.WrapLogs(evmLogs, false, nil)
+				virtualbank.SetLogMetadata(logs, virtualLogContext(txHash, rpcTxIndex))
+				logIndex += uint(len(logs))
+
+				if b.virtualBankEnabled() {
+					events := virtualbank.EventsForMsg(bankEvents, msgIndex, len(msgs))
+					if len(events) > 0 {
+						virtualLogs, err := virtualbank.Logs(events, virtualLogContext(txHash, rpcTxIndex))
+						if err != nil {
+							return nil, err
+						}
+						logIndex += uint(len(virtualLogs))
+						logs = append(logs, virtualLogs...)
+					}
+				}
+
+				status := uint64(ethtypes.ReceiptStatusSuccessful)
+				if txFailed {
+					status = uint64(ethtypes.ReceiptStatusFailed)
+				}
+
+				var signer ethtypes.Signer
+				if txData.Protected() {
+					signer = ethtypes.LatestSignerForChainID(txData.ChainId())
+				} else {
+					signer = ethtypes.FrontierSigner{}
+				}
+				from, err := ethMsg.GetSenderLegacy(signer)
 				if err != nil {
 					return nil, err
 				}
-				logIndex += uint(len(virtualLogs))
-				logs = append(logs, virtualLogs...)
+
+				var contractAddress *common.Address
+				if txData.To() == nil {
+					addr := crypto.CreateAddress(from, txData.Nonce())
+					contractAddress = &addr
+				}
+
+				rpcTx, err := rpctypes.NewRPCTransaction(ethMsg, blockHash, blockNumber, rpcTxIndex, baseFee, b.ChainID().ToInt())
+				if err != nil {
+					return nil, err
+				}
+				rpcTx.Hash = txHash
+				view.Transactions = append(view.Transactions, rpcTx)
+				view.Receipts = append(view.Receipts, liveReceiptMap(
+					status,
+					blockResultGasUsedBeforeTx+cumulativeTxEthGasUsed,
+					txGasUsed,
+					logs,
+					txHash,
+					contractAddress,
+					blockHashHex,
+					blockNumber,
+					rpcTxIndex,
+					effectiveGasPrice(txData, baseFee),
+					from,
+					txData.To(),
+					uint64(txData.Type()),
+				))
+				appendLogs(logs)
+
+				rpcTxIndex++
 			}
 
-			status := uint64(ethtypes.ReceiptStatusSuccessful)
-			if txFailed {
-				status = uint64(ethtypes.ReceiptStatusFailed)
+			for _, event := range hookEventsByMsgIndex[msgIndex] {
+				if event.GetResponse() == nil {
+					return nil, fmt.Errorf("IBC EVM hook event has no response at height %d tx %d msg %d", block.Height, txIndex, msgIndex)
+				}
+				hookLogs := rpctypes.IBCEVMHookLogs(event, blockNumber, blockHash, rpcTxIndex, logIndex)
+				logs := virtualbank.WrapLogs(hookLogs, false, nil)
+				logIndex += uint(len(logs))
+				cumulativeTxEthGasUsed += event.Response.GasUsed
+				appendHookTx(event, logs, blockResultGasUsedBeforeTx+cumulativeTxEthGasUsed)
+				rpcTxIndex++
 			}
-
-			var signer ethtypes.Signer
-			if txData.Protected() {
-				signer = ethtypes.LatestSignerForChainID(txData.ChainId())
-			} else {
-				signer = ethtypes.FrontierSigner{}
-			}
-			from, err := ethMsg.GetSenderLegacy(signer)
-			if err != nil {
-				return nil, err
-			}
-
-			var contractAddress *common.Address
-			if txData.To() == nil {
-				addr := crypto.CreateAddress(from, txData.Nonce())
-				contractAddress = &addr
-			}
-
-			rpcTx, err := rpctypes.NewRPCTransaction(ethMsg, blockHash, blockNumber, rpcTxIndex, baseFee, b.ChainID().ToInt())
-			if err != nil {
-				return nil, err
-			}
-			rpcTx.Hash = txHash
-			view.Transactions = append(view.Transactions, rpcTx)
-			view.Receipts = append(view.Receipts, liveReceiptMap(
-				status,
-				blockResultGasUsedBeforeTx+cumulativeTxEthGasUsed,
-				txGasUsed,
-				logs,
-				txHash,
-				contractAddress,
-				blockHashHex,
-				blockNumber,
-				rpcTxIndex,
-				effectiveGasPrice(txData, baseFee),
-				from,
-				txData.To(),
-				uint64(txData.Type()),
-			))
-			appendLogs(logs)
-
-			rpcTxIndex++
 		}
 
-		events := virtualbank.EventsForNonEthMessages(bankEvents, ethMsgIndexes, len(msgs))
-		if len(events) > 0 {
-			cosmosHash := virtualbank.OriginalCosmosTxHash(txBz)
-			txHash := virtualbank.CosmosTxHash(txBz)
-			ctx := virtualLogContext(txHash, rpcTxIndex)
-			ctx.CosmosHash = &cosmosHash
-			logs, err := virtualbank.Logs(events, ctx)
-			if err != nil {
-				return nil, err
-			}
-			logIndex += uint(len(logs))
+		if b.virtualBankEnabled() {
+			events := virtualbank.EventsForNonEthMessages(bankEvents, ethMsgIndexes, len(msgs))
+			if len(events) > 0 {
+				cosmosHash := virtualbank.OriginalCosmosTxHash(txBz)
+				txHash := virtualbank.CosmosTxHash(txBz)
+				ctx := virtualLogContext(txHash, rpcTxIndex)
+				ctx.CosmosHash = &cosmosHash
+				logs, err := virtualbank.Logs(events, ctx)
+				if err != nil {
+					return nil, err
+				}
+				logIndex += uint(len(logs))
 
-			status := uint64(ethtypes.ReceiptStatusSuccessful)
-			if txResult.Code != abci.CodeTypeOK {
-				status = uint64(ethtypes.ReceiptStatusFailed)
+				status := uint64(ethtypes.ReceiptStatusSuccessful)
+				if txResult.Code != abci.CodeTypeOK {
+					status = uint64(ethtypes.ReceiptStatusFailed)
+				}
+				appendVirtualTx(txHash, rpcTxIndex, logs, status, resultGasUsed, blockResultGasUsedBeforeTx+resultGasUsed, &cosmosHash)
+				rpcTxIndex++
 			}
-			appendVirtualTx(txHash, rpcTxIndex, logs, status, resultGasUsed, blockResultGasUsedBeforeTx+resultGasUsed, &cosmosHash)
-			rpcTxIndex++
 		}
 
 		blockResultGasUsedBeforeTx += resultGasUsed
