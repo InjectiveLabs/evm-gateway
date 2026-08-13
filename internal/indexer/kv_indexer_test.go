@@ -17,8 +17,6 @@ import (
 	"github.com/cosmos/cosmos-sdk/types/tx/signing"
 	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
 	gogoproto "github.com/cosmos/gogoproto/proto"
-	clienttypes "github.com/cosmos/ibc-go/v8/modules/core/02-client/types"
-	channeltypes "github.com/cosmos/ibc-go/v8/modules/core/04-channel/types"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
@@ -458,103 +456,6 @@ func TestKVIndexerKeepsEthTxIndexEVMOrdinalWhenVirtualTransfersShiftRPCIndex(t *
 	receiptIndex, ok := receipt["transactionIndex"].(hexutil.Uint64)
 	if !ok || uint64(receiptIndex) != 1 {
 		t.Fatalf("unexpected receipt transaction index: got %#v want 1", receipt["transactionIndex"])
-	}
-}
-
-func TestKVIndexerIndexesIBCEVMHookAsRPCTransaction(t *testing.T) {
-	db := dbm.NewMemDB()
-	height := int64(12)
-	chainID := big.NewInt(1337)
-	packet := channeltypes.NewPacket(
-		[]byte(`{"amount":"1000"}`),
-		7,
-		"transfer",
-		"channel-0",
-		"transfer",
-		"channel-1",
-		clienttypes.NewHeight(1, 100),
-		0,
-	)
-	recvMsg := channeltypes.NewMsgRecvPacket(packet, []byte{1}, clienttypes.NewHeight(1, 99), "inj1relayer")
-	decodedTx := testSDKTx{msgs: []sdk.Msg{recvMsg}}
-
-	txHash := common.HexToHash("0x4a4bfcbcf7bdf1db3bfe3c62eeda814b6021a9a1d31b0c97992566852d958f9a")
-	contract := common.HexToAddress("0xa2dD817c2fDc3a2996f1A5174CF8f1AaED466E82")
-	from := common.HexToAddress("0x0000000000000000000000000000000000000808")
-	hookEvent := evmtypes.NewEventIBCEVMHookTx(
-		packet,
-		"cosmos1sender",
-		common.HexToAddress("0x9999"),
-		contract,
-		common.HexToAddress("0x1000"),
-		from,
-		"1000",
-		[]byte{0xde, 0xad, 0xbe, 0xef},
-		200_000,
-		&evmtypes.MsgEthereumTxResponse{
-			Hash:    txHash.Hex(),
-			GasUsed: 51_000,
-			Logs: []*evmtypes.Log{{
-				Address: contract.Hex(),
-				Topics:  []string{common.HexToHash("0x1234").Hex()},
-				Data:    []byte{0xab},
-			}},
-		},
-	)
-	sdkEvent, err := sdk.TypedEventToEvent(hookEvent)
-	if err != nil {
-		t.Fatalf("TypedEventToEvent: %v", err)
-	}
-
-	block := tmtypes.MakeBlock(height, []tmtypes.Tx{tmtypes.Tx("ibc-hook")}, nil, nil)
-	blockResults := &coretypes.ResultBlockResults{
-		Height: height,
-		TxResults: []*abci.ExecTxResult{{
-			Code:    abci.CodeTypeOK,
-			GasUsed: 51_000,
-			Events:  sdk.Events{sdkEvent}.ToABCIEvents(),
-		}},
-	}
-	kv := NewKVIndexer(
-		db,
-		testLogger(),
-		client.Context{TxConfig: testTxConfig{tx: decodedTx}},
-		WithVirtualBankTransfers(false, chainID.String()),
-	)
-
-	if err := kv.IndexBlockWithResults(block, blockResults); err != nil {
-		t.Fatalf("IndexBlockWithResults returned error: %v", err)
-	}
-
-	rpcTx, err := kv.GetRPCTransactionByHash(txHash)
-	if err != nil {
-		t.Fatalf("GetRPCTransactionByHash returned error: %v", err)
-	}
-	if rpcTx.Hash != txHash || rpcTx.From != from || rpcTx.To == nil || *rpcTx.To != contract {
-		t.Fatalf("unexpected hook RPC transaction: %#v", rpcTx)
-	}
-	if rpcTx.TransactionIndex == nil || uint64(*rpcTx.TransactionIndex) != 0 {
-		t.Fatalf("unexpected hook transaction index: %v", rpcTx.TransactionIndex)
-	}
-
-	receipt, err := kv.GetReceiptByTxHash(txHash)
-	if err != nil {
-		t.Fatalf("GetReceiptByTxHash returned error: %v", err)
-	}
-	if got := uint64(receipt["gasUsed"].(hexutil.Uint64)); got != 51_000 {
-		t.Fatalf("unexpected hook receipt gas: got %d want %d", got, 51_000)
-	}
-	logs := receipt["logs"].([]*virtualbank.RPCLog)
-	if len(logs) != 1 || logs[0].TxHash != txHash || uint64(logs[0].BlockNumber) != uint64(height) {
-		t.Fatalf("unexpected hook receipt logs: %#v", logs)
-	}
-
-	meta, err := kv.GetBlockMetaByHeight(height)
-	if err != nil {
-		t.Fatalf("GetBlockMetaByHeight returned error: %v", err)
-	}
-	if meta.EthTxCount != 1 {
-		t.Fatalf("unexpected RPC tx count: got %d want 1", meta.EthTxCount)
 	}
 }
 

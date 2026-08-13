@@ -14,8 +14,6 @@ import (
 	codectypes "github.com/cosmos/cosmos-sdk/codec/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/cosmos-sdk/types/tx/signing"
-	clienttypes "github.com/cosmos/ibc-go/v8/modules/core/02-client/types"
-	channeltypes "github.com/cosmos/ibc-go/v8/modules/core/04-channel/types"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
@@ -61,79 +59,6 @@ func TestGetBlockReceiptsDynamicFeeEffectiveGasPrice(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, receipts, 1)
 	assertEffectiveGasPrice(t, receipts[0], fixture.expectedEffectiveGasPrice, fixture.feeCap)
-}
-
-func TestLiveBlockViewIncludesIBCEVMHookWithoutBankVirtualization(t *testing.T) {
-	packet := channeltypes.NewPacket(
-		[]byte(`{"amount":"1000"}`),
-		7,
-		"transfer",
-		"channel-0",
-		"transfer",
-		"channel-1",
-		clienttypes.NewHeight(1, 100),
-		0,
-	)
-	recvMsg := channeltypes.NewMsgRecvPacket(packet, []byte{1}, clienttypes.NewHeight(1, 99), "inj1relayer")
-	decodedTx := backendReceiptTestSDKTx{msgs: []sdk.Msg{recvMsg}}
-	height := int64(12)
-	block := tmtypes.MakeBlock(height, []tmtypes.Tx{tmtypes.Tx("ibc-hook")}, nil, nil)
-	txHash := common.HexToHash("0x4a4bfcbcf7bdf1db3bfe3c62eeda814b6021a9a1d31b0c97992566852d958f9a")
-	contract := common.HexToAddress("0xa2dD817c2fDc3a2996f1A5174CF8f1AaED466E82")
-	from := common.HexToAddress("0x0000000000000000000000000000000000000808")
-	hookEvent := evmtypes.NewEventIBCEVMHookTx(
-		packet,
-		"cosmos1sender",
-		common.HexToAddress("0x9999"),
-		contract,
-		common.HexToAddress("0x1000"),
-		from,
-		"1000",
-		[]byte{0xde, 0xad, 0xbe, 0xef},
-		200_000,
-		&evmtypes.MsgEthereumTxResponse{
-			Hash:    txHash.Hex(),
-			GasUsed: 51_000,
-			Logs: []*evmtypes.Log{{
-				Address: contract.Hex(),
-				Topics:  []string{common.HexToHash("0x1234").Hex()},
-			}},
-		},
-	)
-	sdkEvent, err := sdk.TypedEventToEvent(hookEvent)
-	require.NoError(t, err)
-	blockResults := &cmrpctypes.ResultBlockResults{
-		Height: height,
-		TxResults: []*abci.ExecTxResult{{
-			Code:    abci.CodeTypeOK,
-			GasUsed: 51_000,
-			Events:  sdk.Events{sdkEvent}.ToABCIEvents(),
-		}},
-	}
-
-	b := NewBackend(
-		backendTestLogger(),
-		appconfig.Config{EVMChainID: "1337", VirtualizeCosmosEvents: false},
-		client.Context{TxConfig: backendReceiptTestTxConfig{tx: decodedTx}},
-		client.Context{},
-		false,
-		nil,
-		nil,
-	)
-	b.queryClient = &rpctypes.QueryClient{TxFeesQueryClient: backendTestTxFeesQueryClient{err: errors.New("query unavailable")}}
-
-	view, err := b.liveVirtualBankBlockView(&cmrpctypes.ResultBlock{Block: block}, blockResults)
-	require.NoError(t, err)
-	require.Len(t, view.Transactions, 1)
-	require.Equal(t, txHash, view.Transactions[0].Hash)
-	require.Equal(t, from, view.Transactions[0].From)
-	require.NotNil(t, view.Transactions[0].To)
-	require.Equal(t, contract, *view.Transactions[0].To)
-	require.Len(t, view.Receipts, 1)
-	require.Equal(t, txHash, view.Receipts[0]["transactionHash"])
-	require.Len(t, view.Logs, 1)
-	require.Len(t, view.Logs[0], 1)
-	require.Equal(t, txHash, view.Logs[0][0].TxHash)
 }
 
 func assertEffectiveGasPrice(t *testing.T, receipt map[string]interface{}, expected *big.Int, feeCap *big.Int) {

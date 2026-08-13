@@ -2,6 +2,7 @@ package backend
 
 import (
 	"fmt"
+	"math/big"
 
 	errorsmod "cosmossdk.io/errors"
 	abci "github.com/cometbft/cometbft/abci/types"
@@ -10,6 +11,8 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
+	ethtypes "github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/pkg/errors"
 	"upd.dev/xlab/gotracer"
 
@@ -100,22 +103,65 @@ func (b *Backend) GetTransactionByHash(txHash common.Hash) (*rpctypes.RPCTransac
 		return nil, nil
 	}
 
+	tx, err := b.clientCtx.TxConfig.TxDecoder()(block.Block.Txs[res.TxIndex])
+	if err != nil {
+		return nil, err
+	}
+
+	// the `res.MsgIndex` is inferred from tx index, should be within the bound.
+	msg, ok := tx.GetMsgs()[res.MsgIndex].(*evmtypes.MsgEthereumTx)
+	if !ok {
+		return nil, errors.New("invalid ethereum tx")
+	}
+
 	blockRes, err := b.TendermintBlockResultByNumber(&block.Block.Height)
 	if err != nil {
 		b.logger.Debug("block result not found", "height", block.Block.Height, "error", err.Error())
 		return nil, nil
 	}
 
-	view, err := b.liveVirtualBankBlockView(block, blockRes)
-	if err != nil {
-		return nil, err
+	if b.virtualBankEnabled() {
+		view, err := b.liveVirtualBankBlockView(block, blockRes)
+		if err != nil {
+			return nil, err
+		}
+		for _, rpcTx := range view.Transactions {
+			if rpcTx != nil && rpcTx.Hash == txHash {
+				return rpcTx, nil
+			}
+		}
+		return nil, nil
 	}
-	for _, rpcTx := range view.Transactions {
-		if rpcTx != nil && rpcTx.Hash == txHash {
-			return rpcTx, nil
+
+	if res.EthTxIndex == -1 {
+		// Fallback to find tx index by iterating all valid eth transactions
+		msgs := b.EthMsgsFromTendermintBlock(block)
+		for i := range msgs {
+			if msgs[i].Hash() == txHash {
+				res.EthTxIndex = int32(i)
+				break
+			}
 		}
 	}
-	return nil, nil
+	// if we still unable to find the eth tx index, return error, shouldn't happen.
+	if res.EthTxIndex == -1 {
+		return nil, errors.New("can't find index of ethereum tx")
+	}
+
+	baseFee, err := b.BaseFee(blockRes)
+	if err != nil {
+		// handle the error for pruned node.
+		b.logger.Error("failed to fetch Base Fee from prunned block. Check node prunning configuration", "height", blockRes.Height, "error", err)
+	}
+
+	return rpctypes.NewTransactionFromMsg(
+		msg,
+		common.BytesToHash(block.BlockID.Hash.Bytes()),
+		uint64(res.Height),
+		uint64(res.EthTxIndex),
+		baseFee,
+		b.ChainID().ToInt(),
+	)
 }
 
 // getTransactionByHashPending find pending tx from mempool
@@ -228,21 +274,130 @@ func (b *Backend) GetTransactionReceipt(hash common.Hash) (map[string]interface{
 		return nil, nil
 	}
 
+	tx, err := b.clientCtx.TxConfig.TxDecoder()(resBlock.Block.Txs[res.TxIndex])
+	if err != nil {
+		b.logger.Warn("decoding failed", "error", err.Error())
+		return nil, errors.Wrap(err, "failed to decode tx")
+	}
+	ethMsg := tx.GetMsgs()[res.MsgIndex].(*evmtypes.MsgEthereumTx)
+
+	txData := ethMsg.AsTransaction()
+	if txData == nil {
+		b.logger.Error("failed to unpack tx data")
+		return nil, err
+	}
+
+	cumulativeGasUsed := uint64(0)
 	blockRes, err := b.TendermintBlockResultByNumber(&res.Height)
 	if err != nil {
 		b.logger.Warn("failed to retrieve block results", "height", res.Height, "error", err.Error())
 		return nil, nil
 	}
-	view, err := b.liveVirtualBankBlockView(resBlock, blockRes)
+	if b.virtualBankEnabled() {
+		view, err := b.liveVirtualBankBlockView(resBlock, blockRes)
+		if err != nil {
+			return nil, err
+		}
+		for _, receipt := range view.Receipts {
+			if receiptHash, ok := receipt["transactionHash"].(common.Hash); ok && receiptHash == hash {
+				return receipt, nil
+			}
+		}
+		return nil, nil
+	}
+	normalizedTxResults, err := rpctypes.NormalizeTxResponseIndexes(blockRes.TxResults)
+	if err != nil {
+		b.logger.Warn("failed to normalize tx response indexes", "height", res.Height, "error", err.Error())
+		normalizedTxResults = blockRes.TxResults
+	}
+	for _, txResult := range blockRes.TxResults[0:res.TxIndex] {
+		cumulativeGasUsed += uint64(txResult.GasUsed)
+	}
+	cumulativeGasUsed += res.CumulativeGasUsed
+
+	var status hexutil.Uint
+	if res.Failed {
+		status = hexutil.Uint(ethtypes.ReceiptStatusFailed)
+	} else {
+		status = hexutil.Uint(ethtypes.ReceiptStatusSuccessful)
+	}
+
+	from, err := ethMsg.GetSenderLegacy(ethtypes.LatestSignerForChainID(b.ChainID().ToInt()))
 	if err != nil {
 		return nil, err
 	}
-	for _, receipt := range view.Receipts {
-		if receiptHash, ok := receipt["transactionHash"].(common.Hash); ok && receiptHash == hash {
-			return receipt, nil
+
+	// parse tx logs from events
+	logs, err := evmtypes.DecodeMsgLogs(
+		normalizedTxResults[res.TxIndex].Data,
+		int(res.MsgIndex),
+		uint64(blockRes.Height),
+	)
+	if err != nil {
+		b.logger.Warn("failed to parse logs", "hash", hash, "error", err.Error())
+	}
+
+	if res.EthTxIndex == -1 {
+		// Fallback to find tx index by iterating all valid eth transactions
+		msgs := b.EthMsgsFromTendermintBlock(resBlock)
+		for i := range msgs {
+			if msgs[i].Hash() == hash {
+				res.EthTxIndex = int32(i)
+				break
+			}
 		}
 	}
-	return nil, nil
+	// return error if still unable to find the eth tx index
+	if res.EthTxIndex == -1 {
+		return nil, errors.New("can't find index of ethereum tx")
+	}
+
+	var baseFee *big.Int
+	if txData.Type() == ethtypes.DynamicFeeTxType {
+		baseFee, err = b.BaseFee(blockRes)
+		if err != nil {
+			baseFee = nil
+		}
+	}
+
+	receipt := map[string]interface{}{
+		// Consensus fields: These fields are defined by the Yellow Paper
+		"status":            status,
+		"cumulativeGasUsed": hexutil.Uint64(cumulativeGasUsed),
+		"logsBloom":         ethtypes.BytesToBloom(evmtypes.LogsBloom(logs)),
+		"logs":              logs,
+
+		// Implementation fields: These fields are added by geth when processing a transaction.
+		// They are stored in the chain database.
+		"transactionHash": hash,
+		"contractAddress": nil,
+		"gasUsed":         hexutil.Uint64(b.GetGasUsed(res, txData.Gas())),
+
+		// Inclusion information: These fields provide information about the inclusion of the
+		// transaction corresponding to this receipt.
+		"blockHash":        common.BytesToHash(resBlock.Block.Header.Hash()).Hex(),
+		"blockNumber":      hexutil.Uint64(res.Height),
+		"transactionIndex": hexutil.Uint64(res.EthTxIndex),
+
+		// https://github.com/foundry-rs/foundry/issues/7640
+		"effectiveGasPrice": (*hexutil.Big)(effectiveGasPrice(txData, baseFee)),
+
+		// sender and receiver (contract or EOA) addreses
+		"from": from,
+		"to":   txData.To(),
+		"type": hexutil.Uint(ethMsg.AsTransaction().Type()),
+	}
+
+	if logs == nil {
+		receipt["logs"] = [][]*ethtypes.Log{}
+	}
+
+	// If the ContractAddress is 20 0x0 bytes, assume it is not a contract creation
+	if txData.To() == nil {
+		receipt["contractAddress"] = crypto.CreateAddress(from, txData.Nonce())
+	}
+
+	return receipt, nil
 }
 
 // GetTransactionByBlockHashAndIndex returns the transaction identified by hash and index.
@@ -535,14 +690,62 @@ func (b *Backend) GetTransactionByBlockAndIndex(block *cmrpctypes.ResultBlock, i
 		return nil, nil
 	}
 
-	view, err := b.liveVirtualBankBlockView(block, blockRes)
+	if b.virtualBankEnabled() {
+		view, err := b.liveVirtualBankBlockView(block, blockRes)
+		if err != nil {
+			return nil, err
+		}
+		i := int(idx)
+		if i < 0 || i >= len(view.Transactions) {
+			b.logger.Warn("block txs index out of bound", "index", i)
+			return nil, nil
+		}
+		return view.Transactions[i], nil
+	}
+
+	var msg *evmtypes.MsgEthereumTx
+	// find in tx indexer
+	res, err := b.GetTxByTxIndex(block.Block.Height, uint(idx))
+	if err == nil {
+		tx, err := b.clientCtx.TxConfig.TxDecoder()(block.Block.Txs[res.TxIndex])
+		if err != nil {
+			b.logger.Warn("invalid ethereum tx", "height", block.Block.Header, "index", idx)
+			return nil, nil
+		}
+
+		var ok bool
+		// msgIndex is inferred from tx events, should be within bound.
+		msg, ok = tx.GetMsgs()[res.MsgIndex].(*evmtypes.MsgEthereumTx)
+		if !ok {
+			b.logger.Warn("invalid ethereum tx", "height", block.Block.Header, "index", idx)
+			return nil, nil
+		}
+	} else {
+		i := int(idx)
+		if i < 0 {
+			i = 0
+		}
+		ethMsgs := b.EthMsgsFromTendermintBlock(block)
+		if i >= len(ethMsgs) {
+			b.logger.Warn("block txs index out of bound", "index", i)
+			return nil, nil
+		}
+
+		msg = ethMsgs[i]
+	}
+
+	baseFee, err := b.BaseFee(blockRes)
 	if err != nil {
-		return nil, err
+		// handle the error for pruned node.
+		b.logger.Error("failed to fetch Base Fee from prunned block. Check node prunning configuration", "height", block.Block.Height, "error", err)
 	}
-	i := int(idx)
-	if i < 0 || i >= len(view.Transactions) {
-		b.logger.Warn("block txs index out of bound", "index", i)
-		return nil, nil
-	}
-	return view.Transactions[i], nil
+
+	return rpctypes.NewTransactionFromMsg(
+		msg,
+		common.BytesToHash(block.Block.Hash()),
+		uint64(block.Block.Height),
+		uint64(idx),
+		baseFee,
+		b.ChainID().ToInt(),
+	)
 }

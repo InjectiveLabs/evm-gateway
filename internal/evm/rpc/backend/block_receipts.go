@@ -2,13 +2,19 @@ package backend
 
 import (
 	"fmt"
+	"math/big"
 
+	abci "github.com/cometbft/cometbft/abci/types"
 	cmrpctypes "github.com/cometbft/cometbft/rpc/core/types"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
+	ethtypes "github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
 	"upd.dev/xlab/gotracer"
 
 	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
 	txindexer "github.com/InjectiveLabs/evm-gateway/internal/indexer"
+	evmtypes "github.com/InjectiveLabs/sdk-go/chain/evm/types"
 )
 
 // GetBlockReceipts returns all RPC-visible receipts for the provided block.
@@ -146,8 +152,9 @@ func (b *Backend) liveReceiptsBlock(blockNrOrHash rpctypes.BlockNumberOrHash) (*
 	}
 }
 
-// liveBlockReceipts builds every RPC-visible receipt from live Comet block
-// results, including IBC hook executions and optional virtual bank transactions.
+// liveBlockReceipts builds receipts from live Comet block results. When
+// virtualization is enabled, Cosmos x/bank events are synthesized into the live
+// receipt view rather than read from the indexed cache.
 func (b *Backend) liveBlockReceipts(resBlock *cmrpctypes.ResultBlock) ([]map[string]interface{}, error) {
 	if resBlock == nil || resBlock.Block == nil {
 		return nil, nil
@@ -162,9 +169,148 @@ func (b *Backend) liveBlockReceipts(resBlock *cmrpctypes.ResultBlock) ([]map[str
 		return nil, nil
 	}
 
-	view, err := b.liveVirtualBankBlockView(resBlock, blockRes)
-	if err != nil {
-		return nil, err
+	if b.virtualBankEnabled() {
+		view, err := b.liveVirtualBankBlockView(resBlock, blockRes)
+		if err != nil {
+			return nil, err
+		}
+		return view.Receipts, nil
 	}
-	return view.Receipts, nil
+
+	normalizedTxResults, err := rpctypes.NormalizeTxResponseIndexes(blockRes.TxResults)
+	if err != nil {
+		b.logger.Warn("failed to normalize tx response indexes", "height", resBlock.Block.Height, "error", err.Error())
+		normalizedTxResults = blockRes.TxResults
+	}
+
+	receipts := make([]map[string]interface{}, 0)
+	signer := ethtypes.LatestSignerForChainID(b.ChainID().ToInt())
+	blockHash := common.BytesToHash(resBlock.Block.Hash()).Hex()
+	blockNumber := hexutil.Uint64(resBlock.Block.Height)
+
+	var (
+		cumulativeBlockGasUsed uint64
+		baseFee                *big.Int
+		baseFeeLoaded          bool
+	)
+	for txIndex, txBz := range resBlock.Block.Txs {
+		if txIndex >= len(normalizedTxResults) {
+			b.logger.Warn("block results shorter than tx list", "height", resBlock.Block.Height, "txIndex", txIndex)
+			break
+		}
+
+		txResult := normalizedTxResults[txIndex]
+		if txResult == nil {
+			b.logger.Warn("missing tx result entry", "height", resBlock.Block.Height, "txIndex", txIndex)
+			continue
+		}
+		resultGasUsed := uint64(txResult.GasUsed)
+
+		tx, err := b.clientCtx.TxConfig.TxDecoder()(txBz)
+		if err != nil {
+			b.logger.Warn("failed to decode tx in block", "height", resBlock.Block.Height, "txIndex", txIndex, "error", err.Error())
+			cumulativeBlockGasUsed += resultGasUsed
+			continue
+		}
+
+		parsedTxs, parsedErr := rpctypes.ParseTxResult(txResult, tx)
+		if parsedErr != nil && (txResult.Code == abci.CodeTypeOK || txResult.Codespace == evmtypes.ModuleName) {
+			b.logger.Warn("failed to parse tx result", "height", resBlock.Block.Height, "txIndex", txIndex, "error", parsedErr.Error())
+		}
+
+		var cumulativeTxEthGasUsed uint64
+		for msgIndex, msg := range tx.GetMsgs() {
+			ethMsg, ok := msg.(*evmtypes.MsgEthereumTx)
+			if !ok {
+				continue
+			}
+
+			txData := ethMsg.AsTransaction()
+			if txData == nil {
+				return nil, fmt.Errorf("failed to unpack tx data")
+			}
+
+			txHash := ethMsg.Hash()
+			txFailed := false
+			txGasUsed := ethMsg.GetGas()
+			txPosition := len(receipts)
+
+			switch {
+			case txResult.Code != abci.CodeTypeOK && txResult.Codespace != evmtypes.ModuleName:
+				txFailed = true
+			case parsedTxs == nil:
+				txFailed = txResult.Code != abci.CodeTypeOK
+			default:
+				parsedTx := parsedTxs.GetTxByMsgIndex(msgIndex)
+				if parsedTx == nil {
+					b.logger.Warn("msg index not found in parsed tx result", "height", resBlock.Block.Height, "txIndex", txIndex, "msgIndex", msgIndex)
+					txFailed = txResult.Code != abci.CodeTypeOK
+				} else {
+					txHash = parsedTx.Hash
+					txGasUsed = parsedTx.GasUsed
+					txFailed = parsedTx.Failed
+					if parsedTx.EthTxIndex >= 0 {
+						txPosition = int(parsedTx.EthTxIndex)
+					}
+				}
+			}
+
+			cumulativeTxEthGasUsed += txGasUsed
+
+			var status hexutil.Uint
+			if txFailed {
+				status = hexutil.Uint(ethtypes.ReceiptStatusFailed)
+			} else {
+				status = hexutil.Uint(ethtypes.ReceiptStatusSuccessful)
+			}
+
+			from, err := ethMsg.GetSenderLegacy(signer)
+			if err != nil {
+				return nil, err
+			}
+
+			logs, err := evmtypes.DecodeMsgLogs(txResult.Data, msgIndex, uint64(blockRes.Height))
+			if err != nil {
+				b.logger.Warn("failed to parse logs", "hash", txHash, "error", err.Error())
+			}
+
+			if txData.Type() == ethtypes.DynamicFeeTxType && !baseFeeLoaded {
+				baseFee, err = b.BaseFee(blockRes)
+				if err != nil {
+					baseFee = nil
+				}
+				baseFeeLoaded = true
+			}
+
+			receipt := map[string]interface{}{
+				"status":            status,
+				"cumulativeGasUsed": hexutil.Uint64(cumulativeBlockGasUsed + cumulativeTxEthGasUsed),
+				"logsBloom":         ethtypes.BytesToBloom(evmtypes.LogsBloom(logs)),
+				"logs":              logs,
+				"transactionHash":   txHash,
+				"contractAddress":   nil,
+				"gasUsed":           hexutil.Uint64(txGasUsed),
+				"blockHash":         blockHash,
+				"blockNumber":       blockNumber,
+				"transactionIndex":  hexutil.Uint64(txPosition),
+				"effectiveGasPrice": (*hexutil.Big)(effectiveGasPrice(txData, baseFee)),
+				"from":              from,
+				"to":                txData.To(),
+				"type":              hexutil.Uint(txData.Type()),
+			}
+
+			if logs == nil {
+				receipt["logs"] = [][]*ethtypes.Log{}
+			}
+			if txData.To() == nil {
+				receipt["contractAddress"] = crypto.CreateAddress(from, txData.Nonce())
+			}
+
+			receipts = append(receipts, receipt)
+		}
+
+		cumulativeBlockGasUsed += resultGasUsed
+	}
+
+	return receipts, nil
 }
