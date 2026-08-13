@@ -1240,10 +1240,6 @@ github.com/GoogleCloudPlatform/opentelemetry-operations-go/exporter/metric v0.48
 github.com/GoogleCloudPlatform/opentelemetry-operations-go/exporter/metric v0.48.1/go.mod h1:jyqM3eLpJ3IbIFDTKVz2rF9T/xWGW0rIriGwnz8l9Tk=
 github.com/GoogleCloudPlatform/opentelemetry-operations-go/internal/resourcemapping v0.48.1 h1:8nn+rsCvTq9axyEh382S0PFLBeaFwNsT43IrPWzctRU=
 github.com/GoogleCloudPlatform/opentelemetry-operations-go/internal/resourcemapping v0.48.1/go.mod h1:viRWSEhtMZqz1rhwmOVKkWl6SwmVowfL9O2YR5gI2PE=
-github.com/InjectiveLabs/cardano-ibc-incubator/cosmos/cardano-probabilistic-light-client-core v0.0.0-20260708114507-110e3155016b h1:3DhPtkjnwb4rpWmehfMSw/dwHAnf+1S3UMSf0bXxTBc=
-github.com/InjectiveLabs/cardano-ibc-incubator/cosmos/cardano-probabilistic-light-client-core v0.0.0-20260708114507-110e3155016b/go.mod h1:hTEvgDLEqJSuf6zZYfDcdHySo1uHjNB4LZRkWi/5MzQ=
-github.com/InjectiveLabs/cardano-ibc-incubator/cosmos/cardano-probabilistic-light-client-v8 v0.0.0-20260708114507-110e3155016b h1:Bw0QRAYu0IT56ePhDZlbzryIwbW8H0zXEIEIXn7VziM=
-github.com/InjectiveLabs/cardano-ibc-incubator/cosmos/cardano-probabilistic-light-client-v8 v0.0.0-20260708114507-110e3155016b/go.mod h1:GnzPiiBgn/muNRwWsMyoLIUmKjaqUW6gCqTPPZ+xK7k=
 github.com/InjectiveLabs/cometbft v1.0.1-inj.v1.19.0-rollback h1:otJtsxbZ0b4GMCM0ARhjlGIr9tznyqqijYsL/HydQBs=
 github.com/InjectiveLabs/cometbft v1.0.1-inj.v1.19.0-rollback/go.mod h1:GjHzF+48UzwdWUUG4uUD+e52h2L6Pq9rK4eL+oYIyBU=
 github.com/InjectiveLabs/cosmos-sdk v0.50.14-inj.10 h1:6eo8STFu88BH3tfdbXJxG+bxgo+mMpxruZ2Jgr5wQyw=
@@ -1274,14 +1270,16 @@ github.com/InjectiveLabs/go-ethereum v1.16.3-inj.3 h1:mEg/6pL2aKe/DmHRpQchbpJggi
 github.com/InjectiveLabs/go-ethereum v1.16.3-inj.3/go.mod h1:BxPa507ukrKZF+AN7exIgkrZY7etKnZY0HTD+Dh8Lsc=
 github.com/InjectiveLabs/gogoproto v1.7.2-inj.2 h1:m79pFc+EheCbZms2N0WdG0aYJjQNvEtq5uM6dNhyFSk=
 github.com/InjectiveLabs/gogoproto v1.7.2-inj.2/go.mod h1:8S7w53P1Y1cHwND64o0BnArT6RmdgIvsBuco6uTllsk=
+github.com/InjectiveLabs/hyperlane-cosmos v1.0.1-inj h1:FrfheY6aFibpFK+BRM7lcKfvZY129jeqykj17T6YGuk=
+github.com/InjectiveLabs/hyperlane-cosmos v1.0.1-inj/go.mod h1:qPRUSSE9RTnZYHsfLmXWn7GKy+VYmSAm52Ey6Gz4JSM=
 github.com/InjectiveLabs/ibc-go/modules/capability v1.0.0-inj.4 h1:icQacndGsF7spfJZog2REpeuyLi1lqjR4s4t5+Kxizw=
 github.com/InjectiveLabs/ibc-go/modules/capability v1.0.0-inj.4/go.mod h1:9yJ97Kw1qVOlg/pL21erfBlz6AxXmaXKP2d89mL9mpg=
 github.com/InjectiveLabs/ibc-go/v8 v8.7.0-inj.4 h1:dD8rgHheFaJ6UhycH0ow14X5A5hJ046IcfuNSnxNQ1Y=
 github.com/InjectiveLabs/ibc-go/v8 v8.7.0-inj.4/go.mod h1:mJcKKRy2/b8n6bikQDeaqrx1A6Wmm3GzpbrcUEUPcqU=
 github.com/InjectiveLabs/metrics/v2 v2.0.0-beta.9 h1:Cp3yVXdyDo4xW9vLZi/Rt2PGgZrONAnPyoUxmEvw/Pc=
 github.com/InjectiveLabs/metrics/v2 v2.0.0-beta.9/go.mod h1:fdW28eWh1Ace92UW2TzINdJVaVP7whCmHKkGQZHsxGI=
-github.com/InjectiveLabs/sdk-go v1.64.0-rc1.0.20260812100643-60f6cb17b6e4 h1:5bdBqs9OtWrPtJdJ+UV4Zh2LtmSWdXXfrp1NhzWc9nM=
-github.com/InjectiveLabs/sdk-go v1.64.0-rc1.0.20260812100643-60f6cb17b6e4/go.mod h1:j31NCy19lTU67ZEvbNg8YHVDrHzzrAs7zvHQ5oCW++I=
+github.com/InjectiveLabs/sdk-go v1.62.0 h1:fahwhuzXphfId5eFDts3rAW9KH352GsugGhW3uq4HEU=
+github.com/InjectiveLabs/sdk-go v1.62.0/go.mod h1:m4oykB12Fue/RiKnkNqG3tBvnPiEgyHG1QqueSHDC7A=
 github.com/InjectiveLabs/suplog v1.3.3 h1:ARIR3lWD9BxcrmqTwgcGBt8t7e10gwOqllUAXa/MfxI=
 github.com/InjectiveLabs/suplog v1.3.3/go.mod h1:+I9WRgUhzmo1V/n7IkW24kFBFB9ZTPAiXXXCogWxmTM=
 github.com/InjectiveLabs/wasmd v0.53.3-inj.3 h1:lMhBgZdPoR86wTF/uiIs6M6xGzRZ2J3MN1ZGrqojmfg=
@@ -1328,8 +1326,6 @@ github.com/bitly/go-simplejson v0.5.1 h1:xgwPbetQScXt1gh9BmoJ6j9JMr3TElvuIyjR8pg
 github.com/bitly/go-simplejson v0.5.1/go.mod h1:YOPVLzCfwK14b4Sff3oP1AmGhI9T9Vsg84etUnlyp+Q=
 github.com/bits-and-blooms/bitset v1.22.0 h1:Tquv9S8+SGaS3EhyA+up3FXzmkhxPGjQQCkcs2uw7w4=
 github.com/bits-and-blooms/bitset v1.22.0/go.mod h1:7hO7Gc7Pp1vODcmWvKMRA9BNmbv6a/7QIWpPxHddWR8=
-github.com/blinklabs-io/gouroboros v0.89.1 h1:pcD9hc2EkiPkq915aMDBAbgQZTX4I73gUzZf2UUcggs=
-github.com/blinklabs-io/gouroboros v0.89.1/go.mod h1:l6G9mwAa/p0CBGCZBjK1W67815gWrRlmcGl6fccbt4U=
 github.com/boombuler/barcode v1.0.0/go.mod h1:paBWMcWSl3LHKBqUq+rly7CNSldXjb2rDl3JlRe0mD8=
 github.com/boombuler/barcode v1.0.1/go.mod h1:paBWMcWSl3LHKBqUq+rly7CNSldXjb2rDl3JlRe0mD8=
 github.com/btcsuite/btcd v0.20.1-beta/go.mod h1:wVuoA8VJLEcwgqHBwHmzLRazpKxTv13Px/pDuV7OomQ=
@@ -1543,8 +1539,6 @@ github.com/fsnotify/fsnotify v1.4.7/go.mod h1:jwhsz4b93w/PPRr/qN1Yymfu8t87LnFCMo
 github.com/fsnotify/fsnotify v1.4.9/go.mod h1:znqG4EE+3YCdAaPaxE2ZRY/06pZUdp0tY4IgpuI1SZQ=
 github.com/fsnotify/fsnotify v1.9.0 h1:2Ml+OJNzbYCTzsxtv8vKSFD9PbJjmhYF14k/jKC7S9k=
 github.com/fsnotify/fsnotify v1.9.0/go.mod h1:8jBTzvmWwFyi3Pb8djgCCO5IBqzKJ/Jwo8TRcHyHii0=
-github.com/fxamacker/cbor/v2 v2.7.0 h1:iM5WgngdRBanHcxugY4JySA0nk1wZorNOpTgCMedv5E=
-github.com/fxamacker/cbor/v2 v2.7.0/go.mod h1:pxXPTn3joSm21Gbwsv0w9OSA2y1HFR9qXEeXQVeNoDQ=
 github.com/getsentry/sentry-go v0.31.1 h1:ELVc0h7gwyhnXHDouXkhqTFSO5oslsRDk0++eyE0KJ4=
 github.com/getsentry/sentry-go v0.31.1/go.mod h1:CYNcMMz73YigoHljQRG+qPF+eMq8gG72XcGN/p71BAY=
 github.com/ghodss/yaml v1.0.0/go.mod h1:4dBDuWmgqj2HViK6kFavaiC9ZROes6MMH2rRYeMEF04=
@@ -1823,8 +1817,6 @@ github.com/jessevdk/go-flags v0.0.0-20141203071132-1679536dcc89/go.mod h1:4FA24M
 github.com/jessevdk/go-flags v1.4.0/go.mod h1:4FA24M0QyGHXBuZZK/XkWh8h0e1EYbRYJSGM75WSRxI=
 github.com/jhump/protoreflect v1.15.3 h1:6SFRuqU45u9hIZPJAoZ8c28T3nK64BNdp9w6jFonzls=
 github.com/jhump/protoreflect v1.15.3/go.mod h1:4ORHmSBmlCW8fh3xHmJMGyul1zNqZK4Elxc8qKP+p1k=
-github.com/jinzhu/copier v0.4.0 h1:w3ciUoD19shMCRargcpm0cm91ytaBhDvuRpz1ODO/U8=
-github.com/jinzhu/copier v0.4.0/go.mod h1:DfbEm0FYsaqBcKcFuvmOZb218JkPGtvSHsKg8S8hyyg=
 github.com/jmespath/go-jmespath v0.0.0-20180206201540-c2b33e8439af/go.mod h1:Nht3zPeWKUH0NzdCt2Blrr5ys8VGpn0CEB0cQHVjt7k=
 github.com/jmespath/go-jmespath v0.4.0 h1:BEgLn5cpjn8UN1mAw4NjwDrS35OdebyEtFe+9YPoQUg=
 github.com/jmespath/go-jmespath v0.4.0/go.mod h1:T8mJZnbsbmF+m6zOOFylbeCJqk5+pHWvzYPziyZiYoo=
@@ -1945,6 +1937,8 @@ github.com/onsi/ginkgo v1.7.0/go.mod h1:lLunBs/Ym6LB5Z9jYTR76FiuTmxDTDusOGeTQH+W
 github.com/onsi/ginkgo v1.12.1/go.mod h1:zj2OWP4+oCPe1qIXoGWkgMRwljMUYCdkwsT2108oapk=
 github.com/onsi/ginkgo v1.14.0 h1:2mOpI4JVVPBN+WQRa0WKH2eXR+Ey+uK4n7Zj0aYpIQA=
 github.com/onsi/ginkgo v1.14.0/go.mod h1:iSB4RoI2tjJc9BBv4NKIKWKya62Rps+oPG/Lv9klQyY=
+github.com/onsi/ginkgo/v2 v2.7.0 h1:/XxtEV3I3Eif/HobnVx9YmJgk8ENdRsuUmM+fLCFNow=
+github.com/onsi/ginkgo/v2 v2.7.0/go.mod h1:yjiuMwPokqY1XauOgju45q3sJt6VzQ/Fict1LFVcsAo=
 github.com/onsi/gomega v1.4.1/go.mod h1:C1qb7wdrVGGVU+Z6iS04AVkA3Q65CEZX59MT0QO5uiA=
 github.com/onsi/gomega v1.4.3/go.mod h1:ex+gbHU/CVuBBDIJjb2X0qEXbFg53c61hWP/1CpauHY=
 github.com/onsi/gomega v1.7.1/go.mod h1:XdKZgCCFLUoM/7CFJVPcG8C1xQ1AJ0vpAezJrB7JYyY=
@@ -2119,10 +2113,6 @@ github.com/twitchyliquid64/golang-asm v0.15.1 h1:SU5vSMR7hnwNxj24w34ZyCi/FmDZTkS
 github.com/twitchyliquid64/golang-asm v0.15.1/go.mod h1:a1lVb/DtPvCB8fslRZhAngC2+aY1QWCk3Cedj/Gdt08=
 github.com/ulikunitz/xz v0.5.11 h1:kpFauv27b6ynzBNT/Xy+1k+fK4WswhN/6PN5WhFAGw8=
 github.com/ulikunitz/xz v0.5.11/go.mod h1:nbz6k7qbPmH4IRqmfOplQw/tblSgqTqBwxkY0oWt/14=
-github.com/utxorpc/go-codegen v0.5.1 h1:Xhq3CdWAQEJgi46Naq7epeO4G5EyGApP38yNxMCqCbY=
-github.com/utxorpc/go-codegen v0.5.1/go.mod h1:sEfglXN19j3cq0qQvb2NS4IcxUSrK1crYXbsVf11SGM=
-github.com/x448/float16 v0.8.4 h1:qLwI1I70+NjRFUR3zs1JPUCgaCXSh3SW62uAKT1mSBM=
-github.com/x448/float16 v0.8.4/go.mod h1:14CWIYCyZA/cWjXOioeEpHeN/83MdbZDRQHoFcYsOfg=
 github.com/yuin/goldmark v1.1.25/go.mod h1:3hX8gzYuyVAZsxl0MRgGTJEmQBFcNTphYh9decYSb74=
 github.com/yuin/goldmark v1.1.27/go.mod h1:3hX8gzYuyVAZsxl0MRgGTJEmQBFcNTphYh9decYSb74=
 github.com/yuin/goldmark v1.1.32/go.mod h1:3hX8gzYuyVAZsxl0MRgGTJEmQBFcNTphYh9decYSb74=
