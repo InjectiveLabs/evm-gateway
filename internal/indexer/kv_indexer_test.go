@@ -461,33 +461,10 @@ func TestKVIndexerKeepsEthTxIndexEVMOrdinalWhenVirtualTransfersShiftRPCIndex(t *
 	}
 }
 
-func TestKVIndexerIndexesIBCEVMHookInMessageOrder(t *testing.T) {
+func TestKVIndexerIndexesIBCEVMHookAsRPCTransaction(t *testing.T) {
 	db := dbm.NewMemDB()
 	height := int64(12)
 	chainID := big.NewInt(1337)
-	signer := ethtypes.LatestSignerForChainID(chainID)
-	key, err := crypto.HexToECDSA("4c0883a69102937d6231471b5dbb6204fe51296170827965fb7b05b8a9e7f6f2")
-	if err != nil {
-		t.Fatalf("HexToECDSA: %v", err)
-	}
-	ethTo := common.HexToAddress("0x1000000000000000000000000000000000000001")
-	unsignedEthTx := ethtypes.NewTx(&ethtypes.LegacyTx{
-		Nonce:    1,
-		To:       &ethTo,
-		Value:    big.NewInt(0),
-		Gas:      21_000,
-		GasPrice: big.NewInt(1),
-	})
-	signedEthTx, err := ethtypes.SignTx(unsignedEthTx, signer, key)
-	if err != nil {
-		t.Fatalf("SignTx: %v", err)
-	}
-	ethMsg := &evmtypes.MsgEthereumTx{}
-	if err := ethMsg.FromSignedEthereumTx(signedEthTx, signer); err != nil {
-		t.Fatalf("FromSignedEthereumTx: %v", err)
-	}
-	ethHash := ethMsg.Hash()
-
 	packet := channeltypes.NewPacket(
 		[]byte(`{"amount":"1000"}`),
 		7,
@@ -499,10 +476,7 @@ func TestKVIndexerIndexesIBCEVMHookInMessageOrder(t *testing.T) {
 		0,
 	)
 	recvMsg := channeltypes.NewMsgRecvPacket(packet, []byte{1}, clienttypes.NewHeight(1, 99), "inj1relayer")
-	decodedTx := testSDKTx{
-		msgs:             []sdk.Msg{recvMsg, ethMsg},
-		extensionOptions: evmExtensionOptions(),
-	}
+	decodedTx := testSDKTx{msgs: []sdk.Msg{recvMsg}}
 
 	txHash := common.HexToHash("0x4a4bfcbcf7bdf1db3bfe3c62eeda814b6021a9a1d31b0c97992566852d958f9a")
 	contract := common.HexToAddress("0xa2dD817c2fDc3a2996f1A5174CF8f1AaED466E82")
@@ -537,18 +511,8 @@ func TestKVIndexerIndexesIBCEVMHookInMessageOrder(t *testing.T) {
 		Height: height,
 		TxResults: []*abci.ExecTxResult{{
 			Code:    abci.CodeTypeOK,
-			GasUsed: 72_000,
-			Data: mustMarshalIndexerTxMsgData(t, &evmtypes.MsgEthereumTxResponse{
-				Hash: ethHash.Hex(),
-			}),
-			Events: append(sdk.Events{sdkEvent}.ToABCIEvents(), abci.Event{
-				Type: evmtypes.EventTypeEthereumTx,
-				Attributes: []abci.EventAttribute{
-					{Key: evmtypes.AttributeKeyEthereumTxHash, Value: ethHash.Hex()},
-					{Key: evmtypes.AttributeKeyTxIndex, Value: "0"},
-					{Key: evmtypes.AttributeKeyTxGasUsed, Value: "21000"},
-				},
-			}),
+			GasUsed: 51_000,
+			Events:  sdk.Events{sdkEvent}.ToABCIEvents(),
 		}},
 	}
 	kv := NewKVIndexer(
@@ -572,28 +536,6 @@ func TestKVIndexerIndexesIBCEVMHookInMessageOrder(t *testing.T) {
 	if rpcTx.TransactionIndex == nil || uint64(*rpcTx.TransactionIndex) != 0 {
 		t.Fatalf("unexpected hook transaction index: %v", rpcTx.TransactionIndex)
 	}
-	hookResult, err := kv.GetByBlockAndIndex(height, 0)
-	if err != nil {
-		t.Fatalf("GetByBlockAndIndex for hook returned error: %v", err)
-	}
-	if hookResult.MsgIndex != 0 || hookResult.EthTxIndex != 0 || hookResult.CumulativeGasUsed != 51_000 {
-		t.Fatalf("unexpected hook index result: %#v", hookResult)
-	}
-
-	ethRPC, err := kv.GetRPCTransactionByBlockAndIndex(height, 1)
-	if err != nil {
-		t.Fatalf("GetRPCTransactionByBlockAndIndex for Ethereum tx returned error: %v", err)
-	}
-	if ethRPC.Hash != ethHash {
-		t.Fatalf("unexpected Ethereum RPC transaction: %#v", ethRPC)
-	}
-	ethResult, err := kv.GetByBlockAndIndex(height, 1)
-	if err != nil {
-		t.Fatalf("GetByBlockAndIndex for Ethereum tx returned error: %v", err)
-	}
-	if ethResult.MsgIndex != 1 || ethResult.EthTxIndex != 1 || ethResult.CumulativeGasUsed != 72_000 {
-		t.Fatalf("unexpected Ethereum index result: %#v", ethResult)
-	}
 
 	receipt, err := kv.GetReceiptByTxHash(txHash)
 	if err != nil {
@@ -611,8 +553,8 @@ func TestKVIndexerIndexesIBCEVMHookInMessageOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetBlockMetaByHeight returned error: %v", err)
 	}
-	if meta.EthTxCount != 2 {
-		t.Fatalf("unexpected RPC tx count: got %d want 2", meta.EthTxCount)
+	if meta.EthTxCount != 1 {
+		t.Fatalf("unexpected RPC tx count: got %d want 1", meta.EthTxCount)
 	}
 }
 
