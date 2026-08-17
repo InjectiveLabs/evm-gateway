@@ -24,7 +24,7 @@ import (
 	"upd.dev/xlab/gotracer"
 
 	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
-	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtualbank"
+	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtual"
 	evmtypes "github.com/InjectiveLabs/sdk-go/chain/evm/types"
 	chaintypes "github.com/InjectiveLabs/sdk-go/chain/types"
 )
@@ -48,11 +48,11 @@ func WithCachedBlockGasLimit(gasLimit uint64) KVIndexerOption {
 	}
 }
 
-// WithVirtualBankTransfers controls whether the indexer materializes Cosmos
-// x/bank events as virtual Ethereum logs, receipts, and RPC transactions.
-func WithVirtualBankTransfers(enabled bool, chainID string) KVIndexerOption {
+// WithVirtualCosmosEvents controls whether the indexer materializes supported
+// Cosmos events as virtual Ethereum logs, receipts, and RPC transactions.
+func WithVirtualCosmosEvents(enabled bool, chainID string) KVIndexerOption {
 	return func(kv *KVIndexer) {
-		kv.virtualBankTransfers = enabled
+		kv.virtualizationEnabled = enabled
 		if !enabled {
 			return
 		}
@@ -68,14 +68,14 @@ func WithVirtualBankTransfers(enabled bool, chainID string) KVIndexerOption {
 
 // KVIndexer implements a eth tx indexer on a KV db.
 type KVIndexer struct {
-	ctx                  context.Context
-	db                   dbm.DB
-	logger               *slog.Logger
-	clientCtx            client.Context
-	cachedGasLimit       uint64
-	virtualBankTransfers bool
-	virtualChainID       *big.Int
-	baseTraceTags        gotracer.Tags
+	ctx                   context.Context
+	db                    dbm.DB
+	logger                *slog.Logger
+	clientCtx             client.Context
+	cachedGasLimit        uint64
+	virtualizationEnabled bool
+	virtualChainID        *big.Int
+	baseTraceTags         gotracer.Tags
 }
 
 // NewKVIndexer creates the KVIndexer
@@ -162,8 +162,8 @@ func (kv *KVIndexer) indexBlockWithStats(block *cmtypes.Block, blockResults *cor
 	}
 
 	blockHash := common.BytesToHash(block.Hash())
-	flatLogs := make([]*virtualbank.RPCLog, 0)
-	blockLogs := make([][]*virtualbank.RPCLog, 0)
+	flatLogs := make([]*virtual.RPCLog, 0)
+	blockLogs := make([][]*virtual.RPCLog, 0)
 	var logIndex uint
 	blockGasUsed := uint64(0)
 	blockResultGasUsedBeforeTx := uint64(0)
@@ -181,17 +181,18 @@ func (kv *KVIndexer) indexBlockWithStats(block *cmtypes.Block, blockResults *cor
 	var ethTxIndex int32
 	var rpcTxIndex int32
 	visibleRPCTxHashes := make([]common.Hash, 0)
-	appendLogGroup := func(logs []*virtualbank.RPCLog) {
+	appendLogGroup := func(logs []*virtual.RPCLog) {
 		blockLogs = append(blockLogs, logs)
 		flatLogs = append(flatLogs, logs...)
 	}
 	appendVisibleRPCTxHash := func(txHash common.Hash) {
-		if kv.virtualBankTransfers {
+		if kv.virtualizationEnabled {
 			visibleRPCTxHashes = append(visibleRPCTxHashes, txHash)
 		}
 	}
-	virtualLogContext := func(txHash common.Hash, txIndex int32) virtualbank.LogContext {
-		return virtualbank.LogContext{
+
+	virtualLogContext := func(txHash common.Hash, txIndex int32) virtual.LogContext {
+		return virtual.LogContext{
 			BlockHash:     blockHash,
 			BlockNumber:   uint64(block.Height),
 			TxHash:        txHash,
@@ -199,48 +200,33 @@ func (kv *KVIndexer) indexBlockWithStats(block *cmtypes.Block, blockResults *cor
 			FirstLogIndex: logIndex,
 		}
 	}
-	storeVirtualTx := func(txHash common.Hash, txIndex int32, logs []*virtualbank.RPCLog, status uint64, gasUsed uint64, cumulativeGasUsed uint64, cosmosHash *common.Hash) error {
-		receipt := kv.buildVirtualCachedReceipt(
-			status,
-			cumulativeGasUsed,
-			gasUsed,
-			logs,
-			txHash,
-			blockHash,
-			uint64(block.Height),
-			uint64(txIndex),
-		)
-		if err := kv.saveVirtualRPCTransaction(batch, block.Height, txIndex, txHash, blockHash, receipt, cosmosHash); err != nil {
+
+	storeVirtualTx := func(tx *virtual.Tx) error {
+		if err := kv.saveVirtualTx(batch, block.Height, tx); err != nil {
 			return errorsmod.Wrapf(err, "IndexBlock %d", block.Height)
 		}
-		appendVisibleRPCTxHash(txHash)
-		appendLogGroup(logs)
+
+		appendVisibleRPCTxHash(tx.Transaction.Hash)
+		appendLogGroup(tx.Receipt.Logs)
+
 		return nil
 	}
 
-	var endBlockEvents []virtualbank.TransferEvent
-	if kv.virtualBankTransfers && blockResults != nil {
-		beginBlockEvents, parsedEndEvents, err := virtualbank.SplitBlockEvents(blockResults.FinalizeBlockEvents)
+	var endBlockEvents []*ethtypes.Log
+	if kv.virtualizationEnabled && blockResults != nil {
+		beginBlockEvents, parsedEndEvents, err := virtual.SplitBlockEvents(blockResults.FinalizeBlockEvents)
 		if err != nil {
-			return stats, newBlockParseError(err, "block %d: failed to parse finalize virtual bank events", block.Height)
+			return stats, newBlockParseError(err, "block %d: failed to parse finalize virtual events", block.Height)
 		}
+
 		endBlockEvents = parsedEndEvents
+
 		if len(beginBlockEvents) > 0 {
-			txHash := virtualbank.BeginBlockHash(block.Height)
-			logs, err := virtualbank.Logs(beginBlockEvents, virtualLogContext(txHash, rpcTxIndex))
-			if err != nil {
-				return stats, newBlockParseError(err, "block %d: failed to build begin block virtual bank logs", block.Height)
-			}
-			logIndex += uint(len(logs))
-			if err := storeVirtualTx(
-				txHash,
-				rpcTxIndex,
-				logs,
-				uint64(ethtypes.ReceiptStatusSuccessful),
-				0,
-				0,
-				nil,
-			); err != nil {
+			txHash := virtual.BeginBlockHash(block.Height)
+			tx := virtual.NewBlockTx(txHash, beginBlockEvents, virtualLogContext(txHash, rpcTxIndex), kv.virtualChainID, 0)
+
+			logIndex += uint(len(tx.Receipt.Logs))
+			if err := storeVirtualTx(tx); err != nil {
 				return stats, err
 			}
 			rpcTxIndex++
@@ -276,33 +262,35 @@ func (kv *KVIndexer) indexBlockWithStats(block *cmtypes.Block, blockResults *cor
 			}
 		}
 
-		var bankEvents []virtualbank.TransferEvent
-		if kv.virtualBankTransfers {
-			bankEvents, err = virtualbank.ParseEvents(result.Events)
+		var virtualResponse *virtual.Response
+		if kv.virtualizationEnabled {
+			virtualResponse, err = virtual.ParseResponse(result)
 			if err != nil {
-				return stats, newBlockParseError(err, "block %d txIndex %d: failed to parse virtual bank events", block.Height, txIndex)
+				return stats, newBlockParseError(err, "block %d txIndex %d: failed to parse virtual events", block.Height, txIndex)
 			}
 		}
 
 		if !isEthTx(tx) {
-			if kv.virtualBankTransfers {
-				events := virtualbank.EventsForNonEthMessages(bankEvents, ethMsgIndexes, len(msgs))
-				if len(events) > 0 {
-					cosmosHash := virtualbank.OriginalCosmosTxHash(block.Txs[txIndex])
-					txHash := virtualbank.CosmosTxHash(block.Txs[txIndex])
-					ctx := virtualLogContext(txHash, rpcTxIndex)
-					ctx.CosmosHash = &cosmosHash
-					logs, err := virtualbank.Logs(events, ctx)
-					if err != nil {
-						return stats, newBlockParseError(err, "block %d txIndex %d: failed to build virtual bank logs", block.Height, txIndex)
-					}
-					logIndex += uint(len(logs))
+			if kv.virtualizationEnabled {
+				virtualTx, err := virtualResponse.SyntheticTx(virtual.TxContext{
+					Tx:                      block.Txs[txIndex],
+					EthereumMessageIndexes:  ethMsgIndexes,
+					TotalMessages:           len(msgs),
+					BlockHash:               blockHash,
+					BlockNumber:             uint64(block.Height),
+					TxIndex:                 uint64(rpcTxIndex),
+					FirstLogIndex:           logIndex,
+					CumulativeGasUsedBefore: blockResultGasUsedBeforeTx,
+					ChainID:                 kv.virtualChainID,
+				})
+				if err != nil {
+					return stats, newBlockParseError(err, "block %d txIndex %d: failed to build virtual transaction", block.Height, txIndex)
+				}
 
-					status := uint64(ethtypes.ReceiptStatusSuccessful)
-					if result.Code != abci.CodeTypeOK {
-						status = uint64(ethtypes.ReceiptStatusFailed)
-					}
-					if err := storeVirtualTx(txHash, rpcTxIndex, logs, status, resultGasUsed, blockResultGasUsedBeforeTx+resultGasUsed, &cosmosHash); err != nil {
+				if virtualTx != nil {
+					logIndex += uint(len(virtualTx.Receipt.Logs))
+
+					if err := storeVirtualTx(virtualTx); err != nil {
 						return stats, err
 					}
 					rpcTxIndex++
@@ -331,7 +319,7 @@ func (kv *KVIndexer) indexBlockWithStats(block *cmtypes.Block, blockResults *cor
 			var txVMError string
 
 			visibleTxIndex := ethTxIndex
-			if kv.virtualBankTransfers {
+			if kv.virtualizationEnabled {
 				visibleTxIndex = rpcTxIndex
 			}
 
@@ -384,30 +372,24 @@ func (kv *KVIndexer) indexBlockWithStats(block *cmtypes.Block, blockResults *cor
 				return stats, newBlockParseError(nil, "block %d txIndex %d msgIndex %d: failed to unpack eth tx data", block.Height, txIndex, msgIndex)
 			}
 
-			var logs []*virtualbank.RPCLog
+			var logs []*virtual.RPCLog
 			if len(result.Data) > 0 {
 				evmLogs, err := evmtypes.DecodeMsgLogs(result.Data, msgIndex, uint64(block.Height))
 				if err != nil {
 					return stats, newBlockParseError(err, "block %d txIndex %d msgIndex %d: failed to decode msg logs", block.Height, txIndex, msgIndex)
 				}
-				logs = virtualbank.WrapLogs(evmLogs, false, nil)
+				logs = virtual.WrapLogs(evmLogs, false, nil)
 			} else if !txResult.Failed {
 				return stats, newBlockParseError(nil, "block %d txIndex %d msgIndex %d: missing tx response data", block.Height, txIndex, msgIndex)
 			}
 
-			if kv.virtualBankTransfers {
-				virtualbank.SetLogMetadata(logs, virtualLogContext(txHash, visibleTxIndex))
+			if kv.virtualizationEnabled {
+				virtual.SetLogMetadata(logs, virtualLogContext(txHash, visibleTxIndex))
 				logIndex += uint(len(logs))
 
-				events := virtualbank.EventsForMsg(bankEvents, msgIndex, len(msgs))
-				if len(events) > 0 {
-					virtualLogs, err := virtualbank.Logs(events, virtualLogContext(txHash, visibleTxIndex))
-					if err != nil {
-						return stats, newBlockParseError(err, "block %d txIndex %d msgIndex %d: failed to build virtual bank logs", block.Height, txIndex, msgIndex)
-					}
-					logIndex += uint(len(virtualLogs))
-					logs = append(logs, virtualLogs...)
-				}
+				virtualLogs := virtualResponse.LogsForMessage(msgIndex, len(msgs), virtualLogContext(txHash, visibleTxIndex))
+				logIndex += uint(len(virtualLogs))
+				logs = append(logs, virtualLogs...)
 			}
 
 			status := uint64(ethtypes.ReceiptStatusSuccessful)
@@ -479,23 +461,26 @@ func (kv *KVIndexer) indexBlockWithStats(block *cmtypes.Block, blockResults *cor
 			rpcTxIndex++
 		}
 
-		if kv.virtualBankTransfers {
-			events := virtualbank.EventsForNonEthMessages(bankEvents, ethMsgIndexes, len(msgs))
-			if len(events) > 0 {
-				cosmosHash := virtualbank.OriginalCosmosTxHash(block.Txs[txIndex])
-				txHash := virtualbank.CosmosTxHash(block.Txs[txIndex])
-				ctx := virtualLogContext(txHash, rpcTxIndex)
-				ctx.CosmosHash = &cosmosHash
-				logs, err := virtualbank.Logs(events, ctx)
-				if err != nil {
-					return stats, newBlockParseError(err, "block %d txIndex %d: failed to build virtual bank logs", block.Height, txIndex)
-				}
-				logIndex += uint(len(logs))
-				status := uint64(ethtypes.ReceiptStatusSuccessful)
-				if result.Code != abci.CodeTypeOK {
-					status = uint64(ethtypes.ReceiptStatusFailed)
-				}
-				if err := storeVirtualTx(txHash, rpcTxIndex, logs, status, resultGasUsed, blockResultGasUsedBeforeTx+resultGasUsed, &cosmosHash); err != nil {
+		if kv.virtualizationEnabled {
+			virtualTx, err := virtualResponse.SyntheticTx(virtual.TxContext{
+				Tx:                      block.Txs[txIndex],
+				EthereumMessageIndexes:  ethMsgIndexes,
+				TotalMessages:           len(msgs),
+				BlockHash:               blockHash,
+				BlockNumber:             uint64(block.Height),
+				TxIndex:                 uint64(rpcTxIndex),
+				FirstLogIndex:           logIndex,
+				CumulativeGasUsedBefore: blockResultGasUsedBeforeTx,
+				ChainID:                 kv.virtualChainID,
+			})
+			if err != nil {
+				return stats, newBlockParseError(err, "block %d txIndex %d: failed to build virtual transaction", block.Height, txIndex)
+			}
+
+			if virtualTx != nil {
+				logIndex += uint(len(virtualTx.Receipt.Logs))
+
+				if err := storeVirtualTx(virtualTx); err != nil {
 					return stats, err
 				}
 				rpcTxIndex++
@@ -506,35 +491,31 @@ func (kv *KVIndexer) indexBlockWithStats(block *cmtypes.Block, blockResults *cor
 		blockResultGasUsedBeforeTx += resultGasUsed
 	}
 
-	if kv.virtualBankTransfers && len(endBlockEvents) > 0 {
-		txHash := virtualbank.EndBlockHash(block.Height)
-		logs, err := virtualbank.Logs(endBlockEvents, virtualLogContext(txHash, rpcTxIndex))
-		if err != nil {
-			return stats, newBlockParseError(err, "block %d: failed to build finalize virtual bank logs", block.Height)
-		}
-		logIndex += uint(len(logs))
-		if err := storeVirtualTx(
+	if kv.virtualizationEnabled && len(endBlockEvents) > 0 {
+		txHash := virtual.EndBlockHash(block.Height)
+		tx := virtual.NewBlockTx(
 			txHash,
-			rpcTxIndex,
-			logs,
-			uint64(ethtypes.ReceiptStatusSuccessful),
-			0,
+			endBlockEvents,
+			virtualLogContext(txHash, rpcTxIndex),
+			kv.virtualChainID,
 			blockResultGasUsedBeforeTx,
-			nil,
-		); err != nil {
+		)
+
+		logIndex += uint(len(tx.Receipt.Logs))
+		if err := storeVirtualTx(tx); err != nil {
 			return stats, err
 		}
 		rpcTxIndex++
 	}
 
-	blockBloom := evmtypes.LogsBloom(virtualbank.EthLogs(flatLogs))
+	blockBloom := evmtypes.LogsBloom(virtual.EthLogs(flatLogs))
 	transactionsRoot := ethtypes.EmptyRootHash.Hex()
 	visibleTxCount := ethTxIndex
-	if kv.virtualBankTransfers {
+	if kv.virtualizationEnabled {
 		visibleTxCount = rpcTxIndex
 	}
 	if visibleTxCount > 0 {
-		if kv.virtualBankTransfers {
+		if kv.virtualizationEnabled {
 			if int32(len(visibleRPCTxHashes)) != visibleTxCount {
 				return stats, newBlockParseError(
 					nil,
@@ -564,7 +545,7 @@ func (kv *KVIndexer) indexBlockWithStats(block *cmtypes.Block, blockResults *cor
 		Bloom:                   hexutil.Encode(blockBloom),
 		TransactionsRoot:        transactionsRoot,
 		BaseFee:                 encodeOptionalBig(blockBaseFee),
-		VirtualizedCosmosEvents: kv.virtualBankTransfers,
+		VirtualizedCosmosEvents: kv.virtualizationEnabled,
 	}
 
 	if err := batch.Set(BlockMetaKey(block.Height), mustMarshalBlockMeta(meta)); err != nil {

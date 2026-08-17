@@ -153,7 +153,7 @@ func (b *Backend) liveReceiptsBlock(blockNrOrHash rpctypes.BlockNumberOrHash) (*
 }
 
 // liveBlockReceipts builds receipts from live Comet block results. When
-// virtualization is enabled, Cosmos x/bank events are synthesized into the live
+// virtualization is enabled, supported Cosmos events are synthesized into the live
 // receipt view rather than read from the indexed cache.
 func (b *Backend) liveBlockReceipts(resBlock *cmrpctypes.ResultBlock) ([]map[string]interface{}, error) {
 	if resBlock == nil || resBlock.Block == nil {
@@ -169,8 +169,8 @@ func (b *Backend) liveBlockReceipts(resBlock *cmrpctypes.ResultBlock) ([]map[str
 		return nil, nil
 	}
 
-	if b.virtualBankEnabled() {
-		view, err := b.liveVirtualBankBlockView(resBlock, blockRes)
+	if b.virtualizationEnabled() {
+		view, err := b.liveVirtualBlockView(resBlock, blockRes)
 		if err != nil {
 			return nil, err
 		}

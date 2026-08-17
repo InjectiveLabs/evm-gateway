@@ -12,23 +12,23 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 
 	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
-	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtualbank"
+	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtual"
 	evmtypes "github.com/InjectiveLabs/sdk-go/chain/evm/types"
 )
 
-type liveVirtualBankBlockView struct {
+type liveVirtualBlockView struct {
 	Transactions []*rpctypes.RPCTransaction
 	Receipts     []map[string]interface{}
-	Logs         [][]*virtualbank.RPCLog
+	Logs         [][]*virtual.RPCLog
 }
 
 type virtualRPCTransactionLookup interface {
 	IsVirtualRPCTransaction(hash common.Hash) (bool, error)
 }
 
-// virtualBankEnabled reports whether live RPC paths should synthesize Cosmos
-// x/bank events into Ethereum-compatible logs, receipts, and transactions.
-func (b *Backend) virtualBankEnabled() bool {
+// virtualizationEnabled reports whether live RPC paths should synthesize
+// supported Cosmos events into Ethereum-compatible RPC transactions.
+func (b *Backend) virtualizationEnabled() bool {
 	return b.cfg.VirtualizeCosmosEvents
 }
 
@@ -36,7 +36,7 @@ func (b *Backend) virtualBankEnabled() bool {
 // exposed under the current virtualization setting. Virtual-only transactions
 // are hidden when the backend is running in non-virtualized mode.
 func (b *Backend) cachedTransactionVisible(hash common.Hash) (bool, error) {
-	if b.virtualBankEnabled() || b.indexer == nil {
+	if b.virtualizationEnabled() || b.indexer == nil {
 		return true, nil
 	}
 	lookup, ok := b.indexer.(virtualRPCTransactionLookup)
@@ -101,14 +101,12 @@ func (b *Backend) cachedReceiptMatchesVirtualization(receipt map[string]interfac
 	return b.cachedMetaMatchesVirtualization(meta), nil
 }
 
-// liveVirtualBankBlockView builds the RPC-visible block view directly from live
-// Comet block data when Cosmos event virtualization is enabled. It merges native
-// EVM logs with synthesized x/bank logs and creates virtual transactions for
-// non-EVM Cosmos messages and begin/end block events.
-func (b *Backend) liveVirtualBankBlockView(
+// liveVirtualBlockView builds the RPC-visible block view directly from live
+// Comet block data when Cosmos event virtualization is enabled.
+func (b *Backend) liveVirtualBlockView(
 	resBlock *cmrpctypes.ResultBlock,
 	blockRes *cmrpctypes.ResultBlockResults,
-) (*liveVirtualBankBlockView, error) {
+) (*liveVirtualBlockView, error) {
 	if resBlock == nil || resBlock.Block == nil {
 		return nil, fmt.Errorf("tendermint block is nil")
 	}
@@ -131,10 +129,10 @@ func (b *Backend) liveVirtualBankBlockView(
 		return nil, err
 	}
 
-	view := &liveVirtualBankBlockView{
+	view := &liveVirtualBlockView{
 		Transactions: make([]*rpctypes.RPCTransaction, 0),
 		Receipts:     make([]map[string]interface{}, 0),
-		Logs:         make([][]*virtualbank.RPCLog, 0),
+		Logs:         make([][]*virtual.RPCLog, 0),
 	}
 
 	var (
@@ -143,8 +141,8 @@ func (b *Backend) liveVirtualBankBlockView(
 		blockResultGasUsedBeforeTx uint64
 	)
 
-	virtualLogContext := func(txHash common.Hash, txIndex uint64) virtualbank.LogContext {
-		return virtualbank.LogContext{
+	virtualLogContext := func(txHash common.Hash, txIndex uint64) virtual.LogContext {
+		return virtual.LogContext{
 			BlockHash:     blockHash,
 			BlockNumber:   blockNumber,
 			TxHash:        txHash,
@@ -152,28 +150,28 @@ func (b *Backend) liveVirtualBankBlockView(
 			FirstLogIndex: logIndex,
 		}
 	}
-	appendLogs := func(logs []*virtualbank.RPCLog) {
+
+	appendLogs := func(logs []*virtual.RPCLog) {
 		view.Logs = append(view.Logs, logs)
 	}
-	appendVirtualTx := func(txHash common.Hash, txIndex uint64, logs []*virtualbank.RPCLog, status uint64, gasUsed uint64, cumulativeGasUsed uint64, cosmosHash *common.Hash) {
-		rpcTx := virtualbank.NewRPCTransaction(txHash, blockHash, blockNumber, txIndex, b.ChainID().ToInt(), cosmosHash)
-		view.Transactions = append(view.Transactions, rpcTx)
-		view.Receipts = append(view.Receipts, virtualReceiptMap(status, cumulativeGasUsed, gasUsed, logs, txHash, blockHashHex, blockNumber, txIndex))
-		appendLogs(logs)
+
+	appendVirtualTx := func(tx *virtual.Tx) {
+		view.Transactions = append(view.Transactions, tx.Transaction)
+		view.Receipts = append(view.Receipts, tx.Receipt.ToMap())
+		appendLogs(tx.Receipt.Logs)
 	}
 
-	beginBlockEvents, endBlockEvents, err := virtualbank.SplitBlockEvents(blockRes.FinalizeBlockEvents)
+	beginBlockEvents, endBlockEvents, err := virtual.SplitBlockEvents(blockRes.FinalizeBlockEvents)
 	if err != nil {
 		return nil, err
 	}
+
 	if len(beginBlockEvents) > 0 {
-		txHash := virtualbank.BeginBlockHash(block.Height)
-		logs, err := virtualbank.Logs(beginBlockEvents, virtualLogContext(txHash, rpcTxIndex))
-		if err != nil {
-			return nil, err
-		}
-		logIndex += uint(len(logs))
-		appendVirtualTx(txHash, rpcTxIndex, logs, uint64(ethtypes.ReceiptStatusSuccessful), 0, 0, nil)
+		txHash := virtual.BeginBlockHash(block.Height)
+		tx := virtual.NewBlockTx(txHash, beginBlockEvents, virtualLogContext(txHash, rpcTxIndex), b.ChainID().ToInt(), 0)
+
+		logIndex += uint(len(tx.Receipt.Logs))
+		appendVirtualTx(tx)
 		rpcTxIndex++
 	}
 
@@ -181,10 +179,12 @@ func (b *Backend) liveVirtualBankBlockView(
 		if txIndex >= len(normalizedTxResults) {
 			return nil, fmt.Errorf("block results shorter than tx list at height %d", block.Height)
 		}
+
 		txResult := normalizedTxResults[txIndex]
 		if txResult == nil {
 			return nil, fmt.Errorf("missing tx result at height %d index %d", block.Height, txIndex)
 		}
+
 		resultGasUsed := uint64(txResult.GasUsed)
 
 		tx, err := b.clientCtx.TxConfig.TxDecoder()(txBz)
@@ -202,7 +202,7 @@ func (b *Backend) liveVirtualBankBlockView(
 			}
 		}
 
-		bankEvents, err := virtualbank.ParseEvents(txResult.Events)
+		virtualResponse, err := virtual.ParseResponse(txResult)
 		if err != nil {
 			return nil, err
 		}
@@ -247,19 +247,13 @@ func (b *Backend) liveVirtualBankBlockView(
 			if err != nil {
 				b.logger.Warn("failed to parse logs", "hash", txHash, "error", err.Error())
 			}
-			logs := virtualbank.WrapLogs(evmLogs, false, nil)
-			virtualbank.SetLogMetadata(logs, virtualLogContext(txHash, rpcTxIndex))
+			logs := virtual.WrapLogs(evmLogs, false, nil)
+			virtual.SetLogMetadata(logs, virtualLogContext(txHash, rpcTxIndex))
 			logIndex += uint(len(logs))
 
-			events := virtualbank.EventsForMsg(bankEvents, msgIndex, len(msgs))
-			if len(events) > 0 {
-				virtualLogs, err := virtualbank.Logs(events, virtualLogContext(txHash, rpcTxIndex))
-				if err != nil {
-					return nil, err
-				}
-				logIndex += uint(len(virtualLogs))
-				logs = append(logs, virtualLogs...)
-			}
+			virtualLogs := virtualResponse.LogsForMessage(msgIndex, len(msgs), virtualLogContext(txHash, rpcTxIndex))
+			logIndex += uint(len(virtualLogs))
+			logs = append(logs, virtualLogs...)
 
 			status := uint64(ethtypes.ReceiptStatusSuccessful)
 			if txFailed {
@@ -309,23 +303,24 @@ func (b *Backend) liveVirtualBankBlockView(
 			rpcTxIndex++
 		}
 
-		events := virtualbank.EventsForNonEthMessages(bankEvents, ethMsgIndexes, len(msgs))
-		if len(events) > 0 {
-			cosmosHash := virtualbank.OriginalCosmosTxHash(txBz)
-			txHash := virtualbank.CosmosTxHash(txBz)
-			ctx := virtualLogContext(txHash, rpcTxIndex)
-			ctx.CosmosHash = &cosmosHash
-			logs, err := virtualbank.Logs(events, ctx)
-			if err != nil {
-				return nil, err
-			}
-			logIndex += uint(len(logs))
+		virtualTx, err := virtualResponse.SyntheticTx(virtual.TxContext{
+			Tx:                      txBz,
+			EthereumMessageIndexes:  ethMsgIndexes,
+			TotalMessages:           len(msgs),
+			BlockHash:               blockHash,
+			BlockNumber:             blockNumber,
+			TxIndex:                 rpcTxIndex,
+			FirstLogIndex:           logIndex,
+			CumulativeGasUsedBefore: blockResultGasUsedBeforeTx,
+			ChainID:                 b.ChainID().ToInt(),
+		})
+		if err != nil {
+			return nil, err
+		}
 
-			status := uint64(ethtypes.ReceiptStatusSuccessful)
-			if txResult.Code != abci.CodeTypeOK {
-				status = uint64(ethtypes.ReceiptStatusFailed)
-			}
-			appendVirtualTx(txHash, rpcTxIndex, logs, status, resultGasUsed, blockResultGasUsedBeforeTx+resultGasUsed, &cosmosHash)
+		if virtualTx != nil {
+			logIndex += uint(len(virtualTx.Receipt.Logs))
+			appendVirtualTx(virtualTx)
 			rpcTxIndex++
 		}
 
@@ -333,13 +328,11 @@ func (b *Backend) liveVirtualBankBlockView(
 	}
 
 	if len(endBlockEvents) > 0 {
-		txHash := virtualbank.EndBlockHash(block.Height)
-		logs, err := virtualbank.Logs(endBlockEvents, virtualLogContext(txHash, rpcTxIndex))
-		if err != nil {
-			return nil, err
-		}
-		logIndex += uint(len(logs))
-		appendVirtualTx(txHash, rpcTxIndex, logs, uint64(ethtypes.ReceiptStatusSuccessful), 0, blockResultGasUsedBeforeTx, nil)
+		txHash := virtual.EndBlockHash(block.Height)
+		tx := virtual.NewBlockTx(txHash, endBlockEvents, virtualLogContext(txHash, rpcTxIndex), b.ChainID().ToInt(), blockResultGasUsedBeforeTx)
+
+		logIndex += uint(len(tx.Receipt.Logs))
+		appendVirtualTx(tx)
 	}
 
 	return view, nil
@@ -351,7 +344,7 @@ func liveReceiptMap(
 	status uint64,
 	cumulativeGasUsed uint64,
 	gasUsed uint64,
-	logs []*virtualbank.RPCLog,
+	logs []*virtual.RPCLog,
 	txHash common.Hash,
 	contractAddress *common.Address,
 	blockHash string,
@@ -365,7 +358,7 @@ func liveReceiptMap(
 	receipt := map[string]interface{}{
 		"status":            hexutil.Uint(status),
 		"cumulativeGasUsed": hexutil.Uint64(cumulativeGasUsed),
-		"logsBloom":         ethtypes.BytesToBloom(evmtypes.LogsBloom(virtualbank.EthLogs(logs))),
+		"logsBloom":         ethtypes.BytesToBloom(evmtypes.LogsBloom(virtual.EthLogs(logs))),
 		"logs":              logs,
 		"transactionHash":   txHash,
 		"contractAddress":   nil,
@@ -379,39 +372,10 @@ func liveReceiptMap(
 		"type":              hexutil.Uint(txType),
 	}
 	if logs == nil {
-		receipt["logs"] = []*virtualbank.RPCLog{}
+		receipt["logs"] = []*virtual.RPCLog{}
 	}
 	if contractAddress != nil {
 		receipt["contractAddress"] = *contractAddress
 	}
 	return receipt
-}
-
-// virtualReceiptMap builds the receipt shape for synthesized virtual bank
-// transactions that have no underlying EVM transaction.
-func virtualReceiptMap(
-	status uint64,
-	cumulativeGasUsed uint64,
-	gasUsed uint64,
-	logs []*virtualbank.RPCLog,
-	txHash common.Hash,
-	blockHash string,
-	blockNumber uint64,
-	transactionIndex uint64,
-) map[string]interface{} {
-	return liveReceiptMap(
-		status,
-		cumulativeGasUsed,
-		gasUsed,
-		logs,
-		txHash,
-		nil,
-		blockHash,
-		blockNumber,
-		transactionIndex,
-		big.NewInt(0),
-		common.Address{},
-		&virtualbank.ContractAddress,
-		uint64(ethtypes.LegacyTxType),
-	)
 }

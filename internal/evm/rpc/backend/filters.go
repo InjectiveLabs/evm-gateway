@@ -7,19 +7,19 @@ import (
 	"upd.dev/xlab/gotracer"
 
 	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
-	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtualbank"
+	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtual"
 )
 
 type filteredLogIndexer interface {
-	GetFilteredLogsByBlockHeight(height int64, addresses []common.Address, topics [][]common.Hash) ([]*virtualbank.RPCLog, error)
-	GetFilteredLogsByBlockHash(hash common.Hash, addresses []common.Address, topics [][]common.Hash) ([]*virtualbank.RPCLog, error)
+	GetFilteredLogsByBlockHeight(height int64, addresses []common.Address, topics [][]common.Hash) ([]*virtual.RPCLog, error)
+	GetFilteredLogsByBlockHash(hash common.Hash, addresses []common.Address, topics [][]common.Hash) ([]*virtual.RPCLog, error)
 }
 
 // GetLogs returns all RPC-visible logs for a block hash. It prefers indexed KV
 // logs, but only when the cached block was indexed with the current
 // virtualization setting; otherwise online mode falls back to live block
 // results.
-func (b *Backend) GetLogs(hash common.Hash) ([][]*virtualbank.RPCLog, error) {
+func (b *Backend) GetLogs(hash common.Hash) ([][]*virtual.RPCLog, error) {
 	ctx := b.operationContext()
 	if b.ctx != nil {
 		defer gotracer.Trace(&ctx, b.baseTraceTags)()
@@ -71,7 +71,7 @@ func (b *Backend) GetFilteredLogs(
 	hash common.Hash,
 	addresses []common.Address,
 	topics [][]common.Hash,
-) ([]*virtualbank.RPCLog, error) {
+) ([]*virtual.RPCLog, error) {
 	ctx := b.operationContext()
 	if b.ctx != nil {
 		defer gotracer.Trace(&ctx, b.baseTraceTags)()
@@ -128,7 +128,7 @@ func (b *Backend) GetFilteredLogs(
 // GetLogsByHeight returns all RPC-visible logs for a block height. It reads the
 // indexed cache first and builds a live view from Comet block results when the
 // cache is missing, stale for the current virtualization mode, or unavailable.
-func (b *Backend) GetLogsByHeight(height *int64) ([][]*virtualbank.RPCLog, error) {
+func (b *Backend) GetLogsByHeight(height *int64) ([][]*virtual.RPCLog, error) {
 	ctx := b.operationContext()
 	if b.ctx != nil {
 		defer gotracer.Trace(&ctx, b.baseTraceTags)()
@@ -168,7 +168,7 @@ func (b *Backend) GetLogsByHeight(height *int64) ([][]*virtualbank.RPCLog, error
 		return nil, err
 	}
 
-	if b.virtualBankEnabled() {
+	if b.virtualizationEnabled() {
 		resBlock, err := b.TendermintBlockByNumber(rpctypes.BlockNumber(*height))
 		if err != nil {
 			return nil, err
@@ -176,7 +176,7 @@ func (b *Backend) GetLogsByHeight(height *int64) ([][]*virtualbank.RPCLog, error
 		if resBlock == nil || resBlock.Block == nil {
 			return nil, errors.Errorf("block not found for height %d", *height)
 		}
-		view, err := b.liveVirtualBankBlockView(resBlock, blockRes)
+		view, err := b.liveVirtualBlockView(resBlock, blockRes)
 		if err != nil {
 			return nil, err
 		}
@@ -192,7 +192,7 @@ func (b *Backend) GetFilteredLogsByHeight(
 	height int64,
 	addresses []common.Address,
 	topics [][]common.Hash,
-) ([]*virtualbank.RPCLog, error) {
+) ([]*virtual.RPCLog, error) {
 	ctx := b.operationContext()
 	if b.ctx != nil {
 		defer gotracer.Trace(&ctx, b.baseTraceTags)()
@@ -263,20 +263,20 @@ func broadLogFilter(addresses []common.Address, topics [][]common.Hash) bool {
 // filterGroupedLogs flattens grouped per-transaction logs and applies Ethereum
 // address/topic matching.
 func filterGroupedLogs(
-	logsList [][]*virtualbank.RPCLog,
+	logsList [][]*virtual.RPCLog,
 	addresses []common.Address,
 	topics [][]common.Hash,
-) []*virtualbank.RPCLog {
-	out := make([]*virtualbank.RPCLog, 0)
+) []*virtual.RPCLog {
+	out := make([]*virtual.RPCLog, 0)
 	for _, txLogs := range logsList {
 		for _, log := range txLogs {
-			if virtualbank.LogMatches(log, addresses, topics) {
+			if virtual.LogMatches(log, addresses, topics) {
 				out = append(out, log)
 			}
 		}
 	}
 	if out == nil {
-		return []*virtualbank.RPCLog{}
+		return []*virtual.RPCLog{}
 	}
 	return out
 }

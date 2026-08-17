@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtualbank"
+	virtualbank "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtual/bank"
 )
 
 const (
