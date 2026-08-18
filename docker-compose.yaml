@@ -1,0 +1,33 @@
+version: "3.9"
+
+services:
+  evm-gateway:
+    container_name: evm-gateway
+    image: evm-gateway:dev
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: always
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    logging:
+      driver: journald
+    environment:
+      WEB3INJ_ENV: ${WEB3INJ_ENV:-dev}
+      WEB3INJ_LOG_FORMAT: ${WEB3INJ_LOG_FORMAT:-json}
+      WEB3INJ_LOG_VERBOSE: ${WEB3INJ_LOG_VERBOSE:-false}
+      WEB3INJ_COMET_RPC: ${WEB3INJ_COMET_RPC:-http://host.docker.internal:26657}
+      WEB3INJ_GRPC_ADDR: ${WEB3INJ_GRPC_ADDR:-host.docker.internal:9900}
+      WEB3INJ_EARLIEST_BLOCK: ${WEB3INJ_EARLIEST_BLOCK:-1}
+      WEB3INJ_DATA_DIR: /apps/data
+      WEB3INJ_MIN_GAS_PRICES: ${WEB3INJ_MIN_GAS_PRICES:-0inj}
+      WEB3INJ_JSONRPC_API: ${WEB3INJ_JSONRPC_API:-eth,net,web3,txpool,debug,inj}
+      WEB3INJ_JSONRPC_ADDRESS: 0.0.0.0:8545
+      WEB3INJ_JSONRPC_WS_ADDRESS: 0.0.0.0:8546
+      WEB3INJ_JSONRPC_ALLOW_UNPROTECTED_TXS: ${WEB3INJ_JSONRPC_ALLOW_UNPROTECTED_TXS:-true}
+      WEB3INJ_JSONRPC_TXFEE_CAP: ${WEB3INJ_JSONRPC_TXFEE_CAP:-50}
+    ports:
+      - "8545:8545"
+      - "8546:8546"
+    volumes:
+      - "${HOME}/docker-volume/evm-gateway:/apps/data"
