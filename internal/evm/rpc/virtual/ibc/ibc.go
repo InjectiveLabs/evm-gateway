@@ -21,7 +21,7 @@ const EventType = "injective.evm.v1.EventIBCHookCall"
 
 var (
 	// ContractAddress is the trusted EVM caller used by the IBC hook.
-	ContractAddress = common.HexToAddress("0x0000000000000000000000000000000000000069")
+	ContractAddress = common.HexToAddress(evmtypes.IBCHookCallerAddressHex)
 	TopicHookCall   = crypto.Keccak256Hash([]byte("IBCHookCall(string,string,uint64,address,bool,bytes,string)"))
 
 	summaryArgs = abi.Arguments{
