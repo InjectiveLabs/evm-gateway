@@ -67,7 +67,7 @@ The gateway tracks these Cosmos event types from tx results and finalize block e
 
 The bank Solidity ABI is `contracts/InjectiveNativeBankTransfers.sol`. Bank logs use reserved pseudo-contract address `0x0000000000000000000000000000000000000800`. Cosmos address fields are encoded as right-aligned `bytes32` topics so both 20-byte EVM addresses and longer Cosmos addresses fit the ABI.
 
-The IBC summary ABI is `contracts/InjectiveIBCHooks.sol`. Its summary log is emitted from `0x0000000000000000000000000000000000000068`. Successful contract logs embedded in the Cosmos event are expanded immediately before the summary log with their original address, topics, and data.
+The IBC summary ABI is `contracts/InjectiveIBCHooks.sol`. Its summary log is emitted from `0x0000000000000000000000000000000000000069`. Successful contract logs embedded in the Cosmos event are expanded immediately before the summary log with their original address, topics, and data.
 
 Virtual transaction rules:
 
