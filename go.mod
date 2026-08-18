@@ -16,7 +16,7 @@ replace (
 	cosmossdk.io/x/upgrade => github.com/InjectiveLabs/cosmos-sdk/x/upgrade v0.50.14-inj.11
 
 	github.com/CosmWasm/wasmd => github.com/InjectiveLabs/wasmd v0.53.3-inj.3
-	github.com/InjectiveLabs/sdk-go => github.com/InjectiveLabs/sdk-go v1.64.0-ibc.evm
+	github.com/InjectiveLabs/sdk-go => github.com/InjectiveLabs/sdk-go v1.64.0-ibc.evm.3
 	github.com/bandprotocol/bandchain-packet => github.com/InjectiveLabs/bandchain-packet v0.0.4-inj-1
 	github.com/bcp-innovations/hyperlane-cosmos => github.com/InjectiveLabs/hyperlane-cosmos v1.0.1-inj
 
@@ -58,6 +58,7 @@ require (
 	github.com/cosmos/cosmos-db v1.1.3
 	github.com/cosmos/cosmos-sdk v0.50.14
 	github.com/cosmos/gogoproto v1.7.0
+	github.com/cosmos/ibc-go/v8 v8.7.0
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc
 	github.com/ethereum/go-ethereum v1.15.7
 	github.com/gorilla/mux v1.8.1
@@ -136,7 +137,6 @@ require (
 	github.com/cosmos/gogogateway v1.2.0 // indirect
 	github.com/cosmos/iavl v1.2.6 // indirect
 	github.com/cosmos/ibc-go/modules/capability v1.0.1 // indirect
-	github.com/cosmos/ibc-go/v8 v8.7.0 // indirect
 	github.com/cosmos/ics23/go v0.11.0 // indirect
 	github.com/cosmos/ledger-cosmos-go v0.14.0 // indirect
 	github.com/crate-crypto/go-eth-kzg v1.3.0 // indirect
