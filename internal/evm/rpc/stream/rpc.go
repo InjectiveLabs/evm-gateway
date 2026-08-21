@@ -6,7 +6,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
 
-	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtualbank"
+	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtual"
 	txindexer "github.com/InjectiveLabs/evm-gateway/internal/indexer"
 )
 
@@ -21,7 +21,7 @@ const (
 
 type IndexedBlockReader interface {
 	GetBlockMetaByHeight(height int64) (*txindexer.CachedBlockMeta, error)
-	GetLogsByBlockHeight(height int64) ([][]*virtualbank.RPCLog, error)
+	GetLogsByBlockHeight(height int64) ([][]*virtual.RPCLog, error)
 	GetRPCTransactionHashesByBlockHeight(height int64) ([]common.Hash, error)
 }
 
@@ -39,7 +39,7 @@ type RPCStream struct {
 
 	headerStream    *Stream[RPCHeader]
 	pendingTxStream *Stream[common.Hash]
-	logStream       *Stream[*virtualbank.RPCLog]
+	logStream       *Stream[*virtual.RPCLog]
 }
 
 func NewRPCStream(reader IndexedBlockReader) *RPCStream {
@@ -48,7 +48,7 @@ func NewRPCStream(reader IndexedBlockReader) *RPCStream {
 
 		headerStream:    NewStream[RPCHeader](headerStreamSegmentSize, headerStreamCapacity),
 		pendingTxStream: NewStream[common.Hash](txStreamSegmentSize, txStreamCapacity),
-		logStream:       NewStream[*virtualbank.RPCLog](logStreamSegmentSize, logStreamCapacity),
+		logStream:       NewStream[*virtual.RPCLog](logStreamSegmentSize, logStreamCapacity),
 	}
 }
 
@@ -64,7 +64,7 @@ func (s *RPCStream) PendingTxStream() *Stream[common.Hash] {
 	return s.pendingTxStream
 }
 
-func (s *RPCStream) LogStream() *Stream[*virtualbank.RPCLog] {
+func (s *RPCStream) LogStream() *Stream[*virtual.RPCLog] {
 	return s.logStream
 }
 
@@ -110,8 +110,8 @@ func (s *RPCStream) PublishIndexedBlock(height int64) error {
 	return nil
 }
 
-func flattenRPCLogs(groups [][]*virtualbank.RPCLog) []*virtualbank.RPCLog {
-	out := make([]*virtualbank.RPCLog, 0)
+func flattenRPCLogs(groups [][]*virtual.RPCLog) []*virtual.RPCLog {
+	out := make([]*virtual.RPCLog, 0)
 	for _, group := range groups {
 		out = append(out, group...)
 	}

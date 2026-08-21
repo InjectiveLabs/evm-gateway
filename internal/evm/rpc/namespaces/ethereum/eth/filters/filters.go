@@ -7,7 +7,7 @@ import (
 	"math/big"
 
 	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
-	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtualbank"
+	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtual"
 
 	"log/slog"
 
@@ -95,7 +95,7 @@ const (
 // Logs searches the requested block hash or range for matching RPC-visible log
 // entries. Backend lookups may be served from indexed/cache data or from live
 // Comet results, depending on cache coverage and virtualization mode.
-func (f *Filter) Logs(ctx context.Context, logLimit int, blockLimit int64) ([]*virtualbank.RPCLog, error) {
+func (f *Filter) Logs(ctx context.Context, logLimit int, blockLimit int64) ([]*virtual.RPCLog, error) {
 	defer gotracer.Trace(&ctx)()
 
 	backend := f.backend
@@ -112,7 +112,7 @@ func (f *Filter) Logs(ctx context.Context, logLimit int, blockLimit int64) ([]*v
 			return nil, errors.Wrapf(err, "failed to fetch header by hash %s", f.criteria.BlockHash)
 		}
 		if header == nil || header.Number == nil {
-			return []*virtualbank.RPCLog{}, nil
+			return []*virtual.RPCLog{}, nil
 		}
 		height := header.Number.Int64()
 
@@ -122,7 +122,7 @@ func (f *Filter) Logs(ctx context.Context, logLimit int, blockLimit int64) ([]*v
 			return nil, nil
 		}
 		if !bloomFilter(bloom, f.criteria.Addresses, f.criteria.Topics) {
-			return []*virtualbank.RPCLog{}, nil
+			return []*virtual.RPCLog{}, nil
 		}
 
 		return f.blockLogsByHash(*f.criteria.BlockHash)
@@ -157,14 +157,14 @@ func (f *Filter) Logs(ctx context.Context, logLimit int, blockLimit int64) ([]*v
 
 	// check bounds
 	if f.criteria.FromBlock.Int64() > head {
-		return []*virtualbank.RPCLog{}, nil
+		return []*virtual.RPCLog{}, nil
 	} else if f.criteria.ToBlock.Int64() > head+maxToOverhang {
 		f.criteria.ToBlock = big.NewInt(head + maxToOverhang)
 	}
 
 	from := f.criteria.FromBlock.Int64()
 	to := f.criteria.ToBlock.Int64()
-	logs := []*virtualbank.RPCLog{}
+	logs := []*virtual.RPCLog{}
 
 	for height := from; height <= to; height++ {
 		bloom, err := backend.GetBlockBloomByHeight(height)
@@ -193,13 +193,13 @@ func (f *Filter) Logs(ctx context.Context, logLimit int, blockLimit int64) ([]*v
 
 // blockLogsByHash delegates a single-block hash query to the backend's
 // cache-first filtered log path.
-func (f *Filter) blockLogsByHash(hash common.Hash) ([]*virtualbank.RPCLog, error) {
+func (f *Filter) blockLogsByHash(hash common.Hash) ([]*virtual.RPCLog, error) {
 	return f.backend.GetFilteredLogs(hash, f.criteria.Addresses, f.criteria.Topics)
 }
 
 // blockLogsByHeight delegates a single-block height query to the backend's
 // cache-first filtered log path.
-func (f *Filter) blockLogsByHeight(height int64) ([]*virtualbank.RPCLog, error) {
+func (f *Filter) blockLogsByHeight(height int64) ([]*virtual.RPCLog, error) {
 	return f.backend.GetFilteredLogsByHeight(height, f.criteria.Addresses, f.criteria.Topics)
 }
 

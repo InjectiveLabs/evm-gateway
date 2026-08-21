@@ -8,7 +8,7 @@ import (
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/eth/filters"
 
-	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtualbank"
+	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtual"
 )
 
 const (
@@ -22,8 +22,8 @@ const (
 // [null, B] -> anything in first position, B in second position
 // [A, B] -> A in first position and B in second position
 // [[A, B], [A, B]] -> A or B in first position, A or B in second position
-func FilterLogs(logs []*virtualbank.RPCLog, fromBlock, toBlock *big.Int, addresses []common.Address, topics [][]common.Hash) []*virtualbank.RPCLog {
-	var ret []*virtualbank.RPCLog
+func FilterLogs(logs []*virtual.RPCLog, fromBlock, toBlock *big.Int, addresses []common.Address, topics [][]common.Hash) []*virtual.RPCLog {
+	var ret []*virtual.RPCLog
 	for _, log := range logs {
 		if fromBlock != nil && fromBlock.Int64() >= 0 && fromBlock.Uint64() > uint64(log.BlockNumber) {
 			continue
@@ -31,7 +31,7 @@ func FilterLogs(logs []*virtualbank.RPCLog, fromBlock, toBlock *big.Int, address
 		if toBlock != nil && toBlock.Int64() >= 0 && toBlock.Uint64() < uint64(log.BlockNumber) {
 			continue
 		}
-		if !virtualbank.LogMatches(log, addresses, topics) {
+		if !virtual.LogMatches(log, addresses, topics) {
 			continue
 		}
 		ret = append(ret, log)
@@ -80,9 +80,9 @@ func returnHashes(hashes []common.Hash) []common.Hash {
 
 // returnLogs is a helper that will return an empty log array in case the given logs array is nil,
 // otherwise the given logs array is returned.
-func returnLogs(logs []*virtualbank.RPCLog) []*virtualbank.RPCLog {
+func returnLogs(logs []*virtual.RPCLog) []*virtual.RPCLog {
 	if logs == nil {
-		return []*virtualbank.RPCLog{}
+		return []*virtual.RPCLog{}
 	}
 	return logs
 }

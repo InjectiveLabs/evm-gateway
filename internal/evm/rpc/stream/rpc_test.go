@@ -8,13 +8,14 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
 
-	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtualbank"
+	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtual"
+	virtualbank "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtual/bank"
 	txindexer "github.com/InjectiveLabs/evm-gateway/internal/indexer"
 )
 
 type fakeIndexedBlockReader struct {
 	meta *txindexer.CachedBlockMeta
-	logs [][]*virtualbank.RPCLog
+	logs [][]*virtual.RPCLog
 	txs  []common.Hash
 }
 
@@ -22,7 +23,7 @@ func (f fakeIndexedBlockReader) GetBlockMetaByHeight(int64) (*txindexer.CachedBl
 	return f.meta, nil
 }
 
-func (f fakeIndexedBlockReader) GetLogsByBlockHeight(int64) ([][]*virtualbank.RPCLog, error) {
+func (f fakeIndexedBlockReader) GetLogsByBlockHeight(int64) ([][]*virtual.RPCLog, error) {
 	return f.logs, nil
 }
 
@@ -37,7 +38,7 @@ func TestPublishIndexedBlockReadsCachedHeaderAndLogs(t *testing.T) {
 	transactionsRoot := common.HexToHash("0x04")
 	miner := common.HexToAddress("0x0000000000000000000000000000000000000abc")
 	baseFee := big.NewInt(123)
-	logA := &virtualbank.RPCLog{
+	logA := &virtual.RPCLog{
 		Address:     virtualbank.ContractAddress,
 		BlockNumber: 42,
 		BlockHash:   blockHash,
@@ -45,7 +46,7 @@ func TestPublishIndexedBlockReadsCachedHeaderAndLogs(t *testing.T) {
 		Index:       0,
 		Virtual:     true,
 	}
-	logB := &virtualbank.RPCLog{
+	logB := &virtual.RPCLog{
 		Address:     common.HexToAddress("0x0000000000000000000000000000000000000def"),
 		BlockNumber: 42,
 		BlockHash:   blockHash,
@@ -68,7 +69,7 @@ func TestPublishIndexedBlockReadsCachedHeaderAndLogs(t *testing.T) {
 			TransactionsRoot: transactionsRoot.Hex(),
 			BaseFee:          hexutil.EncodeBig(baseFee),
 		},
-		logs: [][]*virtualbank.RPCLog{{logA}, {logB}},
+		logs: [][]*virtual.RPCLog{{logA}, {logB}},
 		txs:  []common.Hash{logA.TxHash, logB.TxHash},
 	})
 

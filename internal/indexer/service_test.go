@@ -20,7 +20,7 @@ import (
 
 	"github.com/InjectiveLabs/evm-gateway/internal/config"
 	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
-	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtualbank"
+	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtual"
 	chaintypes "github.com/InjectiveLabs/sdk-go/chain/types"
 )
 
@@ -722,11 +722,11 @@ func (stubTxIndexer) GetBlockMetaByHash(common.Hash) (*CachedBlockMeta, error)  
 
 // GetLogsByBlockHeight satisfies the TxIndexer interface for syncer tests that
 // do not read indexed logs.
-func (stubTxIndexer) GetLogsByBlockHeight(int64) ([][]*virtualbank.RPCLog, error) { return nil, nil }
+func (stubTxIndexer) GetLogsByBlockHeight(int64) ([][]*virtual.RPCLog, error) { return nil, nil }
 
 // GetLogsByBlockHash satisfies the TxIndexer interface for syncer tests that do
 // not read indexed logs.
-func (stubTxIndexer) GetLogsByBlockHash(common.Hash) ([][]*virtualbank.RPCLog, error) {
+func (stubTxIndexer) GetLogsByBlockHash(common.Hash) ([][]*virtual.RPCLog, error) {
 	return nil, nil
 }
 func (stubTxIndexer) SetTraceTransaction(common.Hash, *rpctypes.TraceConfig, json.RawMessage) error {
@@ -883,13 +883,13 @@ func (r *recordingTxIndexer) GetBlockMetaByHash(common.Hash) (*CachedBlockMeta, 
 
 // GetLogsByBlockHeight satisfies the TxIndexer interface for recording syncer
 // tests that only track indexed heights.
-func (r *recordingTxIndexer) GetLogsByBlockHeight(int64) ([][]*virtualbank.RPCLog, error) {
+func (r *recordingTxIndexer) GetLogsByBlockHeight(int64) ([][]*virtual.RPCLog, error) {
 	return nil, nil
 }
 
 // GetLogsByBlockHash satisfies the TxIndexer interface for recording syncer
 // tests that only track indexed heights.
-func (r *recordingTxIndexer) GetLogsByBlockHash(common.Hash) ([][]*virtualbank.RPCLog, error) {
+func (r *recordingTxIndexer) GetLogsByBlockHash(common.Hash) ([][]*virtual.RPCLog, error) {
 	return nil, nil
 }
 func (r *recordingTxIndexer) SetTraceTransaction(common.Hash, *rpctypes.TraceConfig, json.RawMessage) error {
@@ -1065,13 +1065,13 @@ func (f *faultyTxIndexer) GetBlockMetaByHash(common.Hash) (*CachedBlockMeta, err
 
 // GetLogsByBlockHeight satisfies the TxIndexer interface for failure-path tests
 // that never read indexed logs.
-func (f *faultyTxIndexer) GetLogsByBlockHeight(int64) ([][]*virtualbank.RPCLog, error) {
+func (f *faultyTxIndexer) GetLogsByBlockHeight(int64) ([][]*virtual.RPCLog, error) {
 	return nil, nil
 }
 
 // GetLogsByBlockHash satisfies the TxIndexer interface for failure-path tests
 // that never read indexed logs.
-func (f *faultyTxIndexer) GetLogsByBlockHash(common.Hash) ([][]*virtualbank.RPCLog, error) {
+func (f *faultyTxIndexer) GetLogsByBlockHash(common.Hash) ([][]*virtual.RPCLog, error) {
 	return nil, nil
 }
 func (f *faultyTxIndexer) SetTraceTransaction(common.Hash, *rpctypes.TraceConfig, json.RawMessage) error {

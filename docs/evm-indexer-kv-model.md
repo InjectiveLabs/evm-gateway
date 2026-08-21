@@ -11,7 +11,7 @@ When `WEB3INJ_VIRTUALIZE_COSMOS_EVENTS=true`, the same KV model also stores virt
 - Keep the forward tip index current during large historical backfills when `WEB3INJ_PARALLEL_SYNC_TIP_AND_GAPS=true` (the default).
 - Allow `WEB3INJ_OFFLINE_RPC_ONLY=true` to serve indexed data without creating live CometBFT or gRPC clients.
 - Keep reindexing deterministic by deleting every cached collection for a height before rewriting that block.
-- Optionally expose tracked Cosmos `x/bank` events as virtual Ethereum transactions and logs without changing historical EVM-only behavior when the feature flag is disabled.
+- Optionally expose tracked Cosmos events as virtual Ethereum transactions and logs without changing historical EVM-only behavior when the feature flag is disabled.
 
 ## Collections
 
@@ -30,7 +30,7 @@ The implementation uses numeric key prefixes internally. The logical collections
 - `rpc_tx/virtual/{virtual_tx_hash}`
   - marker used to identify virtual RPC transactions so they can be hidden when a caller is using a gateway instance without Cosmos event virtualization enabled
 - `receipt/hash/{eth_tx_hash}`
-  - normalized Ethereum receipt payload, including status, cumulative gas used, logs, effective gas price, and contract address; virtual receipts use zero gas price/value defaults and `to = 0x0000000000000000000000000000000000000800`
+  - normalized Ethereum receipt payload, including status, cumulative gas used, logs, effective gas price, and contract address; bank-only virtual receipts target `0x0000000000000000000000000000000000000800`, while IBC-hook receipts target the called contract
 - `block/logs/{height}`
   - grouped per-transaction logs for the block, used by cache-backed `eth_getLogs`; virtualized mode stores `RPCLog` entries so virtual logs can carry `virtual` and `cosmos_hash` JSON metadata
 - `block/meta/{height}`
@@ -63,16 +63,20 @@ The gateway tracks these Cosmos event types from tx results and finalize block e
 - `coin_received`
 - `coinbase`
 - `burn`
+- `injective.evm.v1.EventIBCHookCall`, including its `ibccallbackerror-` form
 
-The Solidity ABI for generated topics is `contracts/InjectiveNativeBankTransfers.sol`. All virtual logs use reserved pseudo-contract address `0x0000000000000000000000000000000000000800`. Cosmos address fields are encoded as right-aligned `bytes32` topics so both 20-byte EVM addresses and longer Cosmos addresses fit the ABI.
+The bank Solidity ABI is `contracts/InjectiveNativeBankTransfers.sol`. Bank logs use reserved pseudo-contract address `0x0000000000000000000000000000000000000800`. Cosmos address fields are encoded as right-aligned `bytes32` topics so both 20-byte EVM addresses and longer Cosmos addresses fit the ABI.
+
+The IBC summary ABI is `contracts/InjectiveIBCHooks.sol`. Its summary log is emitted from `0x0000000000000000000000000000000000000069`. Successful contract logs embedded in the Cosmos event are expanded immediately before the summary log with their original address, topics, and data.
 
 Virtual transaction rules:
 
 - EVM transactions keep their real transaction hash. Any bank side-effect logs from the same `MsgEthereumTx` are appended after that transaction's native EVM logs.
-- Non-EVM Cosmos transactions with tracked events get one virtual RPC transaction. Its hash is `keccak256(cosmos_tx_hash)`, and its JSON includes `virtual: true` and `cosmos_hash`.
+- Non-EVM Cosmos transactions with tracked events get one virtual RPC transaction. Its hash is `keccak256(cosmos_tx_hash)`, and its JSON includes `virtual: true` and `cosmos_hash`. Bank and IBC events from the same Cosmos transaction share that transaction and receipt.
 - Finalize block events are split by their `mode` attribute. `mode=BeginBlock` events go into the begin-block virtual transaction. All other tracked finalize events go into the end-block virtual transaction.
 - Begin-block and end-block virtual transaction hashes are deterministic hashes of the phase name and height. They include `virtual: true` but no `cosmos_hash`.
-- Virtual transactions use empty input, zero gas/value defaults, legacy tx type, and `to = 0x0000000000000000000000000000000000000800`.
+- Bank-only virtual transactions use empty input, zero gas/value defaults, legacy tx type, and `to = 0x0000000000000000000000000000000000000800`.
+- IBC-hook virtual transactions use the trusted system caller as `from`, the called contract as `to`, the hook calldata as `input`, and the event's EVM outcome and gas usage in the receipt. Failed calls remain queryable and contain the IBC summary log.
 
 Block ordering in virtualized mode is:
 
