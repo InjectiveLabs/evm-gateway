@@ -3,7 +3,9 @@ package backend
 import (
 	"context"
 	"crypto/ecdsa"
+	"fmt"
 	"math/big"
+	"strings"
 	"testing"
 
 	txsigning "cosmossdk.io/x/tx/signing"
@@ -17,6 +19,7 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	grpctypes "github.com/cosmos/cosmos-sdk/types/grpc"
 	signingtypes "github.com/cosmos/cosmos-sdk/types/tx/signing"
+	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
 	"github.com/ethereum/go-ethereum/common"
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -191,6 +194,140 @@ func TestTraceBlockLatestSendsResolvedBlockContextHeight(t *testing.T) {
 	}
 	if got[0].TxHash != ethMsg.Hash() {
 		t.Fatalf("unexpected trace transaction hash: got %s want %s", got[0].TxHash.Hex(), ethMsg.Hash().Hex())
+	}
+	queryClient.AssertExpectations(t)
+}
+
+func TestTraceBlockRejectsNativeMessageBeforeEthereumReplay(t *testing.T) {
+	key, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	_, ethMsg := mustSignedTraceMsg(
+		t,
+		&ethtypes.LegacyTx{
+			Nonce: 1,
+			Gas:   21000,
+			To:    ptrAddress(common.HexToAddress("0x0000000000000000000000000000000000000001")),
+		},
+		ethtypes.LatestSignerForChainID(big.NewInt(1776)),
+		key,
+	)
+	nativeMsg := &banktypes.MsgSend{}
+	backend := &Backend{
+		logger: backendTestLogger(),
+		cfg:    appconfig.Config{},
+		clientCtx: client.Context{}.WithTxConfig(backendTraceTestTxConfig{
+			decoder: func(txBz []byte) (sdk.Tx, error) {
+				switch string(txBz) {
+				case "native":
+					return backendTraceTestTx{msgs: []sdk.Msg{nativeMsg}}, nil
+				case "ethereum":
+					return backendTraceTestTx{msgs: []sdk.Msg{ethMsg}}, nil
+				default:
+					return nil, fmt.Errorf("unknown fixture")
+				}
+			},
+		}),
+		chainID: big.NewInt(1776),
+	}
+	block := &cmrpctypes.ResultBlock{
+		Block: tmtypes.MakeBlock(42, []tmtypes.Tx{[]byte("native"), []byte("ethereum")}, nil, nil),
+	}
+
+	_, err = backend.TraceBlock(rpctypes.BlockNumber(42), nil, block)
+	if err == nil || !strings.Contains(err.Error(), "native message *types.MsgSend at transaction 0 message 0 precedes an Ethereum message") {
+		t.Fatalf("TraceBlock error = %v", err)
+	}
+}
+
+func TestTraceBlockRejectsNativeMessageBetweenEthereumMessages(t *testing.T) {
+	key, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	_, first := mustSignedTraceMsg(t, &ethtypes.LegacyTx{Nonce: 1, Gas: 21000}, ethtypes.LatestSignerForChainID(big.NewInt(1776)), key)
+	_, second := mustSignedTraceMsg(t, &ethtypes.LegacyTx{Nonce: 2, Gas: 21000}, ethtypes.LatestSignerForChainID(big.NewInt(1776)), key)
+	backend := &Backend{
+		logger: backendTestLogger(),
+		cfg:    appconfig.Config{},
+		clientCtx: client.Context{}.WithTxConfig(backendTraceTestTxConfig{
+			decoder: func([]byte) (sdk.Tx, error) {
+				return backendTraceTestTx{msgs: []sdk.Msg{first, &banktypes.MsgSend{}, second}}, nil
+			},
+		}),
+		chainID: big.NewInt(1776),
+	}
+	block := &cmrpctypes.ResultBlock{Block: tmtypes.MakeBlock(42, []tmtypes.Tx{[]byte("mixed")}, nil, nil)}
+
+	_, err = backend.TraceBlock(rpctypes.BlockNumber(42), nil, block)
+	if err == nil || !strings.Contains(err.Error(), "transaction 0 message 1 precedes an Ethereum message") {
+		t.Fatalf("TraceBlock error = %v", err)
+	}
+}
+
+func TestTraceBlockRejectsUndecodableTransactionBeforeEthereumMessage(t *testing.T) {
+	backend := &Backend{
+		logger: backendTestLogger(),
+		cfg:    appconfig.Config{},
+		clientCtx: client.Context{}.WithTxConfig(backendTraceTestTxConfig{
+			decoder: func(txBz []byte) (sdk.Tx, error) {
+				if string(txBz) == "undecodable" {
+					return nil, fmt.Errorf("fixture decode failure")
+				}
+				return backendTraceTestTx{msgs: []sdk.Msg{&evmtypes.MsgEthereumTx{}}}, nil
+			},
+		}),
+		chainID: big.NewInt(1776),
+	}
+	block := &cmrpctypes.ResultBlock{
+		Block: tmtypes.MakeBlock(42, []tmtypes.Tx{[]byte("undecodable"), []byte("ethereum")}, nil, nil),
+	}
+
+	_, err := backend.TraceBlock(rpctypes.BlockNumber(42), nil, block)
+	if err == nil || !strings.Contains(err.Error(), "decode transaction 0 before an Ethereum message: fixture decode failure") {
+		t.Fatalf("TraceBlock error = %v", err)
+	}
+}
+
+func TestTraceBlockAllowsNativeMessageAfterFinalEthereumMessage(t *testing.T) {
+	key, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	_, ethMsg := mustSignedTraceMsg(t, &ethtypes.LegacyTx{Nonce: 1, Gas: 21000}, ethtypes.LatestSignerForChainID(big.NewInt(1776)), key)
+	queryClient := &rpcmocks.EVMQueryClient{}
+	queryClient.On(
+		"TraceBlock",
+		mock.Anything,
+		mock.MatchedBy(func(req *evmtypes.QueryTraceBlockRequest) bool {
+			return len(req.Txs) == 1 && req.Txs[0] == ethMsg
+		}),
+	).Return(&evmtypes.QueryTraceBlockResponse{Data: []byte(`[{}]`)}, nil).Once()
+	backend := &Backend{
+		logger: backendTestLogger(),
+		cfg:    appconfig.Config{},
+		clientCtx: client.Context{}.WithTxConfig(backendTraceTestTxConfig{
+			decoder: func(txBz []byte) (sdk.Tx, error) {
+				if string(txBz) == "ethereum" {
+					return backendTraceTestTx{msgs: []sdk.Msg{ethMsg}}, nil
+				}
+				return backendTraceTestTx{msgs: []sdk.Msg{&banktypes.MsgSend{}}}, nil
+			},
+		}),
+		queryClient: &rpctypes.QueryClient{QueryClient: queryClient},
+		chainID:     big.NewInt(1776),
+	}
+	block := &cmrpctypes.ResultBlock{
+		Block: tmtypes.MakeBlock(42, []tmtypes.Tx{[]byte("ethereum"), []byte("native")}, nil, nil),
+	}
+
+	got, err := backend.TraceBlock(rpctypes.BlockNumber(42), nil, block)
+	if err != nil {
+		t.Fatalf("TraceBlock returned error: %v", err)
+	}
+	if len(got) != 1 || got[0].TxHash != ethMsg.Hash() {
+		t.Fatalf("TraceBlock result = %#v", got)
 	}
 	queryClient.AssertExpectations(t)
 }
