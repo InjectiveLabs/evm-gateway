@@ -100,6 +100,20 @@ func (a *API) TraceCall(
 	return a.backend.WithContext(ctx).TraceCall(args, blockNrOrHash, config)
 }
 
+// StorageRangeAt returns storage entries at the given block state for a contract.
+func (a *API) StorageRangeAt(
+	ctx context.Context,
+	blockNrOrHash rpctypes.BlockNumberOrHash,
+	txIndex int,
+	address common.Address,
+	keyStart hexutil.Bytes,
+	maxResult int,
+) (rpctypes.StorageRangeResult, error) {
+	defer gotracer.Trace(&ctx)()
+	a.logger.Debug("debug_storageRangeAt", "block number or hash", blockNrOrHash, "txIndex", txIndex, "address", address.Hex())
+	return a.backend.WithContext(ctx).StorageRangeAt(blockNrOrHash, txIndex, address, keyStart, maxResult)
+}
+
 // BlockProfile turns on goroutine profiling for nsec seconds and writes profile data to
 // file. It uses a profile rate of 1 for most accurate information. If a different rate is
 // desired, set the rate and write the profile manually.
