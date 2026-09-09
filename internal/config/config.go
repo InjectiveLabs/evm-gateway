@@ -27,6 +27,7 @@ type Config struct {
 	CometRPC               string
 	CometBroadcastRPC      string
 	GRPCAddr               string
+	StitchBackend          bool
 	Earliest               int64
 	FetchJobs              int
 	RPCMaxIdleConnsPerHost int
@@ -88,6 +89,7 @@ func DefaultConfig() Config {
 		CometRPC:               "http://localhost:26657",
 		CometBroadcastRPC:      "",
 		GRPCAddr:               "localhost:9090",
+		StitchBackend:          false,
 		Earliest:               1,
 		FetchJobs:              4,
 		RPCMaxIdleConnsPerHost: 0,
@@ -183,6 +185,9 @@ func (c Config) Validate() error {
 		}
 	}
 	if c.OfflineRPCOnly {
+		if c.StitchBackend {
+			return errors.New("stitch-backend requires online RPC mode")
+		}
 		if c.EnableSync {
 			return errors.New("offline-rpc-only mode requires enable-sync=false")
 		}
@@ -262,6 +267,7 @@ func applyEnvOverrides(cfg *Config) {
 	cfg.CometRPC = getEnvString("COMET_RPC", cfg.CometRPC)
 	cfg.CometBroadcastRPC = getEnvString("COMET_BROADCAST_RPC", "")
 	cfg.GRPCAddr = getEnvString("GRPC_ADDR", cfg.GRPCAddr)
+	cfg.StitchBackend = getEnvBool("STITCH_BACKEND", cfg.StitchBackend)
 	cfg.Earliest = getEnvInt64("EARLIEST_BLOCK", cfg.Earliest)
 	cfg.FetchJobs = getEnvInt("FETCH_JOBS", cfg.FetchJobs)
 	cfg.RPCMaxIdleConnsPerHost = getEnvInt("RPC_MAX_IDLE_CONNS_PER_HOST", cfg.RPCMaxIdleConnsPerHost)

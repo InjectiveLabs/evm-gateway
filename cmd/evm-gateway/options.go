@@ -11,6 +11,7 @@ type gatewayCLIOptions struct {
 	cometRPC               *string
 	cometBroadcastRPC      *string
 	grpcAddr               *string
+	stitchBackend          *bool
 	earliest               *int
 	fetchJobs              *int
 	dataDir                *string

@@ -6,8 +6,10 @@ import (
 
 	abci "github.com/cometbft/cometbft/abci/types"
 	crypto "github.com/cometbft/cometbft/api/cometbft/crypto/v1"
+	cmrpcclient "github.com/cometbft/cometbft/rpc/client"
 	"github.com/cosmos/cosmos-sdk/client"
 	"github.com/cosmos/cosmos-sdk/types/tx"
+	"google.golang.org/grpc/metadata"
 	"upd.dev/xlab/gotracer"
 
 	evmtypes "github.com/InjectiveLabs/sdk-go/chain/evm/types"
@@ -36,9 +38,9 @@ func NewQueryClient(clientCtx client.Context) *QueryClient {
 }
 
 // GetProof performs an ABCI query with the given key and returns a merkle proof. The desired
-// tendermint height to perform the query should be set in the client context. The query will be
-// performed at one below this height (at the IAVL version) in order to obtain the correct merkle
-// proof. Proof queries at height less than or equal to 2 are not supported.
+// tendermint height to perform the query should be set in the client context.
+// The SDK passes this height to ABCI unchanged. Proof queries at height less
+// than or equal to 2 are not supported.
 // Issue: https://github.com/cosmos/cosmos-sdk/issues/6567
 func (QueryClient) GetProof(clientCtx client.Context, storeKey string, key []byte) ([]byte, *crypto.ProofOps, error) {
 	ctx := clientCtx.CmdContext
@@ -62,6 +64,22 @@ func (QueryClient) GetProof(clientCtx client.Context, storeKey string, key []byt
 		Data:   key,
 		Height: height,
 		Prove:  true,
+	}
+	// Cosmos client.QueryABCI replaces the operation context with Background.
+	// Preserve the verified shard selection and deadline for Stitch reads.
+	if md, _ := metadata.FromOutgoingContext(ctx); len(md.Get("x-stitch-backend")) != 0 {
+		node, err := clientCtx.GetNode()
+		if err != nil {
+			return nil, nil, err
+		}
+		res, err := node.ABCIQueryWithOptions(ctx, abciReq.Path, abciReq.Data, cmrpcclient.ABCIQueryOptions{Height: height, Prove: true})
+		if err != nil {
+			return nil, nil, err
+		}
+		if res == nil || !res.Response.IsOK() || res.Response.Height != height || res.Response.ProofOps == nil {
+			return nil, nil, fmt.Errorf("proof unavailable at resolved height %d", height)
+		}
+		return res.Response.Value, res.Response.ProofOps, nil
 	}
 
 	abciRes, err := clientCtx.QueryABCI(abciReq)

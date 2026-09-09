@@ -479,6 +479,10 @@ func (b *Backend) GetTransactionByBlockNumberAndIndex(blockNum rpctypes.BlockNum
 		defer gotracer.Traceless(&ctx, b.baseTraceTags)()
 	}
 	b = b.WithContext(ctx).(*Backend)
+	blockNum, err := b.ResolveEarliestBlockNumber(blockNum, earliestBlock)
+	if err != nil {
+		return nil, err
+	}
 
 	b.logger.Debug("eth_getTransactionByBlockNumberAndIndex", "number", blockNum, "index", idx)
 

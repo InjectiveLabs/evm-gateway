@@ -366,6 +366,10 @@ func (b *Backend) EstimateGas(args rpctypes.TransactionArgs, blockNrOptional *rp
 	if blockNrOptional != nil {
 		blockNr = *blockNrOptional
 	}
+	blockNr, err := b.ResolveEarliestBlockNumber(blockNr, earliestExecution)
+	if err != nil {
+		return 0, err
+	}
 
 	bz, err := sonic.Marshal(&args)
 	if err != nil {
@@ -411,6 +415,10 @@ func (b *Backend) DoCall(
 		defer gotracer.Traceless(&ctx, b.baseTraceTags)()
 	}
 	b = b.WithContext(ctx).(*Backend)
+	blockNr, err := b.ResolveEarliestBlockNumber(blockNr, earliestExecution)
+	if err != nil {
+		return nil, err
+	}
 
 	bz, err := sonic.Marshal(&args)
 	if err != nil {

@@ -46,7 +46,12 @@ func (b *Backend) StorageRangeAt(
 	keyStart hexutil.Bytes,
 	maxResult int,
 ) (rpctypes.StorageRangeResult, error) {
+	b = b.WithContext(b.operationContext()).(*Backend)
 	blockNum, err := b.BlockNumberFromTendermint(blockNrOrHash)
+	if err != nil {
+		return rpctypes.StorageRangeResult{}, err
+	}
+	blockNum, err = b.ResolveEarliestBlockNumber(blockNum, earliestStorage)
 	if err != nil {
 		return rpctypes.StorageRangeResult{}, err
 	}
@@ -57,9 +62,12 @@ func (b *Backend) StorageRangeAt(
 	}
 	path := fmt.Sprintf("/store/%s/subspace", evmtypes.StoreKey)
 	prefix := evmtypes.AddressStoragePrefix(contractAddress)
-	res, err := b.clientCtx.Client.ABCIQueryWithOptions(b.operationContext(), path, cmbytes.HexBytes(prefix), opts)
+	res, err := b.clientCtx.Client.ABCIQueryWithOptions(b.contextForCometHeight(opts.Height), path, cmbytes.HexBytes(prefix), opts)
 	if err != nil {
 		return rpctypes.StorageRangeResult{}, err
+	}
+	if res == nil || res.Response.Code != 0 {
+		return rpctypes.StorageRangeResult{}, fmt.Errorf("storage history unavailable at height %d", blockNum.Int64())
 	}
 
 	result := rpctypes.StorageRangeResult{

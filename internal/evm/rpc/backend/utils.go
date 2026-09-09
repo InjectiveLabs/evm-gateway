@@ -57,7 +57,7 @@ func (b *Backend) getAccountNonce(accAddr common.Address, pending bool, height i
 
 	queryClient := authtypes.NewQueryClient(b.clientCtx)
 	adr := sdk.AccAddress(accAddr.Bytes()).String()
-	queryCtx := types.ContextWithHeightFrom(b.operationContext(), height)
+	queryCtx := b.contextWithHeight(height)
 	res, err := queryClient.Account(queryCtx, &authtypes.QueryAccountRequest{Address: adr})
 	if err != nil {
 		st, ok := status.FromError(err)

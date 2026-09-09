@@ -398,7 +398,11 @@ func buildClientContext(ctx context.Context, cfg *config.Config, dataDir string,
 
 	clientCtx = clientCtx.WithNodeURI(cfg.CometRPC)
 
-	rpcClient, err := rpchttp.NewWithClient(cfg.CometRPC, newCometHTTPClient(cfg.FetchJobs, cfg.RPCMaxIdleConnsPerHost))
+	httpClient := newCometHTTPClient(cfg.FetchJobs, cfg.RPCMaxIdleConnsPerHost)
+	if cfg.StitchBackend {
+		httpClient.Transport = stitchBackendTransport{base: httpClient.Transport}
+	}
+	rpcClient, err := rpchttp.NewWithClient(cfg.CometRPC, httpClient)
 	if err != nil {
 		return client.Context{}, nil, nil, errors.Wrap(err, "init comet rpc client")
 	}

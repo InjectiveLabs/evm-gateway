@@ -176,6 +176,16 @@ func (b *Backend) TraceBlock(height rpctypes.BlockNumber,
 		defer gotracer.Traceless(&ctx, b.baseTraceTags)()
 	}
 	b = b.WithContext(ctx).(*Backend)
+	if block == nil {
+		var err error
+		height, err = b.ResolveEarliestBlockNumber(height, earliestTrace)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if height == rpctypes.EthEarliestBlockNumber && block == nil {
+		return nil, errors.New("genesis is not traceable")
+	}
 
 	cacheHeight, cacheable := b.traceCacheHeight(height, block)
 	if b.indexer != nil && cacheable {
@@ -426,6 +436,10 @@ func (b *Backend) TraceCall(
 		return nil, err
 	}
 	blockNr, err := b.BlockNumberFromTendermint(blockNrOrHash)
+	if err != nil {
+		return nil, err
+	}
+	blockNr, err = b.ResolveEarliestBlockNumber(blockNr, earliestExecution)
 	if err != nil {
 		return nil, err
 	}

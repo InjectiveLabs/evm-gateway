@@ -158,6 +158,14 @@ func (b *Backend) FeeHistory(
 			return nil, errors.Wrapf(errInvalidPercentile, "#%d:%f > #%d:%f", i-1, rewardPercentiles[i-1], i, p)
 		}
 	}
+	resolvedEarliest := b.cfg.StitchBackend && lastBlock == rpc.EarliestBlockNumber
+	if resolvedEarliest {
+		height, err := b.ResolveEarliestBlockNumber(rpctypes.EthEarliestBlockNumber, earliestRange)
+		if err != nil {
+			return nil, err
+		}
+		lastBlock = rpc.BlockNumber(height)
+	}
 	blockNumber, err := b.BlockNumber()
 	if err != nil {
 		return nil, err
@@ -173,6 +181,10 @@ func (b *Backend) FeeHistory(
 	maxBlockCount := int64(b.cfg.JSONRPC.FeeHistoryCap)
 	if blocks > maxBlockCount {
 		return nil, fmt.Errorf("FeeHistory user block count %d higher than %d", blocks, maxBlockCount)
+	}
+	// The discovered earliest EVM block has no earlier EVM history to include.
+	if resolvedEarliest && blocks > 1 {
+		blocks = 1
 	}
 	if blockEnd < gomath.MaxInt64 && blockEnd+1 < blocks {
 		blocks = blockEnd + 1

@@ -35,6 +35,10 @@ func (b *Backend) GetBlockReceipts(blockNrOrHash rpctypes.BlockNumberOrHash) ([]
 	case blockNrOrHash.BlockHash == nil && blockNrOrHash.BlockNumber == nil:
 		return nil, fmt.Errorf("types BlockHash and BlockNumber cannot be both nil")
 	}
+	blockNrOrHash, err := b.resolveEarliestBlockOrHash(blockNrOrHash, earliestBlock)
+	if err != nil {
+		return nil, err
+	}
 
 	if b.indexer != nil {
 		receipts, err := b.cachedBlockReceipts(blockNrOrHash)

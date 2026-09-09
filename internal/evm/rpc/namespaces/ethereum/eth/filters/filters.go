@@ -97,6 +97,8 @@ const (
 // Comet results, depending on cache coverage and virtualization mode.
 func (f *Filter) Logs(ctx context.Context, logLimit int, blockLimit int64) ([]*virtualbank.RPCLog, error) {
 	defer gotracer.Trace(&ctx)()
+	localFilter := *f
+	f = &localFilter
 
 	backend := f.backend
 	if carrier, ok := f.backend.(interface {
@@ -104,6 +106,7 @@ func (f *Filter) Logs(ctx context.Context, logLimit int, blockLimit int64) ([]*v
 	}); ok {
 		backend = carrier.WithContext(ctx)
 	}
+	f.backend = backend
 
 	// If we're doing singleton block filtering, execute and return
 	if f.criteria.BlockHash != nil && *f.criteria.BlockHash != (common.Hash{}) {
@@ -140,15 +143,31 @@ func (f *Filter) Logs(ctx context.Context, logLimit int, blockLimit int64) ([]*v
 	}
 
 	head := header.Number.Int64()
+	earliestHeight := int64(1)
+	strictRange := false
+	if f.criteria.FromBlock.Int64() == 0 || f.criteria.ToBlock.Int64() == 0 {
+		if resolver, ok := backend.(interface {
+			ResolveEarliestBlockNumber(types.BlockNumber, string) (types.BlockNumber, error)
+		}); ok {
+			resolved, err := resolver.ResolveEarliestBlockNumber(types.EthEarliestBlockNumber, "range")
+			if err != nil {
+				return nil, err
+			}
+			if resolved > 0 {
+				earliestHeight = resolved.Int64()
+				strictRange = true
+			}
+		}
+	}
 	if f.criteria.FromBlock.Int64() < 0 {
 		f.criteria.FromBlock = big.NewInt(head)
 	} else if f.criteria.FromBlock.Int64() == 0 {
-		f.criteria.FromBlock = big.NewInt(1)
+		f.criteria.FromBlock = big.NewInt(earliestHeight)
 	}
 	if f.criteria.ToBlock.Int64() < 0 {
 		f.criteria.ToBlock = big.NewInt(head)
 	} else if f.criteria.ToBlock.Int64() == 0 {
-		f.criteria.ToBlock = big.NewInt(1)
+		f.criteria.ToBlock = big.NewInt(earliestHeight)
 	}
 
 	if f.criteria.ToBlock.Int64()-f.criteria.FromBlock.Int64() > blockLimit {
@@ -170,6 +189,9 @@ func (f *Filter) Logs(ctx context.Context, logLimit int, blockLimit int64) ([]*v
 		bloom, err := backend.GetBlockBloomByHeight(height)
 		if err != nil {
 			f.logger.Debug("failed to fetch block bloom", "height", height, "error", err.Error())
+			if strictRange {
+				return nil, errors.Wrapf(err, "incomplete log history at height %d", height)
+			}
 			return logs, nil
 		}
 		if !bloomFilter(bloom, f.criteria.Addresses, f.criteria.Topics) {
@@ -179,6 +201,9 @@ func (f *Filter) Logs(ctx context.Context, logLimit int, blockLimit int64) ([]*v
 		filtered, err := f.blockLogsByHeight(height)
 		if err != nil {
 			f.logger.Debug("failed to fetch block logs", "height", height, "error", err.Error())
+			if strictRange {
+				return nil, errors.Wrapf(err, "incomplete log history at height %d", height)
+			}
 			return logs, nil
 		}
 

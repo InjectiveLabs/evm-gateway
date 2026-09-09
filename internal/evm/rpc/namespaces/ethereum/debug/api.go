@@ -67,9 +67,6 @@ func (a *API) TraceTransaction(ctx context.Context, hash common.Hash, config *rp
 func (a *API) TraceBlockByNumber(ctx context.Context, height rpctypes.BlockNumber, config *rpctypes.TraceConfig) ([]*rpctypes.TxTraceResult, error) {
 	defer gotracer.Trace(&ctx)()
 	a.logger.Debug("debug_traceBlockByNumber", "height", height)
-	if height == 0 {
-		return nil, errors.New("genesis is not traceable")
-	}
 	return a.backend.WithContext(ctx).TraceBlock(height, config, nil)
 }
 

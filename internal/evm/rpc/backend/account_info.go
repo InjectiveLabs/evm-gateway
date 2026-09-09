@@ -33,6 +33,10 @@ func (b *Backend) GetCode(address common.Address, blockNrOrHash rpctypes.BlockNu
 	if err != nil {
 		return nil, err
 	}
+	blockNum, err = b.ResolveEarliestBlockNumber(blockNum, earliestState)
+	if err != nil {
+		return nil, err
+	}
 
 	req := &evmtypes.QueryCodeRequest{
 		Address: address.String(),
@@ -60,6 +64,10 @@ func (b *Backend) GetProof(address common.Address, storageKeys []string, blockNr
 	if err != nil {
 		return nil, err
 	}
+	blockNum, err = b.ResolveEarliestBlockNumber(blockNum, earliestProof)
+	if err != nil {
+		return nil, err
+	}
 
 	height := blockNum.Int64()
 	_, err = b.TendermintBlockByNumber(blockNum)
@@ -83,7 +91,7 @@ func (b *Backend) GetProof(address common.Address, storageKeys []string, blockNr
 		height = int64(bn)
 	}
 
-	clientCtx := b.clientCtx.WithHeight(height)
+	clientCtx := b.clientCtx.WithHeight(height).WithCmdContext(b.contextWithHeight(height))
 
 	// query storage proofs
 	storageProofs := make([]rpctypes.StorageResult, len(storageKeys))
@@ -149,6 +157,10 @@ func (b *Backend) GetStorageAt(address common.Address, key string, blockNrOrHash
 	if err != nil {
 		return nil, err
 	}
+	blockNum, err = b.ResolveEarliestBlockNumber(blockNum, earliestState)
+	if err != nil {
+		return nil, err
+	}
 
 	req := &evmtypes.QueryStorageRequest{
 		Address: address.String(),
@@ -175,6 +187,10 @@ func (b *Backend) GetBalance(address common.Address, blockNrOrHash rpctypes.Bloc
 	b = b.WithContext(ctx).(*Backend)
 
 	blockNum, err := b.BlockNumberFromTendermint(blockNrOrHash)
+	if err != nil {
+		return nil, err
+	}
+	blockNum, err = b.ResolveEarliestBlockNumber(blockNum, earliestExecution)
 	if err != nil {
 		return nil, err
 	}
@@ -215,6 +231,22 @@ func (b *Backend) GetTransactionCount(address common.Address, blockNum rpctypes.
 		defer gotracer.Traceless(&ctx, b.baseTraceTags)()
 	}
 	b = b.WithContext(ctx).(*Backend)
+
+	// For earliest, query account existence and sequence at the same discovered
+	// snapshot. The usual latest-state EnsureExists check can hide transport
+	// failures as nonce zero and cannot establish historical account existence.
+	if b.cfg.StitchBackend && blockNum == rpctypes.EthEarliestBlockNumber {
+		height, err := b.ResolveEarliestBlockNumber(blockNum, earliestState)
+		if err != nil {
+			return nil, err
+		}
+		nonce, err := b.getAccountNonce(address, false, height.Int64(), b.logger)
+		if err != nil {
+			return nil, err
+		}
+		result := hexutil.Uint64(nonce)
+		return &result, nil
+	}
 
 	n := hexutil.Uint64(0)
 	bn, err := b.BlockNumber()

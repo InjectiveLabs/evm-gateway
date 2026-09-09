@@ -50,6 +50,9 @@ func buildConfig(opts *gatewayCLIOptions) (config.Config, error) {
 	cfg.CometRPC = *opts.cometRPC
 	cfg.CometBroadcastRPC = *opts.cometBroadcastRPC
 	cfg.GRPCAddr = *opts.grpcAddr
+	if opts.stitchBackend != nil {
+		cfg.StitchBackend = *opts.stitchBackend
+	}
 	cfg.Earliest = int64(*opts.earliest)
 	cfg.FetchJobs = *opts.fetchJobs
 	cfg.DataDir = *opts.dataDir

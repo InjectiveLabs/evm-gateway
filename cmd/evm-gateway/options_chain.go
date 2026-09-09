@@ -41,4 +41,11 @@ func initChainOptions(app *cli.Cli, opts *gatewayCLIOptions, defaults config.Con
 		EnvVar: "WEB3INJ_GRPC_ADDR",
 		Value:  defaults.GRPCAddr,
 	})
+
+	opts.stitchBackend = app.Bool(cli.BoolOpt{
+		Name:   "stitch-backend",
+		Desc:   "Discover earliest EVM history across Stitch backends.",
+		EnvVar: "WEB3INJ_STITCH_BACKEND",
+		Value:  defaults.StitchBackend,
+	})
 }

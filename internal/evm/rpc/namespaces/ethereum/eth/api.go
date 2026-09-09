@@ -34,7 +34,7 @@ type EthereumAPI interface {
 	GetBlockByNumber(ctx context.Context, ethBlockNum rpctypes.BlockNumber, fullTx bool) (map[string]interface{}, error)
 	GetBlockByHash(ctx context.Context, hash common.Hash, fullTx bool) (map[string]interface{}, error)
 	GetBlockTransactionCountByHash(ctx context.Context, hash common.Hash) *hexutil.Uint
-	GetBlockTransactionCountByNumber(ctx context.Context, blockNum rpctypes.BlockNumber) *hexutil.Uint
+	GetBlockTransactionCountByNumber(ctx context.Context, blockNum rpctypes.BlockNumber) (*hexutil.Uint, error)
 
 	// Reading Transactions
 	//
@@ -198,7 +198,7 @@ func (e *PublicAPI) GetBlockTransactionCountByHash(ctx context.Context, hash com
 }
 
 // GetBlockTransactionCountByNumber returns the number of transactions in the block identified by number.
-func (e *PublicAPI) GetBlockTransactionCountByNumber(ctx context.Context, blockNum rpctypes.BlockNumber) *hexutil.Uint {
+func (e *PublicAPI) GetBlockTransactionCountByNumber(ctx context.Context, blockNum rpctypes.BlockNumber) (*hexutil.Uint, error) {
 	defer gotracer.Trace(&ctx)()
 	e.logger.Debug("eth_getBlockTransactionCountByNumber", "height", blockNum.Int64())
 	return e.backend.WithContext(ctx).GetBlockTransactionCountByNumber(blockNum)

@@ -78,6 +78,10 @@ func (b *Backend) GetBlockByNumber(blockNum rpctypes.BlockNumber, fullTx bool) (
 		defer gotracer.Traceless(&ctx, b.baseTraceTags)()
 	}
 	b = b.WithContext(ctx).(*Backend)
+	blockNum, err := b.ResolveEarliestBlockNumber(blockNum, earliestBlock)
+	if err != nil {
+		return nil, err
+	}
 
 	meta, err := b.cachedBlockMetaByNumber(blockNum)
 	if err == nil && meta != nil {
@@ -107,6 +111,9 @@ func (b *Backend) GetBlockByNumber(blockNum rpctypes.BlockNumber, fullTx bool) (
 
 	resBlock, err := b.TendermintBlockByNumber(blockNum)
 	if err != nil {
+		if b.hasEarliestSelection(blockNum.Int64()) {
+			return nil, err
+		}
 		return nil, nil
 	}
 
@@ -118,6 +125,9 @@ func (b *Backend) GetBlockByNumber(blockNum rpctypes.BlockNumber, fullTx bool) (
 	blockRes, err := b.TendermintBlockResultByNumber(&resBlock.Block.Height)
 	if err != nil {
 		b.logger.Debug("failed to fetch block result from Tendermint", "height", blockNum, "error", err.Error())
+		if b.hasEarliestSelection(blockNum.Int64()) {
+			return nil, err
+		}
 		return nil, nil
 	}
 
@@ -245,7 +255,7 @@ func (b *Backend) GetBlockTransactionCountByHash(hash common.Hash) *hexutil.Uint
 
 // GetBlockTransactionCountByNumber returns the number of Ethereum transactions
 // in the block identified by number.
-func (b *Backend) GetBlockTransactionCountByNumber(blockNum rpctypes.BlockNumber) *hexutil.Uint {
+func (b *Backend) GetBlockTransactionCountByNumber(blockNum rpctypes.BlockNumber) (*hexutil.Uint, error) {
 	ctx := b.operationContext()
 	if b.ctx != nil {
 		defer gotracer.Trace(&ctx, b.baseTraceTags)()
@@ -253,40 +263,60 @@ func (b *Backend) GetBlockTransactionCountByNumber(blockNum rpctypes.BlockNumber
 		defer gotracer.Traceless(&ctx, b.baseTraceTags)()
 	}
 	b = b.WithContext(ctx).(*Backend)
+	resolvedEarliest := b.cfg.StitchBackend && blockNum == rpctypes.EthEarliestBlockNumber
+	blockNum, err := b.ResolveEarliestBlockNumber(blockNum, earliestBlock)
+	if err != nil {
+		return nil, err
+	}
 
 	if meta, err := b.cachedBlockMetaByNumber(blockNum); err == nil && meta != nil && b.cachedMetaMatchesVirtualization(meta) {
 		n := hexutil.Uint(meta.EthTxCount)
-		return &n
+		return &n, nil
 	}
 
 	block, err := b.TendermintBlockByNumber(blockNum)
 	if err != nil {
 		b.logger.Debug("block not found", "height", blockNum.Int64(), "error", err.Error())
-		return nil
+		if resolvedEarliest {
+			return nil, err
+		}
+		return nil, nil
 	} else if block == nil {
 		b.logger.Debug("block not found", "height", blockNum.Int64())
-		return nil
+		if resolvedEarliest {
+			return nil, fmt.Errorf("block unavailable at resolved earliest height %d", blockNum.Int64())
+		}
+		return nil, nil
 	} else if block.Block == nil {
 		b.logger.Debug("block not found", "height", blockNum.Int64())
-		return nil
+		if resolvedEarliest {
+			return nil, fmt.Errorf("block unavailable at resolved earliest height %d", blockNum.Int64())
+		}
+		return nil, nil
 	}
 
 	if b.virtualBankEnabled() {
 		blockRes, err := b.TendermintBlockResultByNumber(&block.Block.Height)
 		if err != nil {
 			b.logger.Debug("block result not found", "height", block.Block.Height, "error", err.Error())
-			return nil
+			if resolvedEarliest {
+				return nil, err
+			}
+			return nil, nil
 		}
 		view, err := b.liveVirtualBankBlockView(block, blockRes)
 		if err != nil {
 			b.logger.Debug("virtualized block tx count failed", "height", block.Block.Height, "error", err.Error())
-			return nil
+			if resolvedEarliest {
+				return nil, err
+			}
+			return nil, nil
 		}
 		n := hexutil.Uint(len(view.Transactions))
-		return &n
+		return &n, nil
 	}
 
-	return b.GetBlockTransactionCount(block)
+	return b.GetBlockTransactionCount(block), nil
 }
 
 // GetBlockTransactionCount returns the number of Ethereum transactions in a
@@ -307,6 +337,10 @@ func (b *Backend) TendermintBlockByNumber(blockNum rpctypes.BlockNumber) (*cmrpc
 		defer gotracer.Traceless(&ctx, b.baseTraceTags)()
 	}
 	b = b.WithContext(ctx).(*Backend)
+	blockNum, err := b.ResolveEarliestBlockNumber(blockNum, earliestBlock)
+	if err != nil {
+		return nil, err
+	}
 
 	height := blockNum.Int64()
 	if height <= 0 {
@@ -320,15 +354,21 @@ func (b *Backend) TendermintBlockByNumber(blockNum rpctypes.BlockNumber) (*cmrpc
 	if b.clientCtx.Client == nil {
 		return nil, errors.New("rpc client is nil")
 	}
-	resBlock, err := b.clientCtx.Client.Block(b.ctx, &height)
+	resBlock, err := b.clientCtx.Client.Block(b.contextForCometHeight(height), &height)
 	if err != nil {
 		b.logger.Debug("tendermint client failed to get block", "height", height, "error", err.Error())
 		return nil, err
 	}
 
-	if resBlock.Block == nil {
+	if resBlock == nil || resBlock.Block == nil {
 		b.logger.Debug("TendermintBlockByNumber block not found", "height", height)
+		if b.hasEarliestSelection(height) {
+			return nil, fmt.Errorf("block unavailable at resolved earliest height %d", height)
+		}
 		return nil, nil
+	}
+	if b.hasEarliestSelection(height) && resBlock.Block.Height != height {
+		return nil, fmt.Errorf("block height %d does not match resolved earliest height %d", resBlock.Block.Height, height)
 	}
 
 	return resBlock, nil
@@ -349,7 +389,23 @@ func (b *Backend) TendermintBlockResultByNumber(height *int64) (*cmrpctypes.Resu
 	if !ok {
 		return nil, errors.New("invalid rpc client")
 	}
-	return sc.BlockResults(b.ctx, height)
+	queryCtx := b.operationContext()
+	if height != nil {
+		queryCtx = b.contextForCometHeight(*height)
+	}
+	result, err := sc.BlockResults(queryCtx, height)
+	if err != nil {
+		return nil, err
+	}
+	if height != nil && b.hasEarliestSelection(*height) {
+		if result == nil {
+			return nil, fmt.Errorf("block results unavailable at resolved earliest height %d", *height)
+		}
+		if result.Height != *height {
+			return nil, fmt.Errorf("block results height %d does not match resolved earliest height %d", result.Height, *height)
+		}
+	}
+	return result, nil
 }
 
 // TendermintBlockByHash returns a Tendermint-formatted block by block number
@@ -488,6 +544,10 @@ func (b *Backend) HeaderByNumber(blockNum rpctypes.BlockNumber) (*ethtypes.Heade
 		defer gotracer.Traceless(&ctx, b.baseTraceTags)()
 	}
 	b = b.WithContext(ctx).(*Backend)
+	blockNum, err := b.ResolveEarliestBlockNumber(blockNum, earliestBlock)
+	if err != nil {
+		return nil, err
+	}
 
 	meta, err := b.cachedBlockMetaByNumber(blockNum)
 	if err == nil && meta != nil && b.cachedMetaMatchesVirtualization(meta) {
@@ -526,6 +586,9 @@ func (b *Backend) HeaderByNumber(blockNum rpctypes.BlockNumber) (*ethtypes.Heade
 	if err != nil {
 		// handle the error for pruned node.
 		b.logger.Error("failed to fetch Base Fee from pruned block. Check node pruning configuration", "height", resBlock.Block.Height, "error", err)
+		if b.hasEarliestSelection(resBlock.Block.Height) && isGRPCAvailabilityFailure(err) {
+			return nil, err
+		}
 	}
 
 	ethHeader := rpctypes.EthHeaderFromTendermint(resBlock.Block.Header, bloom, baseFee)
@@ -671,6 +734,9 @@ func (b *Backend) RPCBlockFromTendermintBlock(
 	if err != nil {
 		// handle the error for pruned node.
 		b.logger.Error("failed to fetch Base Fee from prunned block. Check node prunning configuration", "height", block.Height, "error", err)
+		if b.hasEarliestSelection(block.Height) && isGRPCAvailabilityFailure(err) {
+			return nil, err
+		}
 	}
 
 	if b.virtualBankEnabled() {
@@ -723,6 +789,9 @@ func (b *Backend) RPCBlockFromTendermintBlock(
 	queryCtx := b.contextWithHeight(block.Height)
 	res, err := b.queryClient.ValidatorAccount(queryCtx, req)
 	if err != nil {
+		if b.hasEarliestSelection(block.Height) && isGRPCAvailabilityFailure(err) {
+			return nil, err
+		}
 		b.logger.Debug(
 			"failed to query validator operator address",
 			"height", block.Height,
@@ -743,6 +812,9 @@ func (b *Backend) RPCBlockFromTendermintBlock(
 	gasLimit, err := rpctypes.BlockMaxGasFromConsensusParams(queryCtx, b.clientCtx, block.Height)
 	if err != nil {
 		b.logger.Error("failed to query consensus params", "error", err.Error())
+		if b.hasEarliestSelection(block.Height) {
+			return nil, err
+		}
 	}
 
 	var gasUsed uint64
