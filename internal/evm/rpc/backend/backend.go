@@ -89,6 +89,13 @@ type EVMBackend interface {
 	GetBalance(address common.Address, blockNrOrHash rpctypes.BlockNumberOrHash) (*hexutil.Big, error)
 	GetStorageAt(address common.Address, key string, blockNrOrHash rpctypes.BlockNumberOrHash) (hexutil.Bytes, error)
 	GetProof(address common.Address, storageKeys []string, blockNrOrHash rpctypes.BlockNumberOrHash) (*rpctypes.AccountResult, error)
+	StorageRangeAt(
+		blockNrOrHash rpctypes.BlockNumberOrHash,
+		txIndex int,
+		contractAddress common.Address,
+		keyStart hexutil.Bytes,
+		maxResult int,
+	) (rpctypes.StorageRangeResult, error)
 	GetTransactionCount(address common.Address, blockNum rpctypes.BlockNumber) (*hexutil.Uint64, error)
 
 	// Chain Info

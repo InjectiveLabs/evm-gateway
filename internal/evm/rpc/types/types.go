@@ -35,6 +35,18 @@ type StorageResult struct {
 	Proof []string     `json:"proof"`
 }
 
+// StorageRangeResult is the result of a debug_storageRangeAt call.
+type StorageRangeResult struct {
+	Storage map[common.Hash]StorageRangeEntry `json:"storage"`
+	NextKey *common.Hash                      `json:"nextKey"`
+}
+
+// StorageRangeEntry is a storage key/value pair for debug_storageRangeAt.
+type StorageRangeEntry struct {
+	Key   *common.Hash `json:"key"`
+	Value common.Hash  `json:"value"`
+}
+
 // RPCTransaction represents a transaction that will serialize to the RPC representation of a transaction
 type RPCTransaction struct {
 	BlockHash        *common.Hash         `json:"blockHash"`
