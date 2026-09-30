@@ -16,7 +16,7 @@ replace (
 	cosmossdk.io/x/upgrade => github.com/InjectiveLabs/cosmos-sdk/x/upgrade v0.50.14-inj.11
 
 	github.com/CosmWasm/wasmd => github.com/InjectiveLabs/wasmd v0.53.3-inj.3
-	github.com/InjectiveLabs/sdk-go => github.com/InjectiveLabs/sdk-go v1.64.0-ibc.evm.3
+	github.com/InjectiveLabs/sdk-go => github.com/InjectiveLabs/sdk-go v1.64.0-ibc.evm.5
 	github.com/bandprotocol/bandchain-packet => github.com/InjectiveLabs/bandchain-packet v0.0.4-inj-1
 	github.com/bcp-innovations/hyperlane-cosmos => github.com/InjectiveLabs/hyperlane-cosmos v1.0.1-inj
 
