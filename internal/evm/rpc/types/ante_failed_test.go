@@ -54,6 +54,38 @@ func TestTxAnteFailed(t *testing.T) {
 			res:  &abci.ExecTxResult{Code: 32, Codespace: "sdk", Log: "invalid nonce; got 5, expected 6: invalid sequence"},
 			want: true,
 		},
+		// Shapes observed on mainnet: panics recovered during message execution
+		// carry no "failed to execute message" wrapper but keep the ante events
+		// (fee deduction), i.e. the nonce was consumed.
+		{
+			name: "panic recovered during message execution (mainnet 151947794 tx 17)",
+			res: &abci.ExecTxResult{
+				Code:      111222,
+				Codespace: "undefined",
+				Log:       "recovered: runtime error: invalid memory address or nil pointer dereference\nstack:\n...",
+				Events:    anteEvents(),
+			},
+			want: false,
+		},
+		{
+			name: "out of gas panic during message execution (mainnet 182270453 tx 58)",
+			res: &abci.ExecTxResult{
+				Code:      11,
+				Codespace: "sdk",
+				Log:       "out of gas in location: IterNextFlat; gasWanted: 47922, gasUsed: 0: out of gas",
+				Events:    anteEvents(),
+			},
+			want: false,
+		},
+		{
+			name: "same out of gas log without ante events failed in the ante handler",
+			res: &abci.ExecTxResult{
+				Code:      11,
+				Codespace: "sdk",
+				Log:       "out of gas in location: IterNextFlat; gasWanted: 47922, gasUsed: 0: out of gas",
+			},
+			want: true,
+		},
 		{
 			name: "ante out of gas without message wrapper",
 			res:  &abci.ExecTxResult{Code: 11, Codespace: "sdk", Log: "tx gas (99) exceeds block gas limit (10): out of gas"},
@@ -218,5 +250,15 @@ func TestParseTxResultNonEVMFailureGuards(t *testing.T) {
 	// two messages in the tx: the cosmos gas can't be attributed
 	if parsed.Txs[1].GasUsed != ethMsg.GetGas() {
 		t.Fatalf("multi message failure gas: got %d want %d", parsed.Txs[1].GasUsed, ethMsg.GetGas())
+	}
+}
+
+// anteEvents mirrors the events a successful EVM ante handler leaves on a
+// failed tx result: fee deduction transfers and the fee event.
+func anteEvents() []abci.Event {
+	return []abci.Event{
+		{Type: "coin_spent"},
+		{Type: "transfer"},
+		{Type: "tx", Attributes: []abci.EventAttribute{{Key: "fee", Value: "1inj"}}},
 	}
 }

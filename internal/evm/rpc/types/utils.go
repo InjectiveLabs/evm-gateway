@@ -284,9 +284,19 @@ const MsgExecutionFailedLog = "failed to execute message"
 // Comet block, but it never consumed its nonce, so the same signed Ethereum tx
 // may be included again in a later block. It must not be exposed as an
 // Ethereum transaction. Failures after a successful ante handler (VM errors,
-// message handler errors, block gas limit) consumed the nonce and stay visible.
+// message handler errors, panics recovered during message execution, block gas
+// limit) consumed the nonce and stay visible.
+//
+// The decisive signal is the result events: for a failed tx, baseapp returns
+// the events emitted by a successful ante handler (the EVM ante handler always
+// emits at least the fee event), and none when the ante handler failed. Panics
+// recovered during message execution carry no "failed to execute message"
+// wrapper, so the log alone is not enough.
 func TxAnteFailed(res *abci.ExecTxResult) bool {
 	if res == nil || res.Code == abci.CodeTypeOK {
+		return false
+	}
+	if len(res.Events) > 0 {
 		return false
 	}
 	if res.Codespace == evmtypes.ModuleName || TxExceedBlockGasLimit(res) {

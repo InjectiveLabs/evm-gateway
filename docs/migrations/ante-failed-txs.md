@@ -13,7 +13,7 @@ The old indexer exposed both inclusions under the same tx hash. Hash-keyed recor
 - block traces listed the ante-failed txs as `{"txHash": …, "error": "insufficient balance for transfer"}` entries;
 - an in-memory receipt cache kept serving a receipt after the KV record was rewritten.
 
-From this release on, ante-failed txs are not indexed. A failure counts as an ante failure when `code != 0`, the codespace is not `evm`, the log has no `failed to execute message` wrapper (added by baseapp around message handler errors), and it is not the legacy block-gas-limit case. Failures after the ante handler (they consumed the nonce) stay visible with `status 0x0` and the chain's `gas_used`.
+From this release on, ante-failed txs are not indexed. A failure counts as an ante failure when `code != 0` **and the result has no events**, the codespace is not `evm`, the log has no `failed to execute message` wrapper, and it is not the legacy block-gas-limit case. Events are the decisive signal: for a failed tx, baseapp returns the events of a successful ante handler (the EVM ante always emits the fee event) and none when the ante handler failed. Panics recovered during message execution (e.g. `code=111222`, `code=11 out of gas in location: …`) carry no wrapper but keep the ante events, so they stay visible. Failures after the ante handler consumed the nonce and stay visible with `status 0x0` and the chain's `gas_used`.
 
 The migration fixes **history**. Blocks indexed by the new version are correct without it.
 

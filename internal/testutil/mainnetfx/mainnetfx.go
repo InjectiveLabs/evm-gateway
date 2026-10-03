@@ -50,6 +50,12 @@ const (
 	// after the ante handler (code 1, gas used 28209).
 	HeightEx2Included int64 = 185579953
 
+	// HeightPanicInExecution holds a tx whose message execution panicked
+	// (code 111222, no "failed to execute message" wrapper) after the ante
+	// handler succeeded: the nonce was consumed and the tx stays visible. Not
+	// part of Heights.
+	HeightPanicInExecution int64 = 151947794
+
 	// GasUsedEx2Included is the chain gas used of each re-included tx in
 	// HeightEx2Included.
 	GasUsedEx2Included uint64 = 28209
@@ -84,6 +90,10 @@ var (
 			common.HexToHash("0x3c293c659a5bb86373e9622a4e624ba0b528a2205eb69797964829ddbc448ec0"),
 		},
 	}
+
+	// TxPanicInExecution is the Ethereum tx of HeightPanicInExecution whose
+	// execution panicked (Cosmos tx #17).
+	TxPanicInExecution = common.HexToHash("0xabec8a7ad78f5aad3ee364fe8ce6fa66206d4df27bf1678d329a58b43a658d39")
 
 	// AnteFailedTxs lists the Ethereum txs of each block whose Cosmos tx failed
 	// in the ante handler, in block order, with their Cosmos tx index.
