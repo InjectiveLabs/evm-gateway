@@ -245,5 +245,20 @@ func openMigrationNode(
 
 	txIndexer := txindexer.NewKVIndexer(db, logger.With("indexer", "evm"), clientCtx, buildKVIndexerOptions(ctx, cfg, clientCtx, logger)...)
 	syncer := txindexer.NewSyncer(cfg, logger, rpcClient, db, txIndexer, nil)
-	return rpcClient, syncer.Resync, cleanup, nil
+	// Affected heights are scattered: fetch them concurrently instead of one
+	// single-height range at a time.
+	resync := func(ctx context.Context, ranges []txindexer.BlockRange) (txindexer.ResyncStats, error) {
+		return syncer.ResyncHeights(ctx, expandRanges(ranges))
+	}
+	return rpcClient, resync, cleanup, nil
+}
+
+func expandRanges(ranges []txindexer.BlockRange) []int64 {
+	heights := make([]int64, 0, txindexer.CountBlocks(ranges))
+	for _, r := range ranges {
+		for height := r.Start; height <= r.End; height++ {
+			heights = append(heights, height)
+		}
+	}
+	return heights
 }

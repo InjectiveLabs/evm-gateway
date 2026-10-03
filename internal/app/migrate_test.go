@@ -623,6 +623,26 @@ func TestOpenMigrationNodeOnline(t *testing.T) {
 	if err != nil || res == nil || res.Height != 7 {
 		t.Fatalf("BlockResults through migration node: %+v %v", res, err)
 	}
+	// The resync function fetches scattered heights through the syncer.
+	if _, err := resync(context.Background(), nil); err == nil || !strings.Contains(err.Error(), "no resync heights") {
+		t.Fatalf("expected empty heights error from resync, got %v", err)
+	}
+}
+
+func TestExpandRanges(t *testing.T) {
+	got := expandRanges([]txindexer.BlockRange{{Start: 3, End: 5}, {Start: 9, End: 9}})
+	want := []int64{3, 4, 5, 9}
+	if len(got) != len(want) {
+		t.Fatalf("expandRanges = %v want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("expandRanges = %v want %v", got, want)
+		}
+	}
+	if got := expandRanges(nil); len(got) != 0 {
+		t.Fatalf("expandRanges(nil) = %v", got)
+	}
 }
 
 func TestOpenMigrationNodeUnreachableComet(t *testing.T) {
