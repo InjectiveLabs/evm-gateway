@@ -74,11 +74,11 @@ Measured on the mainnet production snapshot at height `185625758` (44 GB, `WEB3I
 
 | Phase | Work | Duration |
 |---|---|---|
-| scan | 6,052,594 indexed txs, 822,060 failed | 2 min |
-| verify | 40,579 candidate heights | 43 min |
-| repair | 40,284 heights resynced | 62 min |
+| scan | 6,052,594 indexed txs, 790,926 candidates in 40,579 heights | 2 min |
+| verify | 40,579 candidate heights (`block_results`) | 43 min |
+| repair | 24 heights resynced | 3 s |
 
-Plan for about 1h45 of migration runtime; prefer the snapshot-swap strategy below to keep the downtime to a restart.
+Verification dominates the runtime: most candidates are post-ante failures (stored `gasUsed` = gas limit), which only `block_results` can tell apart from ante failures. Prefer the snapshot-swap strategy below to keep the downtime to a restart.
 
 ### 2. Repair
 
@@ -137,13 +137,12 @@ The KV format is unchanged, so the previous release can read a migrated data dir
 
 On the production snapshot at height `185625758`:
 
-- **790,570 txs** in **40,284 heights** were repaired.
-  - 50 were confirmed by the log-only rule, but only **46** are true ante failures: `code=5` insufficient funds, no events. They are now hidden.
-  - The other 4 (`code=111222` panics and `code=11 out of gas in location: …`) failed *during message execution*, consumed their nonce, and stay visible. This is why the rule also requires an empty event list.
-  - **790,520** are message-execution failures whose stored `gasUsed` was the gas limit; they now report the chain's gas used. This changes `gasUsed` and `cumulativeGasUsed` in those receipts.
-- 9 tx hashes were indexed in two blocks (8 heights): the two reported examples, `185581241`/`185581317`, and `185608930`/`185608942` (the block of the `debug_trace*` report).
-- After the migration a rescan finds 0 conflicts. The 356 remaining candidates are genuine VM failures that used their whole gas limit, rejected by the verification.
-- 462 sampled heights (300 repaired, 8 conflict, 4 panic, 150 untouched) serve byte-identical `eth_getBlockByNumber`/`eth_getBlockReceipts` responses to a fresh index built from the archive, except 2 untouched heights. Those carry an `effectiveGasPrice` computed by the pre-`v1.4.1` formula — a separate, pre-existing issue not covered by this migration.
+- **Hidden: 46 Ethereum txs, in 20 heights.** All are `code=5` insufficient-funds ante failures with no events.
+- **Duplicate hashes: 9 tx hashes were indexed in two blocks** (8 heights). They are the two reported examples, `185581241`/`185581317`, and `185608930`/`185608942` (the block of the `debug_trace*` report). All are repaired.
+- **Resynced: 24 heights.** Gas reporting is unchanged.
+- **Kept visible: 4 txs whose message execution panicked** (`code=111222`, and `code=11 out of gas in location: …`). The log-only rule would have hidden them; they consumed their nonce, which is why the rule also requires an empty event list.
+- **After the migration:** a rescan finds 0 conflicts, and 46 fewer indexed and candidate txs.
+- **Differential check:** 462 sampled heights (repaired, conflict, panic and random heights) were compared with a fresh index built from the archive. `eth_getBlockByNumber` and `eth_getBlockReceipts` are byte-identical except 32 responses that differ only in `effectiveGasPrice`. Those are heights indexed before `v1.4.1` that keep the old formula's value; this is a separate, pre-existing issue described in [`docs/gas-used-semantics.md`](../gas-used-semantics.md).
 
 ## Validation performed
 
