@@ -29,6 +29,15 @@ const (
 	anteFailedScanProgressEvery = 1_000_000
 )
 
+// Block results fetches during verification retry transient failures (e.g. a
+// 502 from a proxy in front of an archival node) with capped exponential
+// backoff, like block fetches during sync. Tunable for tests.
+var (
+	VerifyFetchAttempts     = 10
+	VerifyFetchRetryDelay   = 300 * time.Millisecond
+	VerifyFetchMaxRetryWait = 10 * time.Second
+)
+
 // MigrationKey returns the key of the completion marker of a named migration.
 func MigrationKey(name string) []byte {
 	return append([]byte{KeyPrefixMigration}, []byte(name)...)
@@ -367,8 +376,7 @@ func VerifyAnteFailedCandidates(
 		go func() {
 			defer wg.Done()
 			for height := range heightC {
-				h := height
-				res, err := fetcher.BlockResults(ctx, &h)
+				res, err := fetchBlockResultsWithRetry(ctx, fetcher, height, logger)
 				if err != nil {
 					fail(errorsmod.Wrapf(err, "fetch block results %d", height))
 					return
@@ -415,6 +423,33 @@ feed:
 		return confirmed[i].TxIndex < confirmed[j].TxIndex
 	})
 	return &AnteFailedVerification{CheckedHeights: checked, Confirmed: confirmed}, nil
+}
+
+func fetchBlockResultsWithRetry(ctx context.Context, fetcher BlockResultsFetcher, height int64, logger *slog.Logger) (*coretypes.ResultBlockResults, error) {
+	delay := VerifyFetchRetryDelay
+	for attempt := 1; ; attempt++ {
+		h := height
+		res, err := fetcher.BlockResults(ctx, &h)
+		if err == nil {
+			return res, nil
+		}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if attempt >= VerifyFetchAttempts {
+			return nil, err
+		}
+		logger.Warn("fetch block results failed; retrying", "height", height, "attempt", attempt, "retry_in", delay, "error", err)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(delay):
+		}
+		delay *= 2
+		if delay > VerifyFetchMaxRetryWait {
+			delay = VerifyFetchMaxRetryWait
+		}
+	}
 }
 
 func verifyHeightCandidates(res *coretypes.ResultBlockResults, candidates []AnteFailedCandidate) ([]VerifiedCandidate, error) {

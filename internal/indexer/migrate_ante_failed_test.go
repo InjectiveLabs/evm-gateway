@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"testing"
@@ -533,5 +534,71 @@ func assertHeights(t *testing.T, label string, got, want []int64) {
 		if got[i] != want[i] {
 			t.Fatalf("%s: %v want %v", label, got, want)
 		}
+	}
+}
+
+// flakyFetcher fails the first fails[height] fetches of a height.
+type flakyFetcher struct {
+	*fixtureFetcher
+	mu    sync.Mutex
+	fails map[int64]int
+}
+
+func (f *flakyFetcher) BlockResults(ctx context.Context, height *int64) (*coretypes.ResultBlockResults, error) {
+	f.mu.Lock()
+	if f.fails[*height] > 0 {
+		f.fails[*height]--
+		f.mu.Unlock()
+		return nil, errors.New("502 Bad Gateway")
+	}
+	f.mu.Unlock()
+	return f.fixtureFetcher.BlockResults(ctx, height)
+}
+
+func TestVerifyAnteFailedCandidatesRetriesTransientFetchErrors(t *testing.T) {
+	candidates := legacyCandidates()
+
+	// Fewer failures than attempts: verification recovers.
+	fetcher := &flakyFetcher{
+		fixtureFetcher: newFixtureFetcher(t),
+		fails:          map[int64]int{mainnetfx.HeightEx1Failed: VerifyFetchAttempts - 1},
+	}
+	verification, err := VerifyAnteFailedCandidates(context.Background(), fetcher, candidates, 2, nil)
+	if err != nil {
+		t.Fatalf("expected retries to recover, got %v", err)
+	}
+	if len(verification.Confirmed) != 10 {
+		t.Fatalf("unexpected confirmed count after retries: %d", len(verification.Confirmed))
+	}
+
+	// As many failures as attempts: the last error is returned.
+	fetcher = &flakyFetcher{
+		fixtureFetcher: newFixtureFetcher(t),
+		fails:          map[int64]int{mainnetfx.HeightEx1Failed: VerifyFetchAttempts},
+	}
+	if _, err := VerifyAnteFailedCandidates(context.Background(), fetcher, candidates, 1, nil); err == nil || !strings.Contains(err.Error(), "502 Bad Gateway") {
+		t.Fatalf("expected exhausted retries error, got %v", err)
+	}
+}
+
+func TestFetchBlockResultsWithRetryStopsOnCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	fetcher := &flakyFetcher{fixtureFetcher: newFixtureFetcher(t), fails: map[int64]int{1: 100}}
+
+	saved := VerifyFetchRetryDelay
+	VerifyFetchRetryDelay = time.Hour
+	defer func() { VerifyFetchRetryDelay = saved }()
+
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+	if _, err := fetchBlockResultsWithRetry(ctx, fetcher, 1, slog.Default()); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected cancellation while waiting to retry, got %v", err)
+	}
+
+	// A failure observed after cancellation returns the context error.
+	if _, err := fetchBlockResultsWithRetry(ctx, fetcher, 1, slog.Default()); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context error, got %v", err)
 	}
 }

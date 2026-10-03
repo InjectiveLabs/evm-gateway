@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	coretypes "github.com/cometbft/cometbft/rpc/core/types"
@@ -141,12 +142,15 @@ func freshFixtureState(t *testing.T) kvSnapshot {
 }
 
 type fixtureFetcher struct {
+	mu      sync.Mutex
 	results mainnetfx.BlockResultsMap
 	err     error
 	calls   int
 }
 
 func (f *fixtureFetcher) BlockResults(_ context.Context, height *int64) (*coretypes.ResultBlockResults, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.calls++
 	if f.err != nil {
 		return nil, f.err
