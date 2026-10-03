@@ -80,13 +80,17 @@ func ParseTxResult(result *abci.ExecTxResult, tx sdk.Tx) (*ParsedTxs, error) {
 	//
 	// TODO: proper code matching
 	if result.Code != abci.CodeTypeOK && result.Codespace != evmtypes.ModuleName && tx != nil {
+		msgs := tx.GetMsgs()
 		for i := 0; i < len(p.Txs); i++ {
 			p.Txs[i].Failed = true
-			// replace gasUsed with gasLimit because that's what's actually deducted.
-			//
-			// TODO: check  if this is still correct
-			gasLimit := tx.GetMsgs()[i].(*evmtypes.MsgEthereumTx).GetGas()
-			p.Txs[i].GasUsed = gasLimit
+			if i >= len(msgs) {
+				continue
+			}
+			ethMsg, ok := msgs[i].(*evmtypes.MsgEthereumTx)
+			if !ok {
+				continue
+			}
+			p.Txs[i].GasUsed = FailedEthTxGasUsed(result, ethMsg, len(msgs))
 		}
 	}
 

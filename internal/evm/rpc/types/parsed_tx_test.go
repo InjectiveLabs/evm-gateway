@@ -170,41 +170,95 @@ func TestParseTxResultParsesEventsAndHelpers(t *testing.T) {
 	}
 }
 
-func TestParseTxResultNonEVMFailureUsesGasLimit(t *testing.T) {
-	ethMsg := evmtypes.NewTx(
-		big.NewInt(1),
-		1,
-		ptrToAddress(common.HexToAddress("0x3000000000000000000000000000000000000003")),
-		big.NewInt(0),
-		50000,
-		big.NewInt(1),
-		nil,
-		nil,
-		nil,
-		nil,
-	)
-	result := &abci.ExecTxResult{
-		Code:      5,
-		Codespace: "sdk",
-		Events: []abci.Event{
-			{
-				Type: evmtypes.EventTypeEthereumTx,
-				Attributes: []abci.EventAttribute{
-					{Key: evmtypes.AttributeKeyEthereumTxHash, Value: ethMsg.Hash().Hex()},
-					{Key: evmtypes.AttributeKeyTxIndex, Value: "0"},
-					{Key: evmtypes.AttributeKeyTxGasUsed, Value: "7"},
-				},
+func TestParseTxResultNonEVMFailureGasUsed(t *testing.T) {
+	newMsg := func(nonce uint64) *evmtypes.MsgEthereumTx {
+		return evmtypes.NewTx(
+			big.NewInt(1),
+			nonce,
+			ptrToAddress(common.HexToAddress("0x3000000000000000000000000000000000000003")),
+			big.NewInt(0),
+			50000,
+			big.NewInt(1),
+			nil,
+			nil,
+			nil,
+			nil,
+		)
+	}
+	ethEvent := func(msg *evmtypes.MsgEthereumTx, index string) abci.Event {
+		return abci.Event{
+			Type: evmtypes.EventTypeEthereumTx,
+			Attributes: []abci.EventAttribute{
+				{Key: evmtypes.AttributeKeyEthereumTxHash, Value: msg.Hash().Hex()},
+				{Key: evmtypes.AttributeKeyTxIndex, Value: index},
+				{Key: evmtypes.AttributeKeyTxGasUsed, Value: "7"},
 			},
+		}
+	}
+
+	single := newMsg(1)
+	first, second := newMsg(2), newMsg(3)
+	testCases := []struct {
+		name    string
+		msgs    []*evmtypes.MsgEthereumTx
+		result  *abci.ExecTxResult
+		wantGas []uint64
+	}{
+		{
+			name: "message execution failure uses chain gas used",
+			msgs: []*evmtypes.MsgEthereumTx{single},
+			result: &abci.ExecTxResult{
+				Code:      1,
+				Codespace: "undefined",
+				Log:       "failed to execute message; message index: 0: execution reverted",
+				GasUsed:   28209,
+				Events:    []abci.Event{ethEvent(single, "0")},
+			},
+			wantGas: []uint64{28209},
+		},
+		{
+			name: "block gas limit failure keeps gas limit",
+			msgs: []*evmtypes.MsgEthereumTx{single},
+			result: &abci.ExecTxResult{
+				Code:      11,
+				Codespace: "sdk",
+				Log:       ExceedBlockGasLimitError + " 50000",
+				GasUsed:   123,
+				Events:    []abci.Event{ethEvent(single, "0")},
+			},
+			wantGas: []uint64{single.GetGas()},
+		},
+		{
+			name: "multi message failure keeps gas limits",
+			msgs: []*evmtypes.MsgEthereumTx{first, second},
+			result: &abci.ExecTxResult{
+				Code:      1,
+				Codespace: "undefined",
+				Log:       "failed to execute message; message index: 1: boom",
+				GasUsed:   90000,
+				Events:    []abci.Event{ethEvent(first, "0"), ethEvent(second, "1")},
+			},
+			wantGas: []uint64{first.GetGas(), second.GetGas()},
 		},
 	}
 
-	parsed, err := ParseTxResult(result, mockTx{msgs: []sdk.Msg{ethMsg}})
-	if err != nil {
-		t.Fatalf("ParseTxResult returned error: %v", err)
-	}
-	got := parsed.GetTxByMsgIndex(0)
-	if got == nil || !got.Failed || got.GasUsed != ethMsg.GetGas() {
-		t.Fatalf("unexpected non-evm failure tx: %#v", got)
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			sdkMsgs := make([]sdk.Msg, 0, len(tc.msgs))
+			for _, msg := range tc.msgs {
+				sdkMsgs = append(sdkMsgs, msg)
+			}
+			parsed, err := ParseTxResult(tc.result, mockTx{msgs: sdkMsgs})
+			if err != nil {
+				t.Fatalf("ParseTxResult returned error: %v", err)
+			}
+			for i, want := range tc.wantGas {
+				got := parsed.GetTxByMsgIndex(i)
+				if got == nil || !got.Failed || got.GasUsed != want {
+					t.Fatalf("msg %d: unexpected non-evm failure tx: %#v (want gas %d)", i, got, want)
+				}
+			}
+		})
 	}
 }
 

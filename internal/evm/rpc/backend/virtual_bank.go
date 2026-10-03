@@ -212,10 +212,13 @@ func (b *Backend) liveVirtualBankBlockView(
 			b.logger.Warn("failed to parse tx result", "height", block.Height, "txIndex", txIndex, "error", parsedErr.Error())
 		}
 
+		// a tx that failed in the ante handler is not an Ethereum-visible inclusion
+		anteFailed := rpctypes.TxAnteFailed(txResult)
+
 		var cumulativeTxEthGasUsed uint64
 		for msgIndex, msg := range msgs {
 			ethMsg, ok := msg.(*evmtypes.MsgEthereumTx)
-			if !ok {
+			if !ok || anteFailed {
 				continue
 			}
 
@@ -229,6 +232,7 @@ func (b *Backend) liveVirtualBankBlockView(
 			txGasUsed := ethMsg.GetGas()
 			if txResult.Code != abci.CodeTypeOK && txResult.Codespace != evmtypes.ModuleName {
 				txFailed = true
+				txGasUsed = rpctypes.FailedEthTxGasUsed(txResult, ethMsg, len(msgs))
 			} else if parsedTxs != nil {
 				parsedTx := parsedTxs.GetTxByMsgIndex(msgIndex)
 				if parsedTx == nil {

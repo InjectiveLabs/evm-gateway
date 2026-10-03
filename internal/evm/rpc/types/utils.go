@@ -272,3 +272,37 @@ func TxExceedBlockGasLimit(res *abci.ExecTxResult) bool {
 func TxSuccessOrExceedsBlockGasLimit(res *abci.ExecTxResult) bool {
 	return res.Code == 0 || TxExceedBlockGasLimit(res)
 }
+
+// MsgExecutionFailedLog is the wrapper cosmos-sdk baseapp puts around errors
+// returned by message handlers, i.e. after the ante handler succeeded.
+const MsgExecutionFailedLog = "failed to execute message"
+
+// TxAnteFailed reports whether a Cosmos tx result failed in the ante handler.
+//
+// The EVM ante handler bumps the sender nonce as its last step, and baseapp
+// discards all ante state when the ante handler fails. Such a tx is part of the
+// Comet block, but it never consumed its nonce, so the same signed Ethereum tx
+// may be included again in a later block. It must not be exposed as an
+// Ethereum transaction. Failures after a successful ante handler (VM errors,
+// message handler errors, block gas limit) consumed the nonce and stay visible.
+func TxAnteFailed(res *abci.ExecTxResult) bool {
+	if res == nil || res.Code == abci.CodeTypeOK {
+		return false
+	}
+	if res.Codespace == evmtypes.ModuleName || TxExceedBlockGasLimit(res) {
+		return false
+	}
+	return !strings.Contains(res.Log, MsgExecutionFailedLog)
+}
+
+// FailedEthTxGasUsed returns the gas used reported for an Ethereum tx whose
+// Cosmos tx failed after the ante handler without emitting EVM events.
+// The chain reports gas for the whole Cosmos tx, so it is only attributable to
+// a single Ethereum message; block gas limit failures and multi-message txs
+// keep the gas limit, which is what the ante handler charged.
+func FailedEthTxGasUsed(res *abci.ExecTxResult, msg *evmtypes.MsgEthereumTx, ethMsgCount int) uint64 {
+	if res == nil || TxExceedBlockGasLimit(res) || ethMsgCount != 1 || res.GasUsed < 0 {
+		return msg.GetGas()
+	}
+	return uint64(res.GasUsed)
+}

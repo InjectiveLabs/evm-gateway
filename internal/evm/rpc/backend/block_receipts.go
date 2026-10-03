@@ -128,15 +128,18 @@ func (b *Backend) cachedBlockReceipts(blockNrOrHash rpctypes.BlockNumberOrHash) 
 
 // materializedReceiptByHash returns an indexed receipt, using the in-memory
 // materialized cache to avoid decoding the same KV payload repeatedly.
+// Cached entries are only served within the indexer cache epoch they were read
+// in, so receipts rewritten by re-indexing are never served stale.
 func (b *Backend) materializedReceiptByHash(hash common.Hash) (map[string]interface{}, error) {
-	if receipt, ok := b.materialized.getReceipt(hash); ok {
+	epoch := b.indexerCacheEpoch()
+	if receipt, ok := b.materialized.getReceipt(hash, epoch); ok {
 		return receipt, nil
 	}
 	receipt, err := b.indexer.GetReceiptByTxHash(hash)
 	if err != nil {
 		return nil, err
 	}
-	b.materialized.addReceipt(hash, receipt)
+	b.materialized.addReceipt(hash, receipt, epoch)
 	return receipt, nil
 }
 
@@ -213,6 +216,12 @@ func (b *Backend) liveBlockReceipts(resBlock *cmrpctypes.ResultBlock) ([]map[str
 			continue
 		}
 
+		if rpctypes.TxAnteFailed(txResult) {
+			// failed in the ante handler: not an Ethereum-visible inclusion
+			cumulativeBlockGasUsed += resultGasUsed
+			continue
+		}
+
 		parsedTxs, parsedErr := rpctypes.ParseTxResult(txResult, tx)
 		if parsedErr != nil && (txResult.Code == abci.CodeTypeOK || txResult.Codespace == evmtypes.ModuleName) {
 			b.logger.Warn("failed to parse tx result", "height", resBlock.Block.Height, "txIndex", txIndex, "error", parsedErr.Error())
@@ -238,6 +247,7 @@ func (b *Backend) liveBlockReceipts(resBlock *cmrpctypes.ResultBlock) ([]map[str
 			switch {
 			case txResult.Code != abci.CodeTypeOK && txResult.Codespace != evmtypes.ModuleName:
 				txFailed = true
+				txGasUsed = rpctypes.FailedEthTxGasUsed(txResult, ethMsg, len(tx.GetMsgs()))
 			case parsedTxs == nil:
 				txFailed = txResult.Code != abci.CodeTypeOK
 			default:

@@ -114,6 +114,7 @@ func TestAlignTraceBlockResultsWithVisibleTransactions(t *testing.T) {
 	aligned := alignTraceBlockResults(
 		[]*rpctypes.TxTraceResult{ethereumResult},
 		[]common.Hash{virtualBefore, ethereumHash, virtualAfter},
+		func(hash common.Hash) bool { return hash == virtualBefore || hash == virtualAfter },
 	)
 
 	if len(aligned) != 3 {

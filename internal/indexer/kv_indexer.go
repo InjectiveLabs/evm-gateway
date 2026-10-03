@@ -76,6 +76,7 @@ type KVIndexer struct {
 	virtualBankTransfers bool
 	virtualChainID       *big.Int
 	baseTraceTags        gotracer.Tags
+	epoch                *cacheEpoch
 }
 
 // NewKVIndexer creates the KVIndexer
@@ -86,6 +87,7 @@ func NewKVIndexer(db dbm.DB, logger *slog.Logger, clientCtx client.Context, opts
 		logger:        logger,
 		clientCtx:     clientCtx,
 		baseTraceTags: newIndexerTraceTags(),
+		epoch:         &cacheEpoch{},
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -157,9 +159,12 @@ func (kv *KVIndexer) indexBlockWithStats(block *cmtypes.Block, blockResults *cor
 
 	batch := kv.db.NewBatch()
 	defer batch.Close()
-	if err := kv.resetBlock(batch, block.Height); err != nil {
+	rewrote, err := kv.resetBlock(batch, block.Height)
+	if err != nil {
 		return stats, err
 	}
+	// hashes claimed by this block, to detect duplicates within the block
+	claimedTxHashes := make(map[common.Hash]struct{})
 
 	blockHash := common.BytesToHash(block.Hash())
 	flatLogs := make([]*virtualbank.RPCLog, 0)
@@ -318,11 +323,20 @@ func (kv *KVIndexer) indexBlockWithStats(block *cmtypes.Block, blockResults *cor
 			return stats, newBlockParseError(err, "block %d txIndex %d: failed to parse tx result", block.Height, txIndex)
 		}
 
+		// The tx failed in the ante handler: it never consumed the sender nonce and
+		// had no Ethereum-visible effect, and the same signed tx may be included
+		// again in a later block. Skip its Ethereum messages entirely.
+		anteFailed := rpctypes.TxAnteFailed(result)
+
 		var cumulativeTxEthGasUsed uint64
 		for msgIndex, msg := range msgs {
 			ethMsg, ok := msg.(*evmtypes.MsgEthereumTx)
 			if !ok {
 				// NOTE: non-evm msgs are ignored and excluded from cumulativeGasUsed.
+				continue
+			}
+			if anteFailed {
+				stats.SkippedAnteFailedEthTxs++
 				continue
 			}
 
@@ -342,9 +356,9 @@ func (kv *KVIndexer) indexBlockWithStats(block *cmtypes.Block, blockResults *cor
 				EthTxIndex: ethTxIndex,
 			}
 			if result.Code != abci.CodeTypeOK && result.Codespace != evmtypes.ModuleName {
-				// exceeds block gas limit scenario, set gas used to gas limit because that's what's charged by ante handler.
-				// some old versions don't emit any events, so workaround here directly.
-				txResult.GasUsed = ethMsg.GetGas()
+				// failed after the ante handler without emitting evm events: message
+				// handler errors and the legacy block gas limit scenario.
+				txResult.GasUsed = rpctypes.FailedEthTxGasUsed(result, ethMsg, len(msgs))
 				txResult.Failed = true
 				txHash = ethMsg.Hash()
 			} else {
@@ -372,8 +386,26 @@ func (kv *KVIndexer) indexBlockWithStats(block *cmtypes.Block, blockResults *cor
 				txVMError = parsedTx.VMError
 			}
 
+			if _, dup := claimedTxHashes[txHash]; dup {
+				// A second inclusion in the same block can only fail the nonce check in
+				// the ante handler, which is skipped above. Keep the first occurrence.
+				kv.logger.Warn("duplicate ethereum tx in block; keeping the first occurrence", "height", block.Height, "txIndex", txIndex, "msgIndex", msgIndex, "tx_hash", txHash.Hex())
+				stats.SkippedDuplicateEthTxs++
+				continue
+			}
+			claimedTxHashes[txHash] = struct{}{}
+
 			cumulativeTxEthGasUsed += txResult.GasUsed
 			txResult.CumulativeGasUsed = cumulativeTxEthGasUsed
+
+			reassigned, err := kv.claimTxHash(batch, txHash, block.Height)
+			if err != nil {
+				return stats, errorsmod.Wrapf(err, "IndexBlock %d", block.Height)
+			}
+			if reassigned {
+				stats.ReassignedTxHashes++
+				rewrote = true
+			}
 
 			if err := saveTxResult(kv.clientCtx.Codec, batch, txHash, &txResult); err != nil {
 				return stats, errorsmod.Wrapf(err, "IndexBlock %d", block.Height)
@@ -580,7 +612,36 @@ func (kv *KVIndexer) indexBlockWithStats(block *cmtypes.Block, blockResults *cor
 	if err := batch.Write(); err != nil {
 		return stats, errorsmod.Wrapf(err, "IndexBlock %d, write batch", block.Height)
 	}
+	if rewrote {
+		kv.bumpCacheEpoch()
+	}
 	return stats, nil
+}
+
+// claimTxHash prepares the hash-keyed records of txHash to be written by the
+// block at height. Only Ethereum txs that consumed their nonce are indexed, so
+// the same hash can never legitimately be owned by two blocks: a record owned
+// by another height is stale (e.g. written for an ante-failed inclusion by an
+// older indexer version) and the block being indexed wins. Cached traces of the
+// stale record are dropped. Returns true when the hash was reassigned.
+func (kv *KVIndexer) claimTxHash(batch dbm.Batch, txHash common.Hash, height int64) (bool, error) {
+	owner, found, err := kv.txHashOwnerHeight(txHash)
+	if err != nil {
+		return false, err
+	}
+	if !found || owner == height {
+		return false, nil
+	}
+	kv.logger.Warn(
+		"tx hash already indexed at another height; reassigning to the block being indexed",
+		"tx_hash", txHash.Hex(),
+		"previous_height", owner,
+		"height", height,
+	)
+	if err := kv.deleteTraceTxKeys(batch, txHash); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // DeleteBlock removes all indexed data associated with a block height.
@@ -596,11 +657,15 @@ func (kv *KVIndexer) DeleteBlock(height int64) error {
 	batch := kv.db.NewBatch()
 	defer batch.Close()
 
-	if err := kv.resetBlock(batch, height); err != nil {
+	rewrote, err := kv.resetBlock(batch, height)
+	if err != nil {
 		return err
 	}
 	if err := batch.Write(); err != nil {
 		return errorsmod.Wrapf(err, "DeleteBlock %d", height)
+	}
+	if rewrote {
+		kv.bumpCacheEpoch()
 	}
 
 	return nil
@@ -822,7 +887,11 @@ func visibleRPCTxsRoot(txHashes []common.Hash) common.Hash {
 	return common.BytesToHash(merkle.HashFromByteSlices(leaves))
 }
 
-func (kv *KVIndexer) resetBlock(batch dbm.Batch, height int64) error {
+// resetBlock stages the removal of everything indexed for a height. Hash-keyed
+// records are only removed when this height owns them, so resetting a block
+// never deletes the records of the same tx hash indexed at another height.
+// Returns true when previously indexed data was found.
+func (kv *KVIndexer) resetBlock(batch dbm.Batch, height int64) (bool, error) {
 	ctx := kv.operationContext()
 	if kv.ctx != nil {
 		defer gotracer.Trace(&ctx, kv.baseTraceTags)()
@@ -831,35 +900,39 @@ func (kv *KVIndexer) resetBlock(batch dbm.Batch, height int64) error {
 	}
 	kv = kv.WithContext(ctx).(*KVIndexer)
 
+	found := false
 	metaBz, err := kv.db.Get(BlockMetaKey(height))
 	if err != nil {
-		return errorsmod.Wrapf(err, "reset block %d: get meta", height)
+		return false, errorsmod.Wrapf(err, "reset block %d: get meta", height)
 	}
 	if len(metaBz) > 0 {
+		found = true
 		meta, err := unmarshalBlockMetaPayload(metaBz)
 		if err != nil {
-			return errorsmod.Wrapf(err, "reset block %d: unmarshal meta", height)
+			return false, errorsmod.Wrapf(err, "reset block %d: unmarshal meta", height)
 		}
 		if err := batch.Delete(BlockHashKey(common.HexToHash(meta.Hash))); err != nil {
-			return errorsmod.Wrapf(err, "reset block %d: delete block hash", height)
+			return false, errorsmod.Wrapf(err, "reset block %d: delete block hash", height)
 		}
 	}
 
-	txIndexStart := txIndexPrefixStart(height)
-	txIndexEnd := txIndexPrefixEnd(height)
-	it, err := kv.db.Iterator(txIndexStart, txIndexEnd)
-	if err != nil {
-		return errorsmod.Wrapf(err, "reset block %d: tx iterator", height)
-	}
-	defer it.Close()
-
-	txHashes := make([]common.Hash, 0)
-	for ; it.Valid(); it.Next() {
-		txHash := common.BytesToHash(it.Value())
-		txHashes = append(txHashes, txHash)
-		if err := batch.Delete(it.Key()); err != nil {
-			return errorsmod.Wrapf(err, "reset block %d: delete tx index", height)
+	ownedTxHashes := make([]common.Hash, 0)
+	ownership := make(map[common.Hash]bool)
+	ownedByHeight := func(txHash common.Hash) (bool, error) {
+		if owned, ok := ownership[txHash]; ok {
+			return owned, nil
 		}
+		owned, err := kv.txHashOwnedByHeight(txHash, height)
+		if err != nil {
+			return false, errorsmod.Wrapf(err, "reset block %d: tx hash owner", height)
+		}
+		ownership[txHash] = owned
+		if owned {
+			ownedTxHashes = append(ownedTxHashes, txHash)
+		}
+		return owned, nil
+	}
+	deleteHashRecords := func(txHash common.Hash) error {
 		if err := batch.Delete(TxHashKey(txHash)); err != nil {
 			return errorsmod.Wrapf(err, "reset block %d: delete tx hash", height)
 		}
@@ -872,44 +945,73 @@ func (kv *KVIndexer) resetBlock(batch dbm.Batch, height int64) error {
 		if err := batch.Delete(VirtualRPCtxKey(txHash)); err != nil {
 			return errorsmod.Wrapf(err, "reset block %d: delete virtual rpc tx marker", height)
 		}
+		return nil
 	}
 
-	if err := kv.deleteTraceKeysForBlock(batch, height, txHashes); err != nil {
-		return errorsmod.Wrapf(err, "reset block %d: delete trace cache", height)
+	txIndexStart := txIndexPrefixStart(height)
+	txIndexEnd := txIndexPrefixEnd(height)
+	it, err := kv.db.Iterator(txIndexStart, txIndexEnd)
+	if err != nil {
+		return false, errorsmod.Wrapf(err, "reset block %d: tx iterator", height)
+	}
+	defer it.Close()
+
+	for ; it.Valid(); it.Next() {
+		found = true
+		txHash := common.BytesToHash(it.Value())
+		if err := batch.Delete(it.Key()); err != nil {
+			return false, errorsmod.Wrapf(err, "reset block %d: delete tx index", height)
+		}
+		owned, err := ownedByHeight(txHash)
+		if err != nil {
+			return false, err
+		}
+		if !owned {
+			continue
+		}
+		if err := deleteHashRecords(txHash); err != nil {
+			return false, err
+		}
 	}
 
 	rpcIndexStart := rpcTxIndexPrefixStart(height)
 	rpcIndexEnd := rpcTxIndexPrefixEnd(height)
 	rpcIt, err := kv.db.Iterator(rpcIndexStart, rpcIndexEnd)
 	if err != nil {
-		return errorsmod.Wrapf(err, "reset block %d: rpc tx iterator", height)
+		return false, errorsmod.Wrapf(err, "reset block %d: rpc tx iterator", height)
 	}
 	defer rpcIt.Close()
 
 	for ; rpcIt.Valid(); rpcIt.Next() {
+		found = true
 		txHash := common.BytesToHash(rpcIt.Value())
-		if err := batch.Delete(ReceiptKey(txHash)); err != nil {
-			return errorsmod.Wrapf(err, "reset block %d: delete rpc receipt", height)
-		}
-		if err := batch.Delete(RPCtxHashKey(txHash)); err != nil {
-			return errorsmod.Wrapf(err, "reset block %d: delete rpc tx hash", height)
-		}
-		if err := batch.Delete(VirtualRPCtxKey(txHash)); err != nil {
-			return errorsmod.Wrapf(err, "reset block %d: delete virtual rpc tx marker", height)
-		}
 		if err := batch.Delete(rpcIt.Key()); err != nil {
-			return errorsmod.Wrapf(err, "reset block %d: delete rpc tx index", height)
+			return false, errorsmod.Wrapf(err, "reset block %d: delete rpc tx index", height)
 		}
+		owned, err := ownedByHeight(txHash)
+		if err != nil {
+			return false, err
+		}
+		if !owned {
+			continue
+		}
+		if err := deleteHashRecords(txHash); err != nil {
+			return false, err
+		}
+	}
+
+	if err := kv.deleteTraceKeysForBlock(batch, height, ownedTxHashes); err != nil {
+		return false, errorsmod.Wrapf(err, "reset block %d: delete trace cache", height)
 	}
 
 	if err := batch.Delete(BlockLogsKey(height)); err != nil {
-		return errorsmod.Wrapf(err, "reset block %d: delete block logs", height)
+		return false, errorsmod.Wrapf(err, "reset block %d: delete block logs", height)
 	}
 	if err := batch.Delete(BlockMetaKey(height)); err != nil {
-		return errorsmod.Wrapf(err, "reset block %d: delete block meta", height)
+		return false, errorsmod.Wrapf(err, "reset block %d: delete block meta", height)
 	}
 
-	return nil
+	return found, nil
 }
 
 func txIndexPrefixStart(height int64) []byte {
