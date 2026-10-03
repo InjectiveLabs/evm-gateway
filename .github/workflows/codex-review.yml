@@ -13,14 +13,23 @@ on:
       - reopened
       - synchronize
       - ready_for_review
+      # Base-branch retargets arrive as `edited`; other edits are ignored below.
+      - edited
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+  # Non-base edits (title/body) get a unique group so they never cancel an
+  # in-flight review.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.inputs.pr_number }}${{ (github.event.action == 'edited' && !github.event.changes.base) && format('-noop-{0}', github.run_id) || '' }}
   cancel-in-progress: true
 
 jobs:
   codex:
-    if: github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]')
+    if: >-
+      github.event_name != 'pull_request' || (
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        github.event.pull_request.user.login != 'dependabot[bot]' &&
+        (github.event.action != 'edited' || github.event.changes.base)
+      )
     runs-on: blacksmith-4vcpu-ubuntu-2204
     timeout-minutes: 120
     permissions:
