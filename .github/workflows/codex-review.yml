@@ -1,0 +1,321 @@
+name: Codex Code Review
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "Pull request number to review"
+        required: true
+        type: number
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - ready_for_review
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+  cancel-in-progress: true
+
+jobs:
+  codex:
+    if: github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]')
+    runs-on: blacksmith-4vcpu-ubuntu-2204
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      pull-requests: read
+    env:
+      GOCACHE: ${{ github.workspace }}/.gocache
+      GOMODCACHE: ${{ github.workspace }}/.gomodcache
+      GOPRIVATE: github.com/InjectiveLabs
+      GONOSUMDB: github.com/InjectiveLabs
+    outputs:
+      final_message_b64: ${{ steps.run_codex.outputs.final_message_b64 }}
+      head_sha: ${{ steps.pr.outputs.head_sha }}
+      base_ref: ${{ steps.pr.outputs.base_ref }}
+      merge_base_sha: ${{ steps.review_range.outputs.merge_base_sha }}
+      review_commit_count: ${{ steps.review_range.outputs.review_commit_count }}
+    steps:
+      - name: Resolve pull request metadata
+        id: pr
+        uses: actions/github-script@v7
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const prNumber = Number(process.env.PR_NUMBER);
+            if (!Number.isInteger(prNumber) || prNumber <= 0) {
+              core.setFailed(`Invalid PR number: ${process.env.PR_NUMBER}`);
+              return;
+            }
+
+            const { data: pullRequest } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber,
+            });
+
+            core.setOutput('number', String(pullRequest.number));
+            core.setOutput('head_sha', pullRequest.head.sha);
+            core.setOutput('base_ref', pullRequest.base.ref);
+            core.setOutput('base_remote_ref', `origin/${pullRequest.base.ref}`);
+            const isTrusted =
+              pullRequest.head.repo?.full_name === `${context.repo.owner}/${context.repo.repo}` &&
+              pullRequest.user?.login !== 'dependabot[bot]';
+            core.setOutput('trusted', String(isTrusted));
+
+      - name: Reject untrusted manual review target
+        if: github.event_name == 'workflow_dispatch' && steps.pr.outputs.trusted != 'true'
+        run: |
+          echo "::error::Manual reviews may only target same-repository, non-Dependabot pull requests."
+          exit 1
+
+      - name: Checkout pull request head
+        uses: actions/checkout@v7
+        with:
+          ref: refs/pull/${{ steps.pr.outputs.number }}/head
+          fetch-depth: 0
+          # Authenticate the private base fetch for that command only; never
+          # leave the repository token available to the unsandboxed review.
+          persist-credentials: false
+
+      - name: Fetch pull request base
+        env:
+          BASE_REF: ${{ steps.pr.outputs.base_ref }}
+          FETCH_TOKEN: ${{ github.token }}
+          SERVER_URL: ${{ github.server_url }}
+        run: |
+          set -euo pipefail
+
+          : "${BASE_REF:?Missing PR base branch}"
+          : "${FETCH_TOKEN:?Missing repository token}"
+          : "${SERVER_URL:?Missing GitHub server URL}"
+
+          auth_header="$(printf 'x-access-token:%s' "${FETCH_TOKEN}" | base64 -w 0)"
+          echo "::add-mask::${auth_header}"
+          GIT_CONFIG_COUNT=1 \
+            GIT_CONFIG_KEY_0="http.${SERVER_URL}/.extraheader" \
+            GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${auth_header}" \
+            git fetch --no-tags origin \
+              "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
+          unset auth_header FETCH_TOKEN
+
+          if git config --show-origin --name-only \
+            --get-regexp '^http\..*\.extraheader$' >/dev/null; then
+            echo "Persisted Git HTTP credentials remain after the base fetch." >&2
+            exit 1
+          fi
+
+      - name: Resolve review range
+        id: review_range
+        env:
+          BASE_REF: ${{ steps.pr.outputs.base_ref }}
+          EXPECTED_HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+
+          : "${BASE_REF:?Missing PR base branch}"
+          : "${EXPECTED_HEAD_SHA:?Missing PR head SHA}"
+
+          head_sha="$(git rev-parse HEAD)"
+          if [ "${head_sha}" != "${EXPECTED_HEAD_SHA}" ]; then
+            echo "Checked out ${head_sha}, expected PR head ${EXPECTED_HEAD_SHA}." >&2
+            exit 1
+          fi
+
+          base_remote_ref="origin/${BASE_REF}"
+          base_sha="$(git rev-parse --verify "${base_remote_ref}^{commit}")"
+          merge_base_sha="$(git merge-base "${head_sha}" "${base_sha}")"
+          review_commit_count="$(git rev-list --count "${merge_base_sha}..${head_sha}")"
+
+          echo "merge_base_sha=${merge_base_sha}" >> "$GITHUB_OUTPUT"
+          echo "review_commit_count=${review_commit_count}" >> "$GITHUB_OUTPUT"
+          echo "Reviewing ${review_commit_count} commit(s): ${merge_base_sha}...${head_sha} against ${base_remote_ref} (${base_sha})."
+          git diff --stat "${merge_base_sha}...${head_sha}"
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Pre-fetch Go module cache
+        run: ./scripts/with-private-git.sh go mod download
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GOCACHE: ${{ env.GOCACHE }}
+          GOMODCACHE: ${{ env.GOMODCACHE }}
+
+      # codex-action securely configures the CLI and API-key proxy. The review
+      # command is run separately because the action's prompt input maps to
+      # `codex exec`, while /review maps to `codex exec review --base`.
+      - name: Set up Codex
+        uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56 # v1.11
+        with:
+          openai-api-key: ${{ secrets.CODEX_API_KEY }}
+          responses-api-endpoint: ${{ secrets.CODEX_RESPONSES_API_ENDPOINT }}
+          codex-version: 0.154.0
+          codex-home: ${{ runner.temp }}/codex-review-home
+          safety-strategy: unsafe
+
+      - name: Run Codex review
+        id: run_codex
+        env:
+          BASE_REMOTE_REF: ${{ steps.pr.outputs.base_remote_ref }}
+          CODEX_HOME: ${{ runner.temp }}/codex-review-home
+          # Let Codex compile test packages without executing their tests;
+          # normal CI remains responsible for running the test suite.
+          GOFLAGS: "-run=^$"
+        run: |
+          set -euo pipefail
+          output_file="${RUNNER_TEMP}/codex-review.json"
+
+          codex exec review \
+            --base "$BASE_REMOTE_REF" \
+            --model gpt-5.6-sol \
+            --config 'review_model="gpt-5.6-sol"' \
+            --config 'model_reasoning_effort="max"' \
+            --ephemeral \
+            --dangerously-bypass-approvals-and-sandbox \
+            --output-last-message "$output_file"
+
+          if [ ! -s "$output_file" ]; then
+            echo "Codex produced no final review message." >&2
+            exit 1
+          fi
+
+          echo "final_message_b64=$(base64 -w 0 "$output_file")" >> "$GITHUB_OUTPUT"
+
+  post_feedback:
+    runs-on: ubuntu-latest
+    needs: codex
+    if: needs.codex.outputs.final_message_b64 != ''
+    permissions:
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Report Codex feedback
+        uses: actions/github-script@v7
+        env:
+          BASE_REF: ${{ needs.codex.outputs.base_ref }}
+          CODEX_FINAL_MESSAGE_B64: ${{ needs.codex.outputs.final_message_b64 }}
+          MERGE_BASE_SHA: ${{ needs.codex.outputs.merge_base_sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+          HEAD_SHA: ${{ needs.codex.outputs.head_sha }}
+          REVIEW_COMMIT_COUNT: ${{ needs.codex.outputs.review_commit_count }}
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const prNumber = Number(process.env.PR_NUMBER);
+            if (!Number.isInteger(prNumber) || prNumber <= 0) {
+              core.setFailed(`Invalid PR number: ${process.env.PR_NUMBER}`);
+              return;
+            }
+
+            const headSha = (process.env.HEAD_SHA || '').trim();
+            const mergeBaseSha = (process.env.MERGE_BASE_SHA || '').trim();
+            const reviewCommitCount = Number(process.env.REVIEW_COMMIT_COUNT);
+            const baseRef = (process.env.BASE_REF || '').trim();
+            if (
+              !/^[0-9a-f]{40}$/i.test(headSha) ||
+              !/^[0-9a-f]{40}$/i.test(mergeBaseSha) ||
+              !Number.isInteger(reviewCommitCount) ||
+              reviewCommitCount < 1 ||
+              !baseRef
+            ) {
+              core.setFailed('Missing or invalid review range metadata.');
+              return;
+            }
+
+            const repoFull = `${context.repo.owner}/${context.repo.repo}`;
+            const rawMessage = Buffer.from(
+              process.env.CODEX_FINAL_MESSAGE_B64 || '',
+              'base64',
+            ).toString('utf8').trim();
+
+            const { data: currentPR } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber,
+            });
+            if (currentPR.head.sha !== headSha) {
+              core.info(`Skipping superseded review of ${headSha}; current PR head is ${currentPR.head.sha}.`);
+              return;
+            }
+
+            const repoPath = (absolutePath) => {
+              const normalized = String(absolutePath || '').replace(/\\/g, '/');
+              const workspace = (process.env.GITHUB_WORKSPACE || '').replace(/\\/g, '/');
+              if (workspace && normalized.startsWith(`${workspace}/`)) {
+                return normalized.slice(workspace.length + 1);
+              }
+              const marker = `/${context.repo.repo}/`;
+              const markerIndex = normalized.lastIndexOf(marker);
+              if (markerIndex >= 0) {
+                return normalized.slice(markerIndex + marker.length);
+              }
+              return normalized.replace(/^\/+/, '');
+            };
+
+            const locationLink = (location) => {
+              if (!location || !location.absolute_file_path || !location.line_range) {
+                return '';
+              }
+              const path = repoPath(location.absolute_file_path);
+              const start = Number(location.line_range.start);
+              const end = Number(location.line_range.end);
+              if (!path || !Number.isInteger(start) || start <= 0) {
+                return '';
+              }
+              const endSuffix = Number.isInteger(end) && end > start ? `-L${end}` : '';
+              const labelSuffix = Number.isInteger(end) && end > start ? `-${end}` : '';
+              return `[${path}:${start}${labelSuffix}](/${repoFull}/blob/${headSha}/${path}#L${start}${endSuffix})`;
+            };
+
+            let message;
+            try {
+              const review = JSON.parse(rawMessage);
+              const findings = Array.isArray(review.findings) ? review.findings : [];
+              if (findings.length === 0) {
+                message = `🟢 LGTM. ${review.overall_explanation || 'Codex found no actionable issues.'}`;
+              } else {
+                const priorityEmoji = ['🔴', '🔴', '🟠', '🔵'];
+                const sections = findings.map((finding) => {
+                  const priority = finding.priority === null ? null : Number(finding.priority);
+                  const emoji = Number.isInteger(priority) && priority >= 0 && priority <= 3
+                    ? priorityEmoji[priority]
+                    : '⚪';
+                  const location = locationLink(finding.code_location);
+                  return [
+                    `### ${emoji} ${finding.title || 'Review finding'}`,
+                    '',
+                    finding.body || '',
+                    location ? `\n${location}` : '',
+                  ].join('\n').trim();
+                });
+                message = sections.join('\n\n');
+                if (review.overall_explanation) {
+                  message += `\n\n**Overall:** ${review.overall_explanation}`;
+                }
+              }
+            } catch (error) {
+              core.warning(`Could not parse Codex review JSON: ${error.message}`);
+              message = rawMessage;
+            }
+
+            const commitLabel = reviewCommitCount === 1 ? 'commit' : 'commits';
+            message = [
+              `Reviewed PR diff against \`${baseRef}\`: [\`${mergeBaseSha.slice(0, 10)}...${headSha.slice(0, 10)}\`](/${repoFull}/compare/${mergeBaseSha}...${headSha})`,
+              `Review range: ${reviewCommitCount} ${commitLabel}; head snapshot: [\`${headSha}\`](/${repoFull}/commit/${headSha})`,
+              message,
+            ].join('\n\n');
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              body: message,
+            });
