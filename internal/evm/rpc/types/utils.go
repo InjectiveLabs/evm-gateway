@@ -304,15 +304,3 @@ func TxAnteFailed(res *abci.ExecTxResult) bool {
 	}
 	return !strings.Contains(res.Log, MsgExecutionFailedLog)
 }
-
-// FailedEthTxGasUsed returns the gas used reported for an Ethereum tx whose
-// Cosmos tx failed after the ante handler without emitting EVM events.
-// The chain reports gas for the whole Cosmos tx, so it is only attributable to
-// a single Ethereum message; block gas limit failures and multi-message txs
-// keep the gas limit, which is what the ante handler charged.
-func FailedEthTxGasUsed(res *abci.ExecTxResult, msg *evmtypes.MsgEthereumTx, ethMsgCount int) uint64 {
-	if res == nil || TxExceedBlockGasLimit(res) || ethMsgCount != 1 || res.GasUsed < 0 {
-		return msg.GetGas()
-	}
-	return uint64(res.GasUsed)
-}

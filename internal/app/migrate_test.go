@@ -366,17 +366,19 @@ func TestMigrateAnteFailedApplyRepairsLegacyState(t *testing.T) {
 		t.Fatalf("completed migration must not run again without --force")
 	}
 
-	// --force runs again and finds nothing left to repair.
+	// --force runs again and finds nothing left to repair: the remaining
+	// candidates (post-ante failures storing the gas limit) are verified and
+	// rejected.
 	forced := newFakeNode(t)
 	forcedReport := filepath.Join(t.TempDir(), "forced.json")
 	if err := runMigrateAnteFailed(cfg, migrateTestLogger(), MigrateAnteFailedOptions{Force: true, ReportPath: forcedReport}, forced.deps()); err != nil {
 		t.Fatalf("forced migration: %v", err)
 	}
-	if forced.opened != 1 || forced.fetcher.calls != 0 || len(forced.resyncedAt) != 0 {
+	if forced.opened != 1 || forced.fetcher.calls != 1 || len(forced.resyncedAt) != 0 {
 		t.Fatalf("forced rerun on repaired state: opened %d fetched %d resynced %v", forced.opened, forced.fetcher.calls, forced.resyncedAt)
 	}
 	report = readMigrationReport(t, forcedReport)
-	if len(report.Scan.Candidates) != 0 || len(report.Scan.Conflicts) != 0 || len(report.Plan.Heights) != 0 || report.Resync != nil {
+	if len(report.Scan.Conflicts) != 0 || len(report.Verification.Confirmed) != 0 || len(report.Plan.Heights) != 0 || report.Resync != nil {
 		t.Fatalf("repaired state must have nothing to repair: %+v", report.Plan)
 	}
 	if marker := loadMarker(t, cfg); marker == nil || marker.ResyncedCount != 0 {

@@ -13,7 +13,7 @@ The old indexer exposed both inclusions under the same tx hash. Hash-keyed recor
 - block traces listed the ante-failed txs as `{"txHash": …, "error": "insufficient balance for transfer"}` entries;
 - an in-memory receipt cache kept serving a receipt after the KV record was rewritten.
 
-From this release on, ante-failed txs are not indexed. A failure counts as an ante failure when `code != 0` **and the result has no events**, the codespace is not `evm`, the log has no `failed to execute message` wrapper, and it is not the legacy block-gas-limit case. Events are the decisive signal: for a failed tx, baseapp returns the events of a successful ante handler (the EVM ante always emits the fee event) and none when the ante handler failed. Panics recovered during message execution (e.g. `code=111222`, `code=11 out of gas in location: …`) carry no wrapper but keep the ante events, so they stay visible. Failures after the ante handler consumed the nonce and stay visible with `status 0x0` and the chain's `gas_used`.
+From this release on, ante-failed txs are not indexed. A failure counts as an ante failure when `code != 0` **and the result has no events**, the codespace is not `evm`, the log has no `failed to execute message` wrapper, and it is not the legacy block-gas-limit case. Events are the decisive signal: for a failed tx, baseapp returns the events of a successful ante handler (the EVM ante always emits the fee event) and none when the ante handler failed. Panics recovered during message execution (e.g. `code=111222`, `code=11 out of gas in location: …`) carry no wrapper but keep the ante events, so they stay visible. Failures after the ante handler consumed the nonce and stay visible with `status 0x0`. Gas reporting is unchanged: such failures still report the gas limit as `gasUsed` (see [`docs/gas-used-semantics.md`](../gas-used-semantics.md)).
 
 The migration fixes **history**. Blocks indexed by the new version are correct without it.
 
@@ -22,7 +22,7 @@ The migration fixes **history**. Blocks indexed by the new version are correct w
 | Phase | Network | Writes | Description |
 |---|---|---|---|
 | 1. scan | none | none | Scans local KV: failed txs whose stored `gasUsed` equals their gas limit (what the old indexer stored for every non-EVM failure) and every block listing a tx hash owned by another height. |
-| 2. verify | `block_results` of candidate heights only | none | Confirms candidates: `ante_failed`, or `gas_used_mismatch` for post-ante failures that stored the gas limit. |
+| 2. verify | `block_results` of candidate heights only | none | Confirms candidates whose Cosmos tx failed in the ante handler. Post-ante failures match the scan signature too and are rejected here. |
 | 3. repair | `block` + `block_results` of affected heights only | affected heights | Resyncs confirmed heights plus every height involved in a hash conflict, then writes a completion marker. |
 
 - Resyncing a height deletes its cached block traces and the per-tx traces of the txs it owns.
@@ -123,7 +123,7 @@ r eth_getTransactionByHash  "[\"$H\"]" | jq -c '.result.blockNumber'            
 r eth_getTransactionReceipt "[\"$H\"]" | jq -c '.result|{blockNumber,status}'      # 0xb0fb28d, 0x1
 r eth_getBlockByNumber '["0xb0fb1f0",false]' | jq -c '.result.transactions|length' # 2 (was 4)
 r eth_getBlockReceipts '["0xb0fb28d"]' | jq -c '[.result[].blockNumber]'           # ["0xb0fb28d"]
-r eth_getBlockReceipts '["0xb0fb9b1"]' | jq -c '[.result[]|.gasUsed]'              # 4 x "0x6e31", then the 5th tx
+r eth_getBlockReceipts '["0xb0fb9b1"]' | jq -c '[.result[]|.status]'               # 4 x "0x0" (re-included, failed), then "0x1"
 r debug_traceBlockByNumber '["0xb0fb1f0",{"tracer":"callTracer"}]' | jq -c '[.result[]|.result.type]'  # ["CALL","CALL"]
 curl -s $G/status/sync | jq .phase
 evm-gateway migrate ante-failed-txs   # with the service stopped: "migration already completed"

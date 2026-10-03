@@ -247,7 +247,6 @@ func (b *Backend) liveBlockReceipts(resBlock *cmrpctypes.ResultBlock) ([]map[str
 			switch {
 			case txResult.Code != abci.CodeTypeOK && txResult.Codespace != evmtypes.ModuleName:
 				txFailed = true
-				txGasUsed = rpctypes.FailedEthTxGasUsed(txResult, ethMsg, len(tx.GetMsgs()))
 			case parsedTxs == nil:
 				txFailed = txResult.Code != abci.CodeTypeOK
 			default:

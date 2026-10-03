@@ -66,7 +66,7 @@ func TestIndexBlockSkipsAnteFailedEthTxs(t *testing.T) {
 	}
 }
 
-func TestIndexBlockMessageExecutionFailureUsesChainGasUsed(t *testing.T) {
+func TestIndexBlockMessageExecutionFailureKeepsGasLimit(t *testing.T) {
 	db := dbm.NewMemDB()
 	kv := newFixtureIndexer(t, db)
 	stats := indexFixture(t, kv, mainnetfx.HeightEx2Included)
@@ -77,22 +77,31 @@ func TestIndexBlockMessageExecutionFailureUsesChainGasUsed(t *testing.T) {
 	visible := mainnetfx.VisibleTxs[mainnetfx.HeightEx2Included]
 	assertBlockListing(t, kv, mainnetfx.HeightEx2Included, visible)
 
-	var cumulative uint64
+	_, results := fixtureBlock(t, mainnetfx.HeightEx2Included)
 	for i, hash := range visible[:4] {
 		receipt := receiptAt(t, db, hash)
 		txResult := txResultAt(t, kv, hash)
-		cumulative += mainnetfx.GasUsedEx2Included
+		// cumulativeGasUsed is the chain gas of the preceding Cosmos txs plus this
+		// tx's gas limit; it is not the running sum of receipt gasUsed and drops
+		// at the next receipt (see docs/gas-used-semantics.md).
+		var cumulative uint64
+		for _, prev := range results.TxResults[:txResult.TxIndex] {
+			cumulative += uint64(prev.GasUsed)
+		}
+		cumulative += mainnetfx.GasLimitAnteFailed
 		if receipt.Status != ethtypes.ReceiptStatusFailed || !txResult.Failed {
 			t.Fatalf("tx %d: expected failed status", i)
 		}
-		if receipt.GasUsed != mainnetfx.GasUsedEx2Included || txResult.GasUsed != mainnetfx.GasUsedEx2Included {
-			t.Fatalf("tx %d: gas used receipt %d tx result %d want %d", i, receipt.GasUsed, txResult.GasUsed, mainnetfx.GasUsedEx2Included)
+		// gas used semantics are unchanged: failures without evm events report
+		// the gas limit (see docs/gas-used-semantics.md)
+		if receipt.GasUsed != mainnetfx.GasLimitAnteFailed || txResult.GasUsed != mainnetfx.GasLimitAnteFailed {
+			t.Fatalf("tx %d: gas used receipt %d tx result %d want %d", i, receipt.GasUsed, txResult.GasUsed, mainnetfx.GasLimitAnteFailed)
 		}
-		if txResult.CumulativeGasUsed != mainnetfx.GasUsedEx2Included {
+		if txResult.CumulativeGasUsed != mainnetfx.GasLimitAnteFailed {
 			t.Fatalf("tx %d: per-cosmos-tx cumulative gas %d", i, txResult.CumulativeGasUsed)
 		}
-		if receipt.CumulativeGasUsed < cumulative {
-			t.Fatalf("tx %d: cumulative gas %d below %d", i, receipt.CumulativeGasUsed, cumulative)
+		if receipt.CumulativeGasUsed != cumulative {
+			t.Fatalf("tx %d: cumulative gas %d want %d", i, receipt.CumulativeGasUsed, cumulative)
 		}
 	}
 	if receipt := receiptAt(t, db, visible[4]); receipt.Status != ethtypes.ReceiptStatusSuccessful {

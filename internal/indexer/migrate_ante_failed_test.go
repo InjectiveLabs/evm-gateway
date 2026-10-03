@@ -142,12 +142,21 @@ func TestScanAnteFailedCandidatesHeightBounds(t *testing.T) {
 }
 
 func TestScanAnteFailedCandidatesRecordShapes(t *testing.T) {
-	// A fresh index never holds candidates or conflicts: message execution
-	// failures store the chain gas used, not the gas limit.
+	// A fresh index holds no conflicts. Message execution failures store the
+	// gas limit, so they are candidates, which verification rejects.
 	fresh := freshFixtureDB(t, mainnetfx.Heights...)
 	scan := scanLegacy(t, fresh, AnteFailedScanOptions{})
-	if len(scan.Candidates) != 0 || len(scan.Conflicts) != 0 || scan.FailedTxs != 4 {
+	if len(scan.Conflicts) != 0 || scan.FailedTxs != 4 || len(scan.Candidates) != 4 {
 		t.Fatalf("fresh index: unexpected scan %+v", scan)
+	}
+	for _, candidate := range scan.Candidates {
+		if candidate.Height != mainnetfx.HeightEx2Included {
+			t.Fatalf("fresh index: unexpected candidate %+v", candidate)
+		}
+	}
+	verification, err := VerifyAnteFailedCandidates(context.Background(), newFixtureFetcher(t), scan.Candidates, 2, nil)
+	if err != nil || len(verification.Confirmed) != 0 {
+		t.Fatalf("fresh index: nothing must be confirmed: %+v %v", verification, err)
 	}
 
 	// Missing rpc tx payload: the record can't be ruled out.
@@ -287,47 +296,42 @@ func TestVerifyAnteFailedCandidatesConfirmsLegacyCandidates(t *testing.T) {
 
 func TestVerifyAnteFailedCandidatesVerdicts(t *testing.T) {
 	const height = 1000
+	anteEvents := []abci.Event{{Type: "coin_spent"}, {Type: "transfer"}, {Type: "tx"}}
 	fetcher := &fixtureFetcher{errAt: map[int64]error{}, results: map[int64]*coretypes.ResultBlockResults{
 		height: {Height: height, TxResults: []*abci.ExecTxResult{
 			{Code: 0, GasUsed: 21000},
 			{Code: 3, Codespace: "evm", GasUsed: 30000},
 			{Code: 11, Codespace: "sdk", Log: rpctypes.ExceedBlockGasLimitError + " 50000", GasUsed: 0},
-			{Code: 1, Codespace: "undefined", Log: "failed to execute message; message index: 0: boom", GasUsed: 28209},
-			{Code: 1, Codespace: "undefined", Log: "failed to execute message; message index: 0: boom", GasUsed: 28209},
+			{Code: 1, Codespace: "undefined", Log: "failed to execute message; message index: 0: boom", GasUsed: 28209, Events: anteEvents},
+			{Code: 111222, Codespace: "undefined", Log: "recovered: runtime error: invalid memory address", Events: anteEvents},
 			{Code: 32, Codespace: "sdk", Log: "invalid nonce; got 1, expected 2: " + strings.Repeat("x", 300)},
 		}},
 	}}
-	candidate := func(txIndex uint32, gasUsed uint64) AnteFailedCandidate {
-		return AnteFailedCandidate{Height: height, TxIndex: txIndex, Hash: common.BigToHash(common.Big1), GasUsed: gasUsed, GasLimit: 50000}
+	candidate := func(txIndex uint32) AnteFailedCandidate {
+		return AnteFailedCandidate{Height: height, TxIndex: txIndex, Hash: common.BigToHash(common.Big1), GasUsed: 50000, GasLimit: 50000}
 	}
 	verification, err := VerifyAnteFailedCandidates(context.Background(), fetcher, []AnteFailedCandidate{
-		candidate(0, 50000),
-		candidate(1, 50000),
-		candidate(2, 50000),
-		candidate(3, 50000), // stored gas limit, chain gas used differs
-		candidate(4, 28209), // already the chain gas used
-		candidate(5, 50000),
+		candidate(0), candidate(1), candidate(2), candidate(3), candidate(4), candidate(5),
 	}, 0, nil)
 	if err != nil {
 		t.Fatalf("VerifyAnteFailedCandidates: %v", err)
 	}
-	if len(verification.Confirmed) != 2 {
+	// Only the ante failure is confirmed; failures after the ante handler keep
+	// their stored record (gas used stays the gas limit).
+	if len(verification.Confirmed) != 1 {
 		t.Fatalf("unexpected confirmed %+v", verification.Confirmed)
 	}
-	if got := verification.Confirmed[0]; got.TxIndex != 3 || got.Verdict != VerdictGasUsedMismatch {
-		t.Fatalf("expected gas mismatch verdict, got %+v", got)
-	}
-	if got := verification.Confirmed[1]; got.TxIndex != 5 || got.Verdict != VerdictAnteFailed || len(got.Log) != 256+len("...") {
+	if got := verification.Confirmed[0]; got.TxIndex != 5 || got.Verdict != VerdictAnteFailed || len(got.Log) != 256+len("...") {
 		t.Fatalf("expected ante failed verdict with truncated log, got %+v", got)
 	}
 
-	// the mainnet re-included tx stored with the legacy gas limit
+	// the mainnet re-inclusion failed after the ante handler: nothing to repair
 	mainnet := newFixtureFetcher(t)
 	verification, err = VerifyAnteFailedCandidates(context.Background(), mainnet, []AnteFailedCandidate{
 		{Height: mainnetfx.HeightEx2Included, TxIndex: 1, Hash: mainnetfx.TxEx2, GasUsed: mainnetfx.GasLimitAnteFailed},
 	}, 1, nil)
-	if err != nil || len(verification.Confirmed) != 1 || verification.Confirmed[0].Verdict != VerdictGasUsedMismatch {
-		t.Fatalf("expected gas mismatch on mainnet re-inclusion: %+v %v", verification, err)
+	if err != nil || len(verification.Confirmed) != 0 {
+		t.Fatalf("message execution failure must not be confirmed: %+v %v", verification, err)
 	}
 }
 
@@ -515,10 +519,18 @@ func TestAnteFailedMigrationFlowRepairsLegacyState(t *testing.T) {
 
 	assertSameDB(t, dumpDB(t, db, KeyPrefixMigration), dumpDB(t, freshFixtureDB(t, mainnetfx.Heights...)))
 
-	// a second scan finds nothing left to repair
+	// a second pass finds nothing left to repair: no conflicts, and the
+	// remaining candidates (post-ante failures) are not confirmed
 	rescan := scanLegacy(t, db, AnteFailedScanOptions{})
-	if len(rescan.Candidates) != 0 || len(rescan.Conflicts) != 0 {
-		t.Fatalf("expected a clean state after repair: %+v", rescan)
+	if len(rescan.Conflicts) != 0 {
+		t.Fatalf("expected no conflicts after repair: %+v", rescan)
+	}
+	reverified, err := VerifyAnteFailedCandidates(context.Background(), newFixtureFetcher(t), rescan.Candidates, 2, nil)
+	if err != nil || len(reverified.Confirmed) != 0 {
+		t.Fatalf("expected nothing to repair after repair: %+v %v", reverified, err)
+	}
+	if replan := PlanAnteFailedRepair(rescan, reverified); len(replan.Heights) != 0 {
+		t.Fatalf("expected an empty repair plan: %+v", replan)
 	}
 }
 

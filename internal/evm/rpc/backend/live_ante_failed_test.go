@@ -70,8 +70,8 @@ func TestLiveBlockReceiptsSkipAnteFailedTxs(t *testing.T) {
 		if status := receiptUint(t, receipts[i], "status"); status != 0 {
 			t.Fatalf("receipt %d: status %d", i, status)
 		}
-		if gas := receiptUint(t, receipts[i], "gasUsed"); gas != mainnetfx.GasUsedEx2Included {
-			t.Fatalf("receipt %d: gasUsed %d want %d", i, gas, mainnetfx.GasUsedEx2Included)
+		if gas := receiptUint(t, receipts[i], "gasUsed"); gas != mainnetfx.GasLimitAnteFailed {
+			t.Fatalf("receipt %d: gasUsed %d want %d", i, gas, mainnetfx.GasLimitAnteFailed)
 		}
 	}
 	if status := receiptUint(t, receipts[4], "status"); status != 1 {
@@ -112,7 +112,7 @@ func TestLiveVirtualBankViewSkipsAnteFailedTxs(t *testing.T) {
 			}
 			seen++
 			if height == mainnetfx.HeightEx2Included && receiptUint(t, receipt, "status") == 0 {
-				if gas := receiptUint(t, receipt, "gasUsed"); gas != mainnetfx.GasUsedEx2Included {
+				if gas := receiptUint(t, receipt, "gasUsed"); gas != mainnetfx.GasLimitAnteFailed {
 					t.Fatalf("failed receipt %s: gasUsed %d", hash.Hex(), gas)
 				}
 			}

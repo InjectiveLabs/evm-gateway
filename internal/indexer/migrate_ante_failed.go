@@ -16,7 +16,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 
 	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
-	evmtypes "github.com/InjectiveLabs/sdk-go/chain/evm/types"
 )
 
 const (
@@ -293,9 +292,6 @@ const (
 	// VerdictAnteFailed: the Cosmos tx failed in the ante handler, the Ethereum
 	// tx must not be indexed.
 	VerdictAnteFailed AnteFailedVerdict = "ante_failed"
-	// VerdictGasUsedMismatch: the tx failed after the ante handler and stays
-	// indexed, but its stored gas used differs from the chain's.
-	VerdictGasUsedMismatch AnteFailedVerdict = "gas_used_mismatch"
 )
 
 // VerifiedCandidate is a candidate confirmed by its block results.
@@ -324,8 +320,7 @@ func (v *AnteFailedVerification) Heights() []int64 {
 }
 
 // VerifyAnteFailedCandidates fetches block results only for candidate heights
-// and keeps the candidates whose indexed record is wrong under the current
-// indexing rules.
+// and keeps the candidates whose Cosmos tx failed in the ante handler.
 func VerifyAnteFailedCandidates(
 	ctx context.Context,
 	fetcher BlockResultsFetcher,
@@ -462,7 +457,7 @@ func verifyHeightCandidates(res *coretypes.ResultBlockResults, candidates []Ante
 			return nil, fmt.Errorf("block %d: missing tx result %d for %s", candidate.Height, candidate.TxIndex, candidate.Hash.Hex())
 		}
 		txResult := res.TxResults[candidate.TxIndex]
-		verdict, ok := anteFailedVerdict(txResult, candidate)
+		verdict, ok := anteFailedVerdict(txResult)
 		if !ok {
 			continue
 		}
@@ -477,18 +472,9 @@ func verifyHeightCandidates(res *coretypes.ResultBlockResults, candidates []Ante
 	return verified, nil
 }
 
-func anteFailedVerdict(txResult *abci.ExecTxResult, candidate AnteFailedCandidate) (AnteFailedVerdict, bool) {
+func anteFailedVerdict(txResult *abci.ExecTxResult) (AnteFailedVerdict, bool) {
 	if rpctypes.TxAnteFailed(txResult) {
 		return VerdictAnteFailed, true
-	}
-	if txResult.Code == abci.CodeTypeOK || txResult.Codespace == evmtypes.ModuleName || rpctypes.TxExceedBlockGasLimit(txResult) {
-		return "", false
-	}
-	// Failed after the ante handler without EVM events: the current indexer
-	// stores the chain's gas used. Multi-message txs keep the gas limit and
-	// may be resynced needlessly, which is harmless.
-	if txResult.GasUsed >= 0 && uint64(txResult.GasUsed) != candidate.GasUsed {
-		return VerdictGasUsedMismatch, true
 	}
 	return "", false
 }

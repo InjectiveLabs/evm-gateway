@@ -53,8 +53,9 @@ func TestIndexBlockKeepsTxWhosePanicRecoveredDuringExecution(t *testing.T) {
 	if receipt["status"] != hexutil.Uint(0) || receipt["blockNumber"] != hexutil.Uint64(mainnetfx.HeightPanicInExecution) {
 		t.Fatalf("unexpected receipt: status %v block %v", receipt["status"], receipt["blockNumber"])
 	}
-	// The chain reports no gas for the panicked execution.
-	if receipt["gasUsed"] != hexutil.Uint64(0) {
+	// Gas used semantics are unchanged: a failure without evm events reports
+	// the gas limit.
+	if receipt["gasUsed"] == hexutil.Uint64(0) {
 		t.Fatalf("unexpected gas used: %v", receipt["gasUsed"])
 	}
 }

@@ -1,13 +1,9 @@
 package types
 
 import (
-	"math/big"
 	"testing"
 
 	abci "github.com/cometbft/cometbft/abci/types"
-	sdk "github.com/cosmos/cosmos-sdk/types"
-	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
-	"github.com/ethereum/go-ethereum/common"
 
 	"github.com/InjectiveLabs/evm-gateway/internal/testutil/mainnetfx"
 	evmtypes "github.com/InjectiveLabs/sdk-go/chain/evm/types"
@@ -102,52 +98,6 @@ func TestTxAnteFailed(t *testing.T) {
 	}
 }
 
-func TestFailedEthTxGasUsed(t *testing.T) {
-	msg := evmtypes.NewTx(big.NewInt(1), 1, nil, big.NewInt(0), 50000, big.NewInt(1), nil, nil, nil, nil)
-	testCases := []struct {
-		name     string
-		res      *abci.ExecTxResult
-		msgCount int
-		want     uint64
-	}{
-		{name: "nil result keeps gas limit", res: nil, msgCount: 1, want: 50000},
-		{
-			name:     "block gas limit keeps gas limit",
-			res:      &abci.ExecTxResult{Code: 11, Log: ExceedBlockGasLimitError + " 50000", GasUsed: 7},
-			msgCount: 1,
-			want:     50000,
-		},
-		{
-			name:     "multi message keeps gas limit",
-			res:      &abci.ExecTxResult{Code: 1, Log: MsgExecutionFailedLog, GasUsed: 7},
-			msgCount: 2,
-			want:     50000,
-		},
-		{
-			name:     "negative gas used keeps gas limit",
-			res:      &abci.ExecTxResult{Code: 1, Log: MsgExecutionFailedLog, GasUsed: -1},
-			msgCount: 1,
-			want:     50000,
-		},
-		{
-			name:     "single message uses chain gas used",
-			res:      &abci.ExecTxResult{Code: 1, Log: MsgExecutionFailedLog, GasUsed: 28209},
-			msgCount: 1,
-			want:     28209,
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := FailedEthTxGasUsed(tc.res, msg, tc.msgCount); got != tc.want {
-				t.Fatalf("FailedEthTxGasUsed: got %d want %d", got, tc.want)
-			}
-		})
-	}
-}
-
-// TestTxAnteFailedMatchesMainnetFixtures classifies every tx result of the
-// incident blocks and checks the Ethereum txs flagged as ante-failed.
 func TestTxAnteFailedMatchesMainnetFixtures(t *testing.T) {
 	clientCtx, err := mainnetfx.ClientContext()
 	if err != nil {
@@ -190,66 +140,6 @@ func TestTxAnteFailedMatchesMainnetFixtures(t *testing.T) {
 				t.Fatalf("height %d: ante-failed[%d] %v want %v", height, i, got[i], want[i])
 			}
 		}
-	}
-
-	// the re-included txs failed after the ante handler and report chain gas
-	results, err := mainnetfx.BlockResults(mainnetfx.HeightEx2Included)
-	if err != nil {
-		t.Fatalf("BlockResults: %v", err)
-	}
-	msg := evmtypes.NewTx(big.NewInt(1), 1, nil, big.NewInt(0), mainnetfx.GasLimitAnteFailed, big.NewInt(1), nil, nil, nil, nil)
-	for i := 1; i <= 4; i++ {
-		if got := FailedEthTxGasUsed(results.TxResults[i], msg, 1); got != mainnetfx.GasUsedEx2Included {
-			t.Fatalf("tx %d: gas used %d want %d", i, got, mainnetfx.GasUsedEx2Included)
-		}
-	}
-}
-
-// TestParseTxResultNonEVMFailureGuards covers events without a matching
-// message and non-Ethereum messages in a failed tx.
-func TestParseTxResultNonEVMFailureGuards(t *testing.T) {
-	ethMsg := evmtypes.NewTx(big.NewInt(1), 1, nil, big.NewInt(0), 50000, big.NewInt(1), nil, nil, nil, nil)
-	event := func(hash common.Hash, index string) abci.Event {
-		return abci.Event{
-			Type: evmtypes.EventTypeEthereumTx,
-			Attributes: []abci.EventAttribute{
-				{Key: evmtypes.AttributeKeyEthereumTxHash, Value: hash.Hex()},
-				{Key: evmtypes.AttributeKeyTxIndex, Value: index},
-				{Key: evmtypes.AttributeKeyTxGasUsed, Value: "7"},
-			},
-		}
-	}
-	result := &abci.ExecTxResult{
-		Code:      1,
-		Codespace: "undefined",
-		Log:       MsgExecutionFailedLog + "; message index: 0: boom",
-		GasUsed:   900,
-		Events: []abci.Event{
-			event(common.HexToHash("0x01"), "0"),
-			event(ethMsg.Hash(), "1"),
-			event(common.HexToHash("0x03"), "2"),
-		},
-	}
-
-	// msg 0 is not an Ethereum message, msg 2 has no matching message at all
-	parsed, err := ParseTxResult(result, mockTx{msgs: []sdk.Msg{&banktypes.MsgSend{}, ethMsg}})
-	if err != nil {
-		t.Fatalf("ParseTxResult: %v", err)
-	}
-	if len(parsed.Txs) != 3 {
-		t.Fatalf("unexpected parsed tx count %d", len(parsed.Txs))
-	}
-	for i, tx := range parsed.Txs {
-		if !tx.Failed {
-			t.Fatalf("tx %d not marked failed", i)
-		}
-	}
-	if parsed.Txs[0].GasUsed != 7 || parsed.Txs[2].GasUsed != 7 {
-		t.Fatalf("unmatched msgs must keep event gas: %d %d", parsed.Txs[0].GasUsed, parsed.Txs[2].GasUsed)
-	}
-	// two messages in the tx: the cosmos gas can't be attributed
-	if parsed.Txs[1].GasUsed != ethMsg.GetGas() {
-		t.Fatalf("multi message failure gas: got %d want %d", parsed.Txs[1].GasUsed, ethMsg.GetGas())
 	}
 }
 

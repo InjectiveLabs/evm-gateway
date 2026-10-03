@@ -232,7 +232,6 @@ func (b *Backend) liveVirtualBankBlockView(
 			txGasUsed := ethMsg.GetGas()
 			if txResult.Code != abci.CodeTypeOK && txResult.Codespace != evmtypes.ModuleName {
 				txFailed = true
-				txGasUsed = rpctypes.FailedEthTxGasUsed(txResult, ethMsg, len(msgs))
 			} else if parsedTxs != nil {
 				parsedTx := parsedTxs.GetTxByMsgIndex(msgIndex)
 				if parsedTx == nil {

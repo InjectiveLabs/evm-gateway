@@ -356,9 +356,9 @@ func (kv *KVIndexer) indexBlockWithStats(block *cmtypes.Block, blockResults *cor
 				EthTxIndex: ethTxIndex,
 			}
 			if result.Code != abci.CodeTypeOK && result.Codespace != evmtypes.ModuleName {
-				// failed after the ante handler without emitting evm events: message
-				// handler errors and the legacy block gas limit scenario.
-				txResult.GasUsed = rpctypes.FailedEthTxGasUsed(result, ethMsg, len(msgs))
+				// exceeds block gas limit scenario, set gas used to gas limit because that's what's charged by ante handler.
+				// some old versions don't emit any events, so workaround here directly.
+				txResult.GasUsed = ethMsg.GetGas()
 				txResult.Failed = true
 				txHash = ethMsg.Hash()
 			} else {
