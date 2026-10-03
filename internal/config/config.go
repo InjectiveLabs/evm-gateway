@@ -210,6 +210,16 @@ func (c *Config) SetMinGasPrices(prices sdk.DecCoins) {
 	c.MinGasPrices = prices.String()
 }
 
+// LoadEnvFile sets the variables of an env file in the process environment,
+// overriding existing values. An empty path loads `.env` from the working
+// directory if it exists; an explicit path must exist.
+func LoadEnvFile(path string) error {
+	if path == "" {
+		return loadEnvFileIfExists(".env")
+	}
+	return loadEnvFile(path)
+}
+
 func loadEnvFileIfExists(path string) error {
 	if _, err := os.Stat(path); err != nil {
 		return nil

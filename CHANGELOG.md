@@ -46,6 +46,8 @@ Ref: https://keepachangelog.com/en/1.1.0/
 * (debug) `debug_traceTransaction` resolves cached block traces by tx hash; it returned another tx's frame or `{"type":0}` when virtual txs preceded the tx.
 * (debug) Block and tx traces no longer replay ante-failed txs; block traces drop entries of non-visible txs and report an error entry instead of a fake frame for visible txs missing from the trace.
 
+* (cli) `--env-file` is now applied: the file is loaded before options take their defaults from the environment. Previously only `.env` in the working directory was read. An explicit file that does not exist is an error.
+
 ### Features
 
 * (cli) Added `migrate ante-failed-txs` to repair existing indexes: offline scan of local state, verification of candidate heights against block results, and resync of affected heights only. See `docs/migrations/ante-failed-txs.md`.

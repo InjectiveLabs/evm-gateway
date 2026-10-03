@@ -38,7 +38,7 @@ The migration fixes **history**. Blocks indexed by the new version are correct w
 - An **archival** Comet RPC covering every affected height, down to `WEB3INJ_EARLIEST_BLOCK` (`127250000` on mainnet). Verify needs `block_results`; repair needs `block` + `block_results`.
 - gRPC endpoint (EVM params at startup), as for `resync`.
 - **The same `WEB3INJ_VIRTUALIZE_COSMOS_EVENTS` value as the service.** Repaired heights are rewritten in the configured mode.
-- Configuration through exported `WEB3INJ_*` variables or a `.env` file in the working directory. Note: the global `--env-file` flag is currently not applied.
+- Configuration through exported `WEB3INJ_*` variables, `--env-file FILE` (before the command), or a `.env` file in the working directory. Variables from the env file override the process environment.
 
 ## Rollout
 

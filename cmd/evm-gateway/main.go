@@ -10,13 +10,15 @@ import (
 )
 
 func main() {
+	if err := loadEnv(os.Args); err != nil {
+		fail(err)
+	}
 	if err := newGatewayCLI().Run(os.Args); err != nil {
 		log.Fatalln(err)
 	}
 }
 
 func newGatewayCLI() *cli.Cli {
-	readEnv()
 	defaults := config.DefaultConfig()
 
 	app := cli.App(
