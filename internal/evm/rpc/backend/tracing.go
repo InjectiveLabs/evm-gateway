@@ -15,8 +15,20 @@ import (
 )
 
 // TraceTransaction returns the structured logs created during the execution of EVM
-// and returns them as a JSON object.
+// and returns them as a JSON object. A tx that failed in the ante handler was
+// never executed: instead of the replay error, it gets a trace matching its
+// failed receipt.
 func (b *Backend) TraceTransaction(hash common.Hash, config *rpctypes.TraceConfig) (interface{}, error) {
+	result, err := b.traceTransaction(hash, config)
+	if err != nil {
+		if trace, ok := b.anteFailedTxTrace(hash, config); ok {
+			return trace, nil
+		}
+	}
+	return result, err
+}
+
+func (b *Backend) traceTransaction(hash common.Hash, config *rpctypes.TraceConfig) (interface{}, error) {
 	ctx := b.operationContext()
 	if b.ctx != nil {
 		defer gotracer.Trace(&ctx, b.baseTraceTags)()
@@ -164,8 +176,22 @@ func (b *Backend) convertConfig(config *rpctypes.TraceConfig) *evmtypes.TraceCon
 
 // TraceBlock configures a new tracer according to the provided configuration, and
 // executes all the transactions contained within. The return value will be one item
-// per transaction, dependent on the requested tracer.
+// per transaction, dependent on the requested tracer. Entries of txs that
+// failed in the ante handler carry a trace matching their failed receipt
+// instead of the replay error.
 func (b *Backend) TraceBlock(height rpctypes.BlockNumber,
+	config *rpctypes.TraceConfig,
+	block *cmrpctypes.ResultBlock,
+) ([]*rpctypes.TxTraceResult, error) {
+	results, err := b.traceBlock(height, config, block)
+	if err != nil {
+		return nil, err
+	}
+	b.fillAnteFailedBlockTraces(results, height, block, config)
+	return results, nil
+}
+
+func (b *Backend) traceBlock(height rpctypes.BlockNumber,
 	config *rpctypes.TraceConfig,
 	block *cmrpctypes.ResultBlock,
 ) ([]*rpctypes.TxTraceResult, error) {

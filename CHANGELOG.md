@@ -34,6 +34,12 @@ Ref: https://keepachangelog.com/en/1.1.0/
 
 # Changelog
 
+## [Unreleased]
+
+### Bug Fixes
+
+* (debug) `debug_traceTransaction` and `debug_traceBlockBy*` no longer fail for Ethereum txs whose Cosmos tx failed in the ante handler (e.g. insufficient funds for the transferred value). Such txs were never executed; replaying them returned `insufficient balance for transfer` as a JSON-RPC error. They now get a trace that matches their failed receipt: a `callTracer` top-level frame with `gasUsed` equal to the gas limit and the ante error, or a failed struct log without steps. Other tracers keep the node error.
+
 ## [v1.4.2] - 2026-06-30
 
 ### Features
