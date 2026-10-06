@@ -11,7 +11,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
-	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtualbank"
+	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtual"
+	virtualbank "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtual/bank"
 	chaintypes "github.com/InjectiveLabs/sdk-go/chain/types"
 )
 
@@ -19,7 +20,7 @@ import (
 // metadata through the Cap'n Proto cache codec.
 func TestKVCapnpBlockLogsRoundTrip(t *testing.T) {
 	cosmosHash := common.HexToHash("0xabc")
-	logs := [][]*virtualbank.RPCLog{{
+	logs := [][]*virtual.RPCLog{{
 		{
 			Address:     virtualbank.ContractAddress,
 			Topics:      []common.Hash{virtualbank.TopicTransfer, common.HexToHash("0x01")},
@@ -65,7 +66,7 @@ func TestKVCapnpReceiptRoundTripPreservesOptionalZeroBig(t *testing.T) {
 		GasUsed:           3,
 		Reason:            &reason,
 		LogsBloom:         hexutil.Encode(make([]byte, 256)),
-		Logs: []*virtualbank.RPCLog{{
+		Logs: []*virtual.RPCLog{{
 			Address: virtualbank.ContractAddress,
 			Data:    []byte("payload"),
 		}},

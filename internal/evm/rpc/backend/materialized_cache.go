@@ -4,7 +4,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	lru "github.com/hashicorp/golang-lru"
 
-	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtualbank"
+	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtual"
 )
 
 const (
@@ -57,7 +57,7 @@ func (c *materializedCache) addReceipt(hash common.Hash, receipt map[string]inte
 }
 
 // getBlockLogs returns fully materialized logs for broad indexed log queries.
-func (c *materializedCache) getBlockLogs(height int64) ([]*virtualbank.RPCLog, bool) {
+func (c *materializedCache) getBlockLogs(height int64) ([]*virtual.RPCLog, bool) {
 	if c == nil || c.blockLogs == nil {
 		return nil, false
 	}
@@ -65,12 +65,12 @@ func (c *materializedCache) getBlockLogs(height int64) ([]*virtualbank.RPCLog, b
 	if !ok {
 		return nil, false
 	}
-	logs, ok := value.([]*virtualbank.RPCLog)
+	logs, ok := value.([]*virtual.RPCLog)
 	return logs, ok
 }
 
 // addBlockLogs stores fully materialized indexed logs for a broad block query.
-func (c *materializedCache) addBlockLogs(height int64, logs []*virtualbank.RPCLog) {
+func (c *materializedCache) addBlockLogs(height int64, logs []*virtual.RPCLog) {
 	if c == nil || c.blockLogs == nil || logs == nil {
 		return
 	}

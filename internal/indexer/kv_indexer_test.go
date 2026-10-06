@@ -23,7 +23,9 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	protov2 "google.golang.org/protobuf/proto"
 
-	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtualbank"
+	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtual"
+	virtualbank "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtual/bank"
+	virtualibc "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtual/ibc"
 )
 
 func TestKVIndexerDeleteBlockRemovesIndexedDataForHeight(t *testing.T) {
@@ -171,17 +173,17 @@ func TestKVIndexerCachedBlockLookupsUseHashAndRPCIndexCollections(t *testing.T) 
 	}
 }
 
-// TestKVIndexerIndexesVirtualBankTransfersForCosmosAndFinalizeEvents verifies
+// TestKVIndexerIndexesVirtualCosmosEventsForCosmosAndFinalizeEvents verifies
 // indexed virtual bank logs, receipts, and RPC transactions for Cosmos and
 // begin/end block events.
-func TestKVIndexerIndexesVirtualBankTransfersForCosmosAndFinalizeEvents(t *testing.T) {
+func TestKVIndexerIndexesVirtualCosmosEventsForCosmosAndFinalizeEvents(t *testing.T) {
 	db := dbm.NewMemDB()
 	tx := testSDKTx{msgs: []sdk.Msg{&banktypes.MsgSend{}}}
 	kv := NewKVIndexer(
 		db,
 		testLogger(),
 		client.Context{TxConfig: testTxConfig{tx: tx}},
-		WithVirtualBankTransfers(true, "1337"),
+		WithVirtualCosmosEvents(true, "1337"),
 	)
 
 	block := tmtypes.MakeBlock(7, []tmtypes.Tx{tmtypes.Tx("cosmos-bank-tx")}, nil, nil)
@@ -246,19 +248,19 @@ func TestKVIndexerIndexesVirtualBankTransfersForCosmosAndFinalizeEvents(t *testi
 	if len(hashes) != 3 {
 		t.Fatalf("unexpected hash count: got %d want 3", len(hashes))
 	}
-	if hashes[0] != virtualbank.BeginBlockHash(7) {
-		t.Fatalf("unexpected begin block virtual hash: got %s want %s", hashes[0], virtualbank.BeginBlockHash(7))
+	if hashes[0] != virtual.BeginBlockHash(7) {
+		t.Fatalf("unexpected begin block virtual hash: got %s want %s", hashes[0], virtual.BeginBlockHash(7))
 	}
-	if hashes[1] != virtualbank.CosmosTxHash(block.Txs[0]) {
-		t.Fatalf("unexpected cosmos virtual hash: got %s want %s", hashes[1], virtualbank.CosmosTxHash(block.Txs[0]))
+	if hashes[1] != virtual.CosmosTxHash(block.Txs[0]) {
+		t.Fatalf("unexpected cosmos virtual hash: got %s want %s", hashes[1], virtual.CosmosTxHash(block.Txs[0]))
 	}
-	if hashes[2] != virtualbank.EndBlockHash(7) {
-		t.Fatalf("unexpected finalize virtual hash: got %s want %s", hashes[2], virtualbank.EndBlockHash(7))
+	if hashes[2] != virtual.EndBlockHash(7) {
+		t.Fatalf("unexpected finalize virtual hash: got %s want %s", hashes[2], virtual.EndBlockHash(7))
 	}
 	expectedRoot := common.BytesToHash(merkle.HashFromByteSlices([][]byte{
-		virtualbank.BeginBlockHash(7).Bytes(),
-		virtualbank.CosmosTxHash(block.Txs[0]).Bytes(),
-		virtualbank.EndBlockHash(7).Bytes(),
+		virtual.BeginBlockHash(7).Bytes(),
+		virtual.CosmosTxHash(block.Txs[0]).Bytes(),
+		virtual.EndBlockHash(7).Bytes(),
 	})).Hex()
 	if meta.TransactionsRoot != expectedRoot {
 		t.Fatalf("unexpected transactions root: got %s want %s", meta.TransactionsRoot, expectedRoot)
@@ -283,7 +285,7 @@ func TestKVIndexerIndexesVirtualBankTransfersForCosmosAndFinalizeEvents(t *testi
 	if !rpcTx.Virtual {
 		t.Fatal("expected virtual tx field to be true")
 	}
-	originalCosmosHash := virtualbank.OriginalCosmosTxHash(block.Txs[0])
+	originalCosmosHash := virtual.OriginalCosmosTxHash(block.Txs[0])
 	if rpcTx.CosmosHash == nil || *rpcTx.CosmosHash != originalCosmosHash {
 		t.Fatalf("unexpected cosmos hash: got %v want %s", rpcTx.CosmosHash, originalCosmosHash.Hex())
 	}
@@ -325,12 +327,98 @@ func TestKVIndexerIndexesVirtualBankTransfersForCosmosAndFinalizeEvents(t *testi
 	if err != nil {
 		t.Fatalf("GetReceiptByTxHash returned error: %v", err)
 	}
-	receiptLogs, ok := receipt["logs"].([]*virtualbank.RPCLog)
+	receiptLogs, ok := receipt["logs"].([]*virtual.RPCLog)
 	if !ok || len(receiptLogs) != 1 {
 		t.Fatalf("unexpected receipt logs: %#v", receipt["logs"])
 	}
 	if !receiptLogs[0].Virtual || receiptLogs[0].CosmosHash == nil || *receiptLogs[0].CosmosHash != originalCosmosHash {
 		t.Fatalf("unexpected receipt virtual metadata: virtual=%t cosmos_hash=%v", receiptLogs[0].Virtual, receiptLogs[0].CosmosHash)
+	}
+}
+
+func TestKVIndexerCoalescesBankAndIBCHookIntoOneVirtualRecord(t *testing.T) {
+	db := dbm.NewMemDB()
+	decodedTx := testSDKTx{msgs: []sdk.Msg{&banktypes.MsgSend{}}}
+	kv := NewKVIndexer(
+		db,
+		testLogger(),
+		client.Context{TxConfig: testTxConfig{tx: decodedTx}},
+		WithVirtualCosmosEvents(true, "1337"),
+	)
+
+	target := common.HexToAddress("0x1111111111111111111111111111111111111111")
+	emitter := common.HexToAddress("0x2222222222222222222222222222222222222222")
+	embeddedTopic := common.HexToHash("0x1234")
+	typedHook, err := sdk.TypedEventToEvent(&evmtypes.EventIBCHookCall{
+		DestinationPort:    "transfer",
+		DestinationChannel: "channel-4",
+		Sequence:           12,
+		Contract:           target.Hex(),
+		Input:              []byte{0xde, 0xad},
+		Success:            true,
+		ReturnData:         []byte{0xbe, 0xef},
+		GasUsed:            88,
+		Logs: []*evmtypes.Log{{
+			Address: emitter.Hex(),
+			Topics:  []string{embeddedTopic.Hex()},
+			Data:    []byte{0xaa},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("TypedEventToEvent returned error: %v", err)
+	}
+	hookEvent := sdk.Events{typedHook}.ToABCIEvents()[0]
+	hookEvent.Attributes = append(hookEvent.Attributes, abci.EventAttribute{Key: "msg_index", Value: "0"})
+
+	height := int64(9)
+	block := tmtypes.MakeBlock(height, []tmtypes.Tx{tmtypes.Tx("ibc-hook-cosmos-tx")}, nil, nil)
+	blockResults := &coretypes.ResultBlockResults{
+		Height: height,
+		TxResults: []*abci.ExecTxResult{{
+			Code:    abci.CodeTypeOK,
+			GasUsed: 700,
+			Events: []abci.Event{
+				{
+					Type: virtualbank.EventTypeTransfer,
+					Attributes: []abci.EventAttribute{
+						{Key: "sender", Value: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+						{Key: "recipient", Value: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+						{Key: "amount", Value: "5inj"},
+						{Key: virtualbank.AttributeMsgIndex, Value: "0"},
+					},
+				},
+				hookEvent,
+			},
+		}},
+	}
+	if err := kv.IndexBlockWithResults(block, blockResults); err != nil {
+		t.Fatalf("IndexBlockWithResults returned error: %v", err)
+	}
+
+	hashes, err := kv.GetRPCTransactionHashesByBlockHeight(height)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hashes) != 1 || hashes[0] != virtual.CosmosTxHash(block.Txs[0]) {
+		t.Fatalf("expected one shared virtual transaction, got %v", hashes)
+	}
+	rpcTx, err := kv.GetRPCTransactionByHash(hashes[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rpcTx.From != virtualibc.ContractAddress || rpcTx.To == nil || *rpcTx.To != target || uint64(rpcTx.Gas) != 88 {
+		t.Fatalf("unexpected hook transaction: %#v", rpcTx)
+	}
+	receipt, err := kv.GetReceiptByTxHash(hashes[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	logs, ok := receipt["logs"].([]*virtual.RPCLog)
+	if !ok || len(logs) != 3 {
+		t.Fatalf("expected bank, embedded, and summary logs: %#v", receipt["logs"])
+	}
+	if logs[0].Topics[0] != virtualbank.TopicTransfer || logs[1].Topics[0] != embeddedTopic || logs[2].Topics[0] != virtualibc.TopicHookCall {
+		t.Fatalf("unexpected coalesced log order: %#v", logs)
 	}
 }
 
@@ -367,7 +455,7 @@ func TestKVIndexerKeepsEthTxIndexEVMOrdinalWhenVirtualTransfersShiftRPCIndex(t *
 		db,
 		testLogger(),
 		client.Context{TxConfig: testTxConfig{tx: decodedTx}},
-		WithVirtualBankTransfers(true, chainID.String()),
+		WithVirtualCosmosEvents(true, chainID.String()),
 	)
 
 	height := int64(8)
@@ -434,8 +522,8 @@ func TestKVIndexerKeepsEthTxIndexEVMOrdinalWhenVirtualTransfersShiftRPCIndex(t *
 	if err != nil {
 		t.Fatalf("GetRPCTransactionByBlockAndIndex for begin block virtual tx returned error: %v", err)
 	}
-	if beginRPC.Hash != virtualbank.BeginBlockHash(height) {
-		t.Fatalf("unexpected begin block RPC hash: got %s want %s", beginRPC.Hash.Hex(), virtualbank.BeginBlockHash(height).Hex())
+	if beginRPC.Hash != virtual.BeginBlockHash(height) {
+		t.Fatalf("unexpected begin block RPC hash: got %s want %s", beginRPC.Hash.Hex(), virtual.BeginBlockHash(height).Hex())
 	}
 
 	rpcTx, err := kv.GetRPCTransactionByBlockAndIndex(height, 1)

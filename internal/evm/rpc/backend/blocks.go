@@ -19,7 +19,7 @@ import (
 	"upd.dev/xlab/gotracer"
 
 	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
-	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtualbank"
+	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtual"
 	txindexer "github.com/InjectiveLabs/evm-gateway/internal/indexer"
 	evmtypes "github.com/InjectiveLabs/sdk-go/chain/evm/types"
 )
@@ -225,13 +225,13 @@ func (b *Backend) GetBlockTransactionCountByHash(hash common.Hash) *hexutil.Uint
 		return nil
 	}
 
-	if b.virtualBankEnabled() {
+	if b.virtualizationEnabled() {
 		blockRes, err := b.TendermintBlockResultByNumber(&block.Block.Height)
 		if err != nil {
 			b.logger.Debug("block result not found", "height", block.Block.Height, "error", err.Error())
 			return nil
 		}
-		view, err := b.liveVirtualBankBlockView(block, blockRes)
+		view, err := b.liveVirtualBlockView(block, blockRes)
 		if err != nil {
 			b.logger.Debug("virtualized block tx count failed", "height", block.Block.Height, "error", err.Error())
 			return nil
@@ -271,13 +271,13 @@ func (b *Backend) GetBlockTransactionCountByNumber(blockNum rpctypes.BlockNumber
 		return nil
 	}
 
-	if b.virtualBankEnabled() {
+	if b.virtualizationEnabled() {
 		blockRes, err := b.TendermintBlockResultByNumber(&block.Block.Height)
 		if err != nil {
 			b.logger.Debug("block result not found", "height", block.Block.Height, "error", err.Error())
 			return nil
 		}
-		view, err := b.liveVirtualBankBlockView(block, blockRes)
+		view, err := b.liveVirtualBlockView(block, blockRes)
 		if err != nil {
 			b.logger.Debug("virtualized block tx count failed", "height", block.Block.Height, "error", err.Error())
 			return nil
@@ -605,12 +605,12 @@ func (b *Backend) BlockBloom(blockRes *cmrpctypes.ResultBlockResults) (ethtypes.
 		}
 	}
 
-	if b.virtualBankEnabled() {
+	if b.virtualizationEnabled() {
 		resBlock, err := b.TendermintBlockByNumber(rpctypes.BlockNumber(blockRes.Height))
 		if err == nil && resBlock != nil && resBlock.Block != nil {
-			view, err := b.liveVirtualBankBlockView(resBlock, blockRes)
+			view, err := b.liveVirtualBlockView(resBlock, blockRes)
 			if err == nil {
-				return ethtypes.BytesToBloom(evmtypes.LogsBloom(virtualbank.FlattenEthLogs(view.Logs))), nil
+				return ethtypes.BytesToBloom(evmtypes.LogsBloom(virtual.FlattenEthLogs(view.Logs))), nil
 			}
 			b.logger.Debug("virtualized BlockBloom derivation failed", "height", blockRes.Height, "error", err.Error())
 		}
@@ -639,7 +639,7 @@ func (b *Backend) BlockBloom(blockRes *cmrpctypes.ResultBlockResults) (ethtypes.
 		return ethtypes.Bloom{}, errors.New("block bloom event is not found")
 	}
 
-	return ethtypes.BytesToBloom(evmtypes.LogsBloom(virtualbank.FlattenEthLogs(logGroups))), nil
+	return ethtypes.BytesToBloom(evmtypes.LogsBloom(virtual.FlattenEthLogs(logGroups))), nil
 }
 
 // RPCBlockFromTendermintBlock returns a JSON-RPC compatible Ethereum block from a
@@ -673,8 +673,8 @@ func (b *Backend) RPCBlockFromTendermintBlock(
 		b.logger.Error("failed to fetch Base Fee from prunned block. Check node prunning configuration", "height", block.Height, "error", err)
 	}
 
-	if b.virtualBankEnabled() {
-		view, err := b.liveVirtualBankBlockView(resBlock, blockRes)
+	if b.virtualizationEnabled() {
+		view, err := b.liveVirtualBlockView(resBlock, blockRes)
 		if err != nil {
 			return nil, err
 		}

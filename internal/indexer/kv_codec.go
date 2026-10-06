@@ -12,7 +12,7 @@ import (
 
 	capnp "capnproto.org/go/capnp/v3"
 	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
-	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtualbank"
+	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtual"
 	"github.com/InjectiveLabs/evm-gateway/internal/indexer/kvcapnp"
 	chaintypes "github.com/InjectiveLabs/sdk-go/chain/types"
 )
@@ -141,7 +141,7 @@ func unmarshalBlockMetaPayload(bz []byte) (CachedBlockMeta, error) {
 
 // mustMarshalBlockLogs encodes grouped block logs in the current Cap'n Proto KV
 // format.
-func mustMarshalBlockLogs(groups [][]*virtualbank.RPCLog) []byte {
+func mustMarshalBlockLogs(groups [][]*virtual.RPCLog) []byte {
 	msg, seg := newKVCapnpMessage()
 	root, err := kvcapnp.NewRootBlockLogs(seg)
 	if err != nil {
@@ -166,30 +166,30 @@ func mustMarshalBlockLogs(groups [][]*virtualbank.RPCLog) []byte {
 
 // unmarshalBlockLogsPayload decodes grouped block logs from Cap'n Proto or
 // legacy JSON cache payloads.
-func unmarshalBlockLogsPayload(bz []byte) ([][]*virtualbank.RPCLog, error) {
+func unmarshalBlockLogsPayload(bz []byte) ([][]*virtual.RPCLog, error) {
 	msg, ok, err := capnpPayloadMessage(bz)
 	if err != nil {
 		return nil, err
 	}
 	if !ok {
-		return unmarshalJSON[[][]*virtualbank.RPCLog](bz)
+		return unmarshalJSON[[][]*virtual.RPCLog](bz)
 	}
 	root, err := kvcapnp.ReadRootBlockLogs(msg)
 	if err != nil {
 		return nil, err
 	}
 	if !root.HasGroups() {
-		return [][]*virtualbank.RPCLog{}, nil
+		return [][]*virtual.RPCLog{}, nil
 	}
 	cgroups, err := root.Groups()
 	if err != nil {
 		return nil, err
 	}
-	out := make([][]*virtualbank.RPCLog, cgroups.Len())
+	out := make([][]*virtual.RPCLog, cgroups.Len())
 	for i := 0; i < cgroups.Len(); i++ {
 		group := cgroups.At(i)
 		if !group.HasLogs() {
-			out[i] = []*virtualbank.RPCLog{}
+			out[i] = []*virtual.RPCLog{}
 			continue
 		}
 		clogs, err := group.Logs()
@@ -208,20 +208,20 @@ func unmarshalBlockLogsPayload(bz []byte) ([][]*virtualbank.RPCLog, error) {
 // unmarshalFilteredBlockLogsPayload decodes only logs that match the filter.
 // Cap'n Proto payloads are checked before full RPC log materialization, while
 // legacy JSON payloads are decoded then filtered.
-func unmarshalFilteredBlockLogsPayload(bz []byte, addresses []common.Address, topics [][]common.Hash) ([]*virtualbank.RPCLog, error) {
+func unmarshalFilteredBlockLogsPayload(bz []byte, addresses []common.Address, topics [][]common.Hash) ([]*virtual.RPCLog, error) {
 	msg, ok, err := capnpPayloadMessage(bz)
 	if err != nil {
 		return nil, err
 	}
 	if !ok {
-		groups, err := unmarshalJSON[[][]*virtualbank.RPCLog](bz)
+		groups, err := unmarshalJSON[[][]*virtual.RPCLog](bz)
 		if err != nil {
 			return nil, err
 		}
-		out := make([]*virtualbank.RPCLog, 0)
+		out := make([]*virtual.RPCLog, 0)
 		for _, group := range groups {
 			for _, log := range group {
-				if virtualbank.LogMatches(log, addresses, topics) {
+				if virtual.LogMatches(log, addresses, topics) {
 					out = append(out, log)
 				}
 			}
@@ -233,13 +233,13 @@ func unmarshalFilteredBlockLogsPayload(bz []byte, addresses []common.Address, to
 		return nil, err
 	}
 	if !root.HasGroups() {
-		return []*virtualbank.RPCLog{}, nil
+		return []*virtual.RPCLog{}, nil
 	}
 	cgroups, err := root.Groups()
 	if err != nil {
 		return nil, err
 	}
-	out := make([]*virtualbank.RPCLog, 0)
+	out := make([]*virtual.RPCLog, 0)
 	for i := 0; i < cgroups.Len(); i++ {
 		group := cgroups.At(i)
 		if !group.HasLogs() {
@@ -266,7 +266,7 @@ func unmarshalFilteredBlockLogsPayload(bz []byte, addresses []common.Address, to
 		}
 	}
 	if out == nil {
-		return []*virtualbank.RPCLog{}, nil
+		return []*virtual.RPCLog{}, nil
 	}
 	return out, nil
 }
@@ -756,7 +756,7 @@ func unmarshalTracePayload(bz []byte) ([]byte, error) {
 }
 
 // setCapnpLogList copies RPC logs into a Cap'n Proto log list.
-func setCapnpLogList(dst kvcapnp.Log_List, logs []*virtualbank.RPCLog) error {
+func setCapnpLogList(dst kvcapnp.Log_List, logs []*virtual.RPCLog) error {
 	for i, log := range logs {
 		if log == nil {
 			continue
@@ -770,7 +770,7 @@ func setCapnpLogList(dst kvcapnp.Log_List, logs []*virtualbank.RPCLog) error {
 
 // setCapnpLog copies one RPC log, including virtual metadata, into a Cap'n
 // Proto log struct.
-func setCapnpLog(dst kvcapnp.Log, log *virtualbank.RPCLog) error {
+func setCapnpLog(dst kvcapnp.Log, log *virtual.RPCLog) error {
 	if err := dst.SetAddress(log.Address.Bytes()); err != nil {
 		return err
 	}
@@ -806,8 +806,8 @@ func setCapnpLog(dst kvcapnp.Log, log *virtualbank.RPCLog) error {
 }
 
 // capnpLogListToRPC converts a Cap'n Proto log list into RPC logs.
-func capnpLogListToRPC(src kvcapnp.Log_List) ([]*virtualbank.RPCLog, error) {
-	out := make([]*virtualbank.RPCLog, src.Len())
+func capnpLogListToRPC(src kvcapnp.Log_List) ([]*virtual.RPCLog, error) {
+	out := make([]*virtual.RPCLog, src.Len())
 	for i := 0; i < src.Len(); i++ {
 		log, err := capnpLogToRPC(src.At(i))
 		if err != nil {
@@ -819,8 +819,8 @@ func capnpLogListToRPC(src kvcapnp.Log_List) ([]*virtualbank.RPCLog, error) {
 }
 
 // capnpLogToRPC converts one Cap'n Proto log struct into an RPC log.
-func capnpLogToRPC(src kvcapnp.Log) (*virtualbank.RPCLog, error) {
-	var out virtualbank.RPCLog
+func capnpLogToRPC(src kvcapnp.Log) (*virtual.RPCLog, error) {
+	var out virtual.RPCLog
 	if src.HasAddress() {
 		bz, err := src.Address()
 		if err != nil {
