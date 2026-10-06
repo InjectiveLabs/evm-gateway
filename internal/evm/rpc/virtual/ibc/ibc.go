@@ -20,8 +20,12 @@ import (
 const EventType = "injective.evm.v1.EventIBCHookCall"
 
 var (
-	// ContractAddress is the trusted EVM caller used by the IBC hook.
-	ContractAddress = common.HexToAddress(evmtypes.IBCHookCallerAddressHex)
+	// ContractAddress is the reserved pseudo-address that emits virtual IBC hook
+	// logs and sends virtual IBC hook transactions. It is shared with virtual
+	// bank transfers and deliberately differs from the real IBC precompile / hook
+	// caller address (evmtypes.IBCHookCallerAddressHex), so virtualized records
+	// can never be mistaken for logs emitted by the on-chain IBC precompile.
+	ContractAddress = common.HexToAddress("0x0000000000000000000000000000000000000800")
 	TopicHookCall   = crypto.Keccak256Hash([]byte("IBCHookCall(string,string,uint64,address,bool,bytes,string)"))
 
 	summaryArgs = abi.Arguments{

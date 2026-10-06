@@ -67,7 +67,7 @@ The gateway tracks these Cosmos event types from tx results and finalize block e
 
 The bank Solidity ABI is `contracts/InjectiveNativeBankTransfers.sol`. Bank logs use reserved pseudo-contract address `0x0000000000000000000000000000000000000800`. Cosmos address fields are encoded as right-aligned `bytes32` topics so both 20-byte EVM addresses and longer Cosmos addresses fit the ABI.
 
-The IBC summary ABI is `contracts/InjectiveIBCHooks.sol`. Its summary log is emitted from `0x0000000000000000000000000000000000000069`. Successful contract logs embedded in the Cosmos event are expanded immediately before the summary log with their original address, topics, and data.
+The IBC summary ABI is `contracts/InjectiveIBCHooks.sol`. Its summary log is emitted from the same reserved pseudo-contract address as bank logs, `0x0000000000000000000000000000000000000800`, never from the real IBC precompile / hook caller address `0x0000000000000000000000000000000000000069`. Successful contract logs embedded in the Cosmos event are expanded immediately before the summary log with their original address, topics, and data.
 
 Virtual transaction rules:
 
@@ -76,7 +76,7 @@ Virtual transaction rules:
 - Finalize block events are split by their `mode` attribute. `mode=BeginBlock` events go into the begin-block virtual transaction. All other tracked finalize events go into the end-block virtual transaction.
 - Begin-block and end-block virtual transaction hashes are deterministic hashes of the phase name and height. They include `virtual: true` but no `cosmos_hash`.
 - Bank-only virtual transactions use empty input, zero gas/value defaults, legacy tx type, and `to = 0x0000000000000000000000000000000000000800`.
-- IBC-hook virtual transactions use the trusted system caller as `from`, the called contract as `to`, the hook calldata as `input`, and the event's EVM outcome and gas usage in the receipt. Failed calls remain queryable and contain the IBC summary log.
+- IBC-hook virtual transactions use `from = 0x0000000000000000000000000000000000000800`, the called contract as `to`, the hook calldata as `input`, and the event's EVM outcome and gas usage in the receipt. Failed calls remain queryable and contain the IBC summary log.
 
 Block ordering in virtualized mode is:
 

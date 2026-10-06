@@ -156,3 +156,12 @@ func mustTypedEvent(t *testing.T, event *evmtypes.EventIBCHookCall) types.Event 
 	}
 	return sdk.Events{converted}.ToABCIEvents()[0]
 }
+
+func TestVirtualIBCSharesVirtualAddressWithBank(t *testing.T) {
+	if virtualibc.ContractAddress != virtualbank.ContractAddress {
+		t.Fatalf("virtual IBC address %s must equal virtual bank address %s", virtualibc.ContractAddress, virtualbank.ContractAddress)
+	}
+	if virtualibc.ContractAddress == common.HexToAddress(evmtypes.IBCHookCallerAddressHex) {
+		t.Fatalf("virtual IBC records must not use the real IBC precompile address %s", evmtypes.IBCHookCallerAddressHex)
+	}
+}
