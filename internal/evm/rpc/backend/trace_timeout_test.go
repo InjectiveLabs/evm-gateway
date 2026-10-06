@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"reflect"
 	"testing"
+	"time"
 
 	appconfig "github.com/InjectiveLabs/evm-gateway/internal/config"
 	rpcmocks "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/backend/mocks"
@@ -41,7 +42,7 @@ func TestNormalizeTraceTimeoutPreservesCallerConfig(t *testing.T) {
 	want := before
 	want.Timeout = "30s"
 
-	got := normalizeTraceTimeout(config)
+	got := (&Backend{}).normalizeTraceTimeout(config)
 	if got == config {
 		t.Fatal("normalization must copy an oversized config before changing its timeout")
 	}
@@ -54,13 +55,13 @@ func TestNormalizeTraceTimeoutPreservesCallerConfig(t *testing.T) {
 }
 
 func TestNormalizeTraceTimeoutBoundaries(t *testing.T) {
-	if got := normalizeTraceTimeout(nil); got != nil {
+	if got := (&Backend{}).normalizeTraceTimeout(nil); got != nil {
 		t.Fatalf("nil config changed to %#v", got)
 	}
 	for _, timeout := range []string{"", "1ms", "29s", "30s", "30000ms", "0s", "-1s", "invalid", "999999999999999999999999s"} {
 		t.Run(timeout, func(t *testing.T) {
 			config := &rpctypes.TraceConfig{TraceConfig: evmtypes.TraceConfig{Timeout: timeout}}
-			if got := normalizeTraceTimeout(config); got != config || got.Timeout != timeout {
+			if got := (&Backend{}).normalizeTraceTimeout(config); got != config || got.Timeout != timeout {
 				t.Fatalf("timeout %q should be passed through unchanged, got %#v", timeout, got)
 			}
 		})
@@ -68,7 +69,7 @@ func TestNormalizeTraceTimeoutBoundaries(t *testing.T) {
 	for _, timeout := range []string{"30.000000001s", "30001ms", "10000s"} {
 		t.Run(timeout, func(t *testing.T) {
 			config := &rpctypes.TraceConfig{TraceConfig: evmtypes.TraceConfig{Timeout: timeout}}
-			got := normalizeTraceTimeout(config)
+			got := (&Backend{}).normalizeTraceTimeout(config)
 			if got.Timeout != "30s" || config.Timeout != timeout {
 				t.Fatalf("timeout %q: normalized=%q original=%q", timeout, got.Timeout, config.Timeout)
 			}
@@ -76,11 +77,55 @@ func TestNormalizeTraceTimeoutBoundaries(t *testing.T) {
 	}
 }
 
+func TestNormalizeTraceTimeoutUsesConfiguredCap(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		cap    time.Duration
+		config *rpctypes.TraceConfig
+		want   string
+	}{
+		{"omitted timeout", 5 * time.Second, nil, "5s"},
+		{"empty timeout", 5 * time.Second, &rpctypes.TraceConfig{}, "5s"},
+		{"shorter timeout", 5 * time.Second, &rpctypes.TraceConfig{TraceConfig: evmtypes.TraceConfig{Timeout: "1s"}}, "1s"},
+		{"equal timeout", 5 * time.Second, &rpctypes.TraceConfig{TraceConfig: evmtypes.TraceConfig{Timeout: "5s"}}, "5s"},
+		{"oversized timeout", 5 * time.Second, &rpctypes.TraceConfig{TraceConfig: evmtypes.TraceConfig{Timeout: "30s"}}, "5s"},
+		{"larger configured cap", time.Minute, &rpctypes.TraceConfig{TraceConfig: evmtypes.TraceConfig{Timeout: "10000s"}}, "1m0s"},
+		{"malformed client timeout", 5 * time.Second, &rpctypes.TraceConfig{TraceConfig: evmtypes.TraceConfig{Timeout: "invalid"}}, "invalid"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := &Backend{cfg: appconfig.Config{JSONRPC: appconfig.JSONRPCConfig{TraceTimeoutCap: tc.cap}}}
+			var before rpctypes.TraceConfig
+			if tc.config != nil {
+				before = *tc.config
+			}
+			got := b.normalizeTraceTimeout(tc.config)
+			if got == nil || got.Timeout != tc.want {
+				t.Fatalf("normalized config=%#v, want timeout %q", got, tc.want)
+			}
+			if tc.config != nil && !reflect.DeepEqual(*tc.config, before) {
+				t.Fatal("normalization mutated caller configuration")
+			}
+		})
+	}
+}
+
 func TestTraceBlockNormalizesTimeoutBeforeCacheAndForwarding(t *testing.T) {
+	for _, cap := range []time.Duration{0, 5 * time.Second, 30 * time.Second, time.Minute} {
+		t.Run(cap.String(), func(t *testing.T) { testTraceBlockTimeoutCap(t, cap) })
+	}
+}
+
+func testTraceBlockTimeoutCap(t *testing.T, cap time.Duration) {
+	t.Helper()
+	effectiveCap := cap
+	if effectiveCap == 0 {
+		effectiveCap = appconfig.DefaultTraceTimeoutCap
+	}
+	effectiveTimeout := effectiveCap.String()
 	const height int64 = 186090216
 	config := &rpctypes.TraceConfig{TraceConfig: evmtypes.TraceConfig{Tracer: "callTracer", Timeout: "10000s"}}
 	normalized := *config
-	normalized.Timeout = "30s"
+	normalized.Timeout = effectiveTimeout
 	oldFailure := json.RawMessage(`[{"error":"rpc error: code = InvalidArgument desc = timeout exceeding max value: 30s"}]`)
 	success := json.RawMessage(`[{"result":{"type":"CALL","gasUsed":"0x5208"}}]`)
 	idx := newTimeoutTraceIndexer(t)
@@ -99,10 +144,10 @@ func TestTraceBlockNormalizesTimeoutBeforeCacheAndForwarding(t *testing.T) {
 	query := &rpcmocks.EVMQueryClient{}
 	query.On("TraceBlock", mock.Anything, mock.MatchedBy(func(req *evmtypes.QueryTraceBlockRequest) bool {
 		return req.BlockNumber == height && len(req.Txs) == 1 && req.Txs[0] == ethMsg &&
-			req.TraceConfig != nil && req.TraceConfig.Timeout == "30s" && req.TraceConfig.Tracer == "callTracer"
+			req.TraceConfig != nil && req.TraceConfig.Timeout == effectiveTimeout && req.TraceConfig.Tracer == "callTracer"
 	})).Return(&evmtypes.QueryTraceBlockResponse{Data: success}, nil).Once()
 	b := &Backend{
-		logger: backendTestLogger(), cfg: appconfig.Config{}, indexer: idx,
+		logger: backendTestLogger(), cfg: appconfig.Config{JSONRPC: appconfig.JSONRPCConfig{TraceTimeoutCap: cap}}, indexer: idx,
 		clientCtx: client.Context{}.WithTxConfig(backendTraceTestTxConfig{
 			decoder: func([]byte) (sdk.Tx, error) {
 				return backendTraceTestTx{msgs: []sdk.Msg{ethMsg}}, nil
@@ -127,7 +172,7 @@ func TestTraceBlockNormalizesTimeoutBeforeCacheAndForwarding(t *testing.T) {
 	if config.Timeout != "10000s" {
 		t.Fatalf("caller config mutated to %q", config.Timeout)
 	}
-	if !reflect.DeepEqual(idx.blockReads, []string{"30s", "30s"}) || !reflect.DeepEqual(idx.blockWrites, []string{"30s"}) {
+	if !reflect.DeepEqual(idx.blockReads, []string{effectiveTimeout, effectiveTimeout}) || !reflect.DeepEqual(idx.blockWrites, []string{effectiveTimeout}) {
 		t.Fatalf("cache did not use the effective timeout consistently: reads=%v writes=%v", idx.blockReads, idx.blockWrites)
 	}
 	gotCached, err := idx.TxIndexer.GetTraceBlockByHeight(height, &normalized)
@@ -142,10 +187,22 @@ func TestTraceBlockNormalizesTimeoutBeforeCacheAndForwarding(t *testing.T) {
 }
 
 func TestTraceTransactionNormalizesTimeoutBeforeCache(t *testing.T) {
+	for _, cap := range []time.Duration{0, 5 * time.Second, 30 * time.Second, time.Minute} {
+		t.Run(cap.String(), func(t *testing.T) { testTraceTransactionTimeoutCap(t, cap) })
+	}
+}
+
+func testTraceTransactionTimeoutCap(t *testing.T, cap time.Duration) {
+	t.Helper()
+	effectiveCap := cap
+	if effectiveCap == 0 {
+		effectiveCap = appconfig.DefaultTraceTimeoutCap
+	}
+	effectiveTimeout := effectiveCap.String()
 	hash := common.HexToHash("0x1234")
 	config := &rpctypes.TraceConfig{TraceConfig: evmtypes.TraceConfig{Tracer: "callTracer", Timeout: "10000s"}}
 	normalized := *config
-	normalized.Timeout = "30s"
+	normalized.Timeout = effectiveTimeout
 	idx := newTimeoutTraceIndexer(t)
 	if err := idx.TxIndexer.SetTraceTransaction(hash, config, json.RawMessage(`{"type":"LEGACY"}`)); err != nil {
 		t.Fatal(err)
@@ -153,7 +210,7 @@ func TestTraceTransactionNormalizesTimeoutBeforeCache(t *testing.T) {
 	if err := idx.TxIndexer.SetTraceTransaction(hash, &normalized, json.RawMessage(`{"type":"CALL","gasUsed":"0x5208"}`)); err != nil {
 		t.Fatal(err)
 	}
-	b := &Backend{logger: backendTestLogger(), cfg: appconfig.Config{OfflineRPCOnly: true}, indexer: idx}
+	b := &Backend{logger: backendTestLogger(), cfg: appconfig.Config{OfflineRPCOnly: true, JSONRPC: appconfig.JSONRPCConfig{TraceTimeoutCap: cap}}, indexer: idx}
 	got, err := b.TraceTransaction(hash, config)
 	if err != nil {
 		t.Fatalf("TraceTransaction: %v", err)
@@ -161,7 +218,7 @@ func TestTraceTransactionNormalizesTimeoutBeforeCache(t *testing.T) {
 	if result := marshalMap(t, got); result["type"] != "CALL" || result["gasUsed"] != "0x5208" {
 		t.Fatalf("did not read normalized transaction cache: %#v", result)
 	}
-	if config.Timeout != "10000s" || !reflect.DeepEqual(idx.txReads, []string{"30s"}) {
+	if config.Timeout != "10000s" || !reflect.DeepEqual(idx.txReads, []string{effectiveTimeout}) {
 		t.Fatalf("caller timeout=%q cache reads=%v", config.Timeout, idx.txReads)
 	}
 }

@@ -22,10 +22,11 @@ type gatewayCLIOptions struct {
 	logFormat  *string
 	logVerbose *bool
 
-	enableRPC *bool
-	rpcAddr   *string
-	wsAddr    *string
-	rpcAPI    *string
+	enableRPC       *bool
+	rpcAddr         *string
+	wsAddr          *string
+	rpcAPI          *string
+	traceTimeoutCap *string
 
 	tracingEnabled                    *bool
 	tracingDSN                        *string

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	appconfig "github.com/InjectiveLabs/evm-gateway/internal/config"
 	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
 	evmtypes "github.com/InjectiveLabs/sdk-go/chain/evm/types"
 	"github.com/bytedance/sonic"
@@ -15,22 +16,34 @@ import (
 	"upd.dev/xlab/gotracer"
 )
 
-// maxTraceTimeout matches the maximum accepted by Injective's EVM gRPC tracer.
-const maxTraceTimeout = 30 * time.Second
-
 // normalizeTraceTimeout treats the requested timeout as an upper bound. Apply it
 // before cache lookups so oversized requests cannot reuse cached upstream
 // timeout-validation errors and share results with the effective configuration.
-func normalizeTraceTimeout(config *rpctypes.TraceConfig) *rpctypes.TraceConfig {
-	if config == nil {
-		return nil
+func (b *Backend) normalizeTraceTimeout(config *rpctypes.TraceConfig) *rpctypes.TraceConfig {
+	cap := b.cfg.JSONRPC.TraceTimeoutCap
+	if cap <= 0 {
+		cap = appconfig.DefaultTraceTimeoutCap
 	}
-	timeout, err := time.ParseDuration(config.Timeout)
-	if err != nil || timeout <= maxTraceTimeout {
-		return config
+	// Keep legacy cache keys for omitted timeouts at the upstream 30s default.
+	// A custom cap must also apply when the client omits its timeout.
+	if config == nil {
+		if cap == appconfig.DefaultTraceTimeoutCap {
+			return nil
+		}
+		return &rpctypes.TraceConfig{TraceConfig: evmtypes.TraceConfig{Timeout: cap.String()}}
+	}
+	if config.Timeout == "" {
+		if cap == appconfig.DefaultTraceTimeoutCap {
+			return config
+		}
+	} else {
+		timeout, err := time.ParseDuration(config.Timeout)
+		if err != nil || timeout <= cap {
+			return config
+		}
 	}
 	normalized := *config
-	normalized.Timeout = maxTraceTimeout.String()
+	normalized.Timeout = cap.String()
 	return &normalized
 }
 
@@ -39,7 +52,7 @@ func normalizeTraceTimeout(config *rpctypes.TraceConfig) *rpctypes.TraceConfig {
 // never executed: instead of the replay error, it gets a trace matching its
 // failed receipt.
 func (b *Backend) TraceTransaction(hash common.Hash, config *rpctypes.TraceConfig) (interface{}, error) {
-	config = normalizeTraceTimeout(config)
+	config = b.normalizeTraceTimeout(config)
 	result, err := b.traceTransaction(hash, config)
 	if err != nil {
 		if trace, ok := b.anteFailedTxTrace(hash, config); ok {
@@ -204,7 +217,7 @@ func (b *Backend) TraceBlock(height rpctypes.BlockNumber,
 	config *rpctypes.TraceConfig,
 	block *cmrpctypes.ResultBlock,
 ) ([]*rpctypes.TxTraceResult, error) {
-	config = normalizeTraceTimeout(config)
+	config = b.normalizeTraceTimeout(config)
 	results, err := b.traceBlock(height, config, block)
 	if err != nil {
 		return nil, err
@@ -336,7 +349,7 @@ func traceBlockContextHeight(height rpctypes.BlockNumber, block *cmrpctypes.Resu
 func (b *Backend) TraceCall(
 	args rpctypes.TransactionArgs, blockNrOrHash rpctypes.BlockNumberOrHash, config *rpctypes.TraceConfig,
 ) (interface{}, error) {
-	config = normalizeTraceTimeout(config)
+	config = b.normalizeTraceTimeout(config)
 	ctx := b.operationContext()
 	if b.ctx != nil {
 		defer gotracer.Trace(&ctx, b.baseTraceTags)()
