@@ -3,6 +3,7 @@ package backend
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 
 	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
 	evmtypes "github.com/InjectiveLabs/sdk-go/chain/evm/types"
@@ -14,11 +15,31 @@ import (
 	"upd.dev/xlab/gotracer"
 )
 
+// maxTraceTimeout matches the maximum accepted by Injective's EVM gRPC tracer.
+const maxTraceTimeout = 30 * time.Second
+
+// normalizeTraceTimeout treats the requested timeout as an upper bound. Apply it
+// before cache lookups so oversized requests cannot reuse cached upstream
+// timeout-validation errors and share results with the effective configuration.
+func normalizeTraceTimeout(config *rpctypes.TraceConfig) *rpctypes.TraceConfig {
+	if config == nil {
+		return nil
+	}
+	timeout, err := time.ParseDuration(config.Timeout)
+	if err != nil || timeout <= maxTraceTimeout {
+		return config
+	}
+	normalized := *config
+	normalized.Timeout = maxTraceTimeout.String()
+	return &normalized
+}
+
 // TraceTransaction returns the structured logs created during the execution of EVM
 // and returns them as a JSON object. A tx that failed in the ante handler was
 // never executed: instead of the replay error, it gets a trace matching its
 // failed receipt.
 func (b *Backend) TraceTransaction(hash common.Hash, config *rpctypes.TraceConfig) (interface{}, error) {
+	config = normalizeTraceTimeout(config)
 	result, err := b.traceTransaction(hash, config)
 	if err != nil {
 		if trace, ok := b.anteFailedTxTrace(hash, config); ok {
@@ -183,6 +204,7 @@ func (b *Backend) TraceBlock(height rpctypes.BlockNumber,
 	config *rpctypes.TraceConfig,
 	block *cmrpctypes.ResultBlock,
 ) ([]*rpctypes.TxTraceResult, error) {
+	config = normalizeTraceTimeout(config)
 	results, err := b.traceBlock(height, config, block)
 	if err != nil {
 		return nil, err
@@ -314,6 +336,7 @@ func traceBlockContextHeight(height rpctypes.BlockNumber, block *cmrpctypes.Resu
 func (b *Backend) TraceCall(
 	args rpctypes.TransactionArgs, blockNrOrHash rpctypes.BlockNumberOrHash, config *rpctypes.TraceConfig,
 ) (interface{}, error) {
+	config = normalizeTraceTimeout(config)
 	ctx := b.operationContext()
 	if b.ctx != nil {
 		defer gotracer.Trace(&ctx, b.baseTraceTags)()
