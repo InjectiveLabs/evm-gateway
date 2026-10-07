@@ -500,6 +500,10 @@ func mustMarshalRPCTransaction(tx *rpctypes.RPCTransaction) []byte {
 	if tx.CosmosHash != nil {
 		mustSet(root.SetCosmosHash(tx.CosmosHash.Bytes()))
 	}
+	if tx.CosmosMsgIndex != nil {
+		root.SetCosmosMsgIndex(uint64(*tx.CosmosMsgIndex))
+		root.SetCosmosMsgIndexPresent(true)
+	}
 	return mustCapnpPayload(msg)
 }
 
@@ -670,6 +674,10 @@ func unmarshalRPCTransactionPayload(bz []byte) (*rpctypes.RPCTransaction, error)
 		h := common.BytesToHash(v)
 		tx.CosmosHash = &h
 	}
+	if root.CosmosMsgIndexPresent() {
+		index := hexutil.Uint64(root.CosmosMsgIndex())
+		tx.CosmosMsgIndex = &index
+	}
 	return &tx, nil
 }
 
@@ -802,6 +810,10 @@ func setCapnpLog(dst kvcapnp.Log, log *virtual.RPCLog) error {
 			return err
 		}
 	}
+	if log.CosmosMsgIndex != nil {
+		dst.SetCosmosMsgIndex(uint64(*log.CosmosMsgIndex))
+		dst.SetCosmosMsgIndexPresent(true)
+	}
 	return nil
 }
 
@@ -875,6 +887,10 @@ func capnpLogToRPC(src kvcapnp.Log) (*virtual.RPCLog, error) {
 		}
 		h := common.BytesToHash(bz)
 		out.CosmosHash = &h
+	}
+	if src.CosmosMsgIndexPresent() {
+		index := hexutil.Uint64(src.CosmosMsgIndex())
+		out.CosmosMsgIndex = &index
 	}
 	return &out, nil
 }

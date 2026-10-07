@@ -336,7 +336,7 @@ func TestKVIndexerIndexesVirtualCosmosEventsForCosmosAndFinalizeEvents(t *testin
 	}
 }
 
-func TestKVIndexerCoalescesBankAndIBCHookIntoOneVirtualRecord(t *testing.T) {
+func TestKVIndexerSeparatesBankAndSingleIBCHook(t *testing.T) {
 	db := dbm.NewMemDB()
 	decodedTx := testSDKTx{msgs: []sdk.Msg{&banktypes.MsgSend{}}}
 	kv := NewKVIndexer(
@@ -399,26 +399,26 @@ func TestKVIndexerCoalescesBankAndIBCHookIntoOneVirtualRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(hashes) != 1 || hashes[0] != virtual.CosmosTxHash(block.Txs[0]) {
-		t.Fatalf("expected one shared virtual transaction, got %v", hashes)
+	if len(hashes) != 2 || hashes[0] != virtual.CosmosTxHash(block.Txs[0]) || hashes[1] != virtual.IBCHookTxHash(block.Txs[0], 0) {
+		t.Fatalf("expected bank and indexed hook transactions, got %v", hashes)
 	}
-	rpcTx, err := kv.GetRPCTransactionByHash(hashes[0])
+	rpcTx, err := kv.GetRPCTransactionByHash(hashes[1])
 	if err != nil {
 		t.Fatal(err)
 	}
 	if rpcTx.From != virtualibc.ContractAddress || rpcTx.To == nil || *rpcTx.To != target || uint64(rpcTx.Gas) != 88 {
 		t.Fatalf("unexpected hook transaction: %#v", rpcTx)
 	}
-	receipt, err := kv.GetReceiptByTxHash(hashes[0])
+	receipt, err := kv.GetReceiptByTxHash(hashes[1])
 	if err != nil {
 		t.Fatal(err)
 	}
 	logs, ok := receipt["logs"].([]*virtual.RPCLog)
-	if !ok || len(logs) != 3 {
-		t.Fatalf("expected bank, embedded, and summary logs: %#v", receipt["logs"])
+	if !ok || len(logs) != 2 {
+		t.Fatalf("expected embedded and summary logs: %#v", receipt["logs"])
 	}
-	if logs[0].Topics[0] != virtualbank.TopicTransfer || logs[1].Topics[0] != embeddedTopic || logs[2].Topics[0] != virtualibc.TopicHookCall {
-		t.Fatalf("unexpected coalesced log order: %#v", logs)
+	if logs[0].Topics[0] != embeddedTopic || logs[1].Topics[0] != virtualibc.TopicHookCall {
+		t.Fatalf("unexpected hook log order: %#v", logs)
 	}
 }
 

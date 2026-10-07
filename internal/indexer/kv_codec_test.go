@@ -149,6 +149,23 @@ func TestKVCapnpRPCTransactionRoundTrip(t *testing.T) {
 	require.Equal(t, cosmosHash, *got.CosmosHash)
 }
 
+func TestKVCapnpHookMessageIndexPreservesZeroAndAbsence(t *testing.T) {
+	zero, twelve := hexutil.Uint64(0), hexutil.Uint64(12)
+	for _, index := range []*hexutil.Uint64{nil, &zero, &twelve} {
+		tx := &rpctypes.RPCTransaction{Virtual: true, CosmosMsgIndex: index}
+		gotTx, err := unmarshalRPCTransactionPayload(mustMarshalRPCTransaction(tx))
+		require.NoError(t, err)
+		require.Equal(t, index, gotTx.CosmosMsgIndex)
+		logs := []*virtual.RPCLog{{Virtual: true, CosmosMsgIndex: index}}
+		gotLogs, err := unmarshalBlockLogsPayload(mustMarshalBlockLogs([][]*virtual.RPCLog{logs}))
+		require.NoError(t, err)
+		require.Equal(t, index, gotLogs[0][0].CosmosMsgIndex)
+		receipt, err := unmarshalReceiptPayload(mustMarshalReceipt(CachedReceipt{Logs: logs}))
+		require.NoError(t, err)
+		require.Equal(t, index, receipt.Logs[0].CosmosMsgIndex)
+	}
+}
+
 // TestKVCapnpTxResultAndTraceRoundTrip verifies TxResult and trace cache
 // payloads round-trip and legacy block metadata still decodes.
 func TestKVCapnpTxResultAndTraceRoundTrip(t *testing.T) {

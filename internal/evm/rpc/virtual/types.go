@@ -3,6 +3,7 @@ package virtual
 import (
 	"encoding/binary"
 	"math/big"
+	"strconv"
 
 	"github.com/bytedance/sonic"
 	cmtypes "github.com/cometbft/cometbft/types"
@@ -33,17 +34,18 @@ type LogContext struct {
 // RPCLog is the Ethereum log JSON shape plus metadata identifying synthesized
 // Cosmos records.
 type RPCLog struct {
-	Address     common.Address `json:"address"`
-	Topics      []common.Hash  `json:"topics"`
-	Data        hexutil.Bytes  `json:"data"`
-	BlockNumber hexutil.Uint64 `json:"blockNumber"`
-	TxHash      common.Hash    `json:"transactionHash"`
-	TxIndex     hexutil.Uint   `json:"transactionIndex"`
-	BlockHash   common.Hash    `json:"blockHash"`
-	Index       hexutil.Uint   `json:"logIndex"`
-	Removed     bool           `json:"removed"`
-	Virtual     bool           `json:"virtual,omitempty"`
-	CosmosHash  *common.Hash   `json:"cosmos_hash,omitempty"`
+	Address        common.Address  `json:"address"`
+	Topics         []common.Hash   `json:"topics"`
+	Data           hexutil.Bytes   `json:"data"`
+	BlockNumber    hexutil.Uint64  `json:"blockNumber"`
+	TxHash         common.Hash     `json:"transactionHash"`
+	TxIndex        hexutil.Uint    `json:"transactionIndex"`
+	BlockHash      common.Hash     `json:"blockHash"`
+	Index          hexutil.Uint    `json:"logIndex"`
+	Removed        bool            `json:"removed"`
+	Virtual        bool            `json:"virtual,omitempty"`
+	CosmosHash     *common.Hash    `json:"cosmos_hash,omitempty"`
+	CosmosMsgIndex *hexutil.Uint64 `json:"cosmos_msg_index,omitempty"`
 }
 
 type rpcLogJSON RPCLog
@@ -160,6 +162,10 @@ func (l *RPCLog) UnmarshalJSON(input []byte) error {
 	l.Topics = append([]common.Hash(nil), dec.Topics...)
 	l.Data = append(hexutil.Bytes(nil), dec.Data...)
 	l.CosmosHash = copyHashPtr(dec.CosmosHash)
+	if dec.CosmosMsgIndex != nil {
+		index := *dec.CosmosMsgIndex
+		l.CosmosMsgIndex = &index
+	}
 	return nil
 }
 
@@ -265,6 +271,12 @@ func OriginalCosmosTxHash(tx cmtypes.Tx) common.Hash {
 
 func CosmosTxHash(tx cmtypes.Tx) common.Hash {
 	return crypto.Keccak256Hash(OriginalCosmosTxHash(tx).Bytes())
+}
+
+// IBCHookTxHash identifies an IBC hook's Cosmos message:
+// keccak256(raw Cosmos hash || "@" || decimal message index).
+func IBCHookTxHash(tx cmtypes.Tx, msgIndex int) common.Hash {
+	return crypto.Keccak256Hash(OriginalCosmosTxHash(tx).Bytes(), []byte("@"), []byte(strconv.Itoa(msgIndex)))
 }
 
 func BeginBlockHash(height int64) common.Hash { return blockPhaseHash(blockPhaseBegin, height) }

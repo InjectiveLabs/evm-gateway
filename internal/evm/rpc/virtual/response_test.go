@@ -16,7 +16,7 @@ import (
 	evmtypes "github.com/InjectiveLabs/sdk-go/chain/evm/types"
 )
 
-func TestSyntheticTxCoalescesBankAndIBCHookEvents(t *testing.T) {
+func TestSyntheticTxsSeparateBankAndSingleIBCHook(t *testing.T) {
 	target := common.HexToAddress("0x1111111111111111111111111111111111111111")
 	emitter := common.HexToAddress("0x2222222222222222222222222222222222222222")
 	embeddedTopic := common.HexToHash("0x1234")
@@ -52,7 +52,7 @@ func TestSyntheticTxCoalescesBankAndIBCHookEvents(t *testing.T) {
 	}
 	rawTx := cmtypes.Tx("cosmos transaction")
 	blockHash := common.HexToHash("0xbeef")
-	virtualTx, err := resp.SyntheticTx(TxContext{
+	virtualTxs, err := resp.SyntheticTxs(TxContext{
 		Tx:                      rawTx,
 		EthereumMessageIndexes:  map[int]bool{},
 		TotalMessages:           1,
@@ -66,8 +66,22 @@ func TestSyntheticTxCoalescesBankAndIBCHookEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SyntheticTx returned error: %v", err)
 	}
-	if virtualTx == nil {
-		t.Fatal("expected synthetic transaction")
+	if len(virtualTxs) != 2 {
+		t.Fatalf("expected bank and hook transactions, got %d", len(virtualTxs))
+	}
+	bankTx := virtualTxs[0]
+	if bankTx.Transaction.Hash != CosmosTxHash(rawTx) || bankTx.Transaction.CosmosMsgIndex != nil || len(bankTx.Receipt.Logs) != 2 {
+		t.Fatalf("unexpected bank aggregate: %#v", bankTx)
+	}
+	if bankTx.Receipt.Logs[0].Topics[0] != virtualbank.TopicTransfer || bankTx.Receipt.Logs[1].Topics[0] != virtualbank.TopicCoinReceived {
+		t.Fatalf("unexpected bank log order: %#v", bankTx.Receipt.Logs)
+	}
+	if bankTx.Receipt.GasUsed != 823 || bankTx.Receipt.CumulativeGasUsed != 923 {
+		t.Fatalf("unexpected bank gas: %#v", bankTx.Receipt)
+	}
+	virtualTx := virtualTxs[1]
+	if virtualTx.Transaction.Hash != IBCHookTxHash(rawTx, 0) || virtualTx.Transaction.CosmosMsgIndex == nil || *virtualTx.Transaction.CosmosMsgIndex != 0 {
+		t.Fatalf("unexpected single-hook identity: %#v", virtualTx.Transaction)
 	}
 	if virtualTx.Transaction.From != virtualibc.ContractAddress || virtualTx.Transaction.To == nil || *virtualTx.Transaction.To != target {
 		t.Fatalf("unexpected transaction endpoints: from=%s to=%v", virtualTx.Transaction.From, virtualTx.Transaction.To)
@@ -75,17 +89,17 @@ func TestSyntheticTxCoalescesBankAndIBCHookEvents(t *testing.T) {
 	if string(virtualTx.Transaction.Input) != string(hook.Input) || uint64(virtualTx.Transaction.Gas) != hook.GasUsed {
 		t.Fatalf("unexpected transaction input/gas: input=%s gas=%d", hexutil.Encode(virtualTx.Transaction.Input), virtualTx.Transaction.Gas)
 	}
-	if virtualTx.Receipt.Status != ethtypes.ReceiptStatusSuccessful || virtualTx.Receipt.GasUsed != hook.GasUsed || virtualTx.Receipt.CumulativeGasUsed != 177 {
+	if virtualTx.Receipt.Status != ethtypes.ReceiptStatusSuccessful || virtualTx.Receipt.GasUsed != hook.GasUsed || virtualTx.Receipt.CumulativeGasUsed != 1000 {
 		t.Fatalf("unexpected receipt execution fields: %#v", virtualTx.Receipt)
 	}
 
 	logs := virtualTx.Receipt.Logs
-	if len(logs) != 4 {
-		t.Fatalf("expected bank, embedded, summary, bank logs; got %d", len(logs))
+	if len(logs) != 2 {
+		t.Fatalf("expected embedded and summary logs; got %d", len(logs))
 	}
-	wantTopics := []common.Hash{virtualbank.TopicTransfer, embeddedTopic, virtualibc.TopicHookCall, virtualbank.TopicCoinReceived}
+	wantTopics := []common.Hash{embeddedTopic, virtualibc.TopicHookCall}
 	for i, want := range wantTopics {
-		if logs[i].Topics[0] != want || uint(logs[i].Index) != uint(6+i) {
+		if logs[i].Topics[0] != want || uint(logs[i].Index) != uint(8+i) {
 			t.Fatalf("log %d mismatch: topic=%s index=%d", i, logs[i].Topics[0], logs[i].Index)
 		}
 		if !logs[i].Virtual || logs[i].CosmosHash == nil || logs[i].TxHash != virtualTx.Transaction.Hash {
@@ -111,7 +125,7 @@ func TestFailedIBCHookBuildsFailedQueryableTx(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	virtualTx, err := resp.SyntheticTx(TxContext{
+	virtualTxs, err := resp.SyntheticTxs(TxContext{
 		Tx:            cmtypes.Tx("failed hook"),
 		TotalMessages: 1,
 		BlockHash:     common.HexToHash("0x44"),
@@ -123,6 +137,10 @@ func TestFailedIBCHookBuildsFailedQueryableTx(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(virtualTxs) != 1 {
+		t.Fatalf("expected one synthetic transaction, got %d", len(virtualTxs))
+	}
+	virtualTx := virtualTxs[0]
 	if virtualTx.Receipt.Status != ethtypes.ReceiptStatusFailed || virtualTx.Receipt.VMError != "execution reverted" {
 		t.Fatalf("unexpected failed receipt: %#v", virtualTx.Receipt)
 	}
