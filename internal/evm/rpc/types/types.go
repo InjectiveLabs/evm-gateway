@@ -70,6 +70,7 @@ type RPCTransaction struct {
 	S                *hexutil.Big         `json:"s"`
 	Virtual          bool                 `json:"virtual,omitempty"`
 	CosmosHash       *common.Hash         `json:"cosmos_hash,omitempty"`
+	CosmosMsgIndex   *hexutil.Uint64      `json:"cosmos_msg_index,omitempty"`
 }
 
 // StateOverride is the collection of overridden accounts.

@@ -2,6 +2,7 @@ package ibc
 
 import (
 	"fmt"
+	"math/big"
 	"strconv"
 	"strings"
 
@@ -26,7 +27,7 @@ var (
 	// caller address (evmtypes.IBCHookCallerAddressHex), so virtualized records
 	// can never be mistaken for logs emitted by the on-chain IBC precompile.
 	ContractAddress = common.HexToAddress("0x0000000000000000000000000000000000000800")
-	TopicHookCall   = crypto.Keccak256Hash([]byte("IBCHookCall(string,string,uint64,address,bool,bytes,string)"))
+	TopicHookCall   = crypto.Keccak256Hash([]byte("IBCHookCall(string,string,uint64,address,bool,bytes,string,uint256)"))
 
 	summaryArgs = abi.Arguments{
 		{Type: mustABIType("string")},
@@ -110,6 +111,9 @@ func EthereumLogs(call *HookCall) ([]*ethtypes.Log, error) {
 	if call == nil {
 		return nil, nil
 	}
+	if call.MsgIndex == nil || *call.MsgIndex < 0 {
+		return nil, fmt.Errorf("IBC hook requires a nonnegative msg_index")
+	}
 
 	data, err := summaryArgs.Pack(
 		call.DestinationPort,
@@ -137,8 +141,12 @@ func EthereumLogs(call *HookCall) ([]*ethtypes.Log, error) {
 
 	logs = append(logs, &ethtypes.Log{
 		Address: ContractAddress,
-		Topics:  []common.Hash{TopicHookCall, common.BytesToHash(call.Contract.Bytes())},
-		Data:    data,
+		Topics: []common.Hash{
+			TopicHookCall,
+			common.BytesToHash(call.Contract.Bytes()),
+			common.BigToHash(big.NewInt(int64(*call.MsgIndex))),
+		},
+		Data: data,
 	})
 
 	return logs, nil

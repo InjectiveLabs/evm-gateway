@@ -272,7 +272,7 @@ func (kv *KVIndexer) indexBlockWithStats(block *cmtypes.Block, blockResults *cor
 
 		if !isEthTx(tx) {
 			if kv.virtualizationEnabled {
-				virtualTx, err := virtualResponse.SyntheticTx(virtual.TxContext{
+				virtualTxs, err := virtualResponse.SyntheticTxs(virtual.TxContext{
 					Tx:                      block.Txs[txIndex],
 					EthereumMessageIndexes:  ethMsgIndexes,
 					TotalMessages:           len(msgs),
@@ -287,7 +287,7 @@ func (kv *KVIndexer) indexBlockWithStats(block *cmtypes.Block, blockResults *cor
 					return stats, newBlockParseError(err, "block %d txIndex %d: failed to build virtual transaction", block.Height, txIndex)
 				}
 
-				if virtualTx != nil {
+				for _, virtualTx := range virtualTxs {
 					logIndex += uint(len(virtualTx.Receipt.Logs))
 
 					if err := storeVirtualTx(virtualTx); err != nil {
@@ -462,9 +462,10 @@ func (kv *KVIndexer) indexBlockWithStats(block *cmtypes.Block, blockResults *cor
 		}
 
 		if kv.virtualizationEnabled {
-			virtualTx, err := virtualResponse.SyntheticTx(virtual.TxContext{
+			virtualTxs, err := virtualResponse.SyntheticTxs(virtual.TxContext{
 				Tx:                      block.Txs[txIndex],
 				EthereumMessageIndexes:  ethMsgIndexes,
+				EthereumGasUsed:         cumulativeTxEthGasUsed,
 				TotalMessages:           len(msgs),
 				BlockHash:               blockHash,
 				BlockNumber:             uint64(block.Height),
@@ -477,7 +478,7 @@ func (kv *KVIndexer) indexBlockWithStats(block *cmtypes.Block, blockResults *cor
 				return stats, newBlockParseError(err, "block %d txIndex %d: failed to build virtual transaction", block.Height, txIndex)
 			}
 
-			if virtualTx != nil {
+			for _, virtualTx := range virtualTxs {
 				logIndex += uint(len(virtualTx.Receipt.Logs))
 
 				if err := storeVirtualTx(virtualTx); err != nil {

@@ -303,9 +303,10 @@ func (b *Backend) liveVirtualBlockView(
 			rpcTxIndex++
 		}
 
-		virtualTx, err := virtualResponse.SyntheticTx(virtual.TxContext{
+		virtualTxs, err := virtualResponse.SyntheticTxs(virtual.TxContext{
 			Tx:                      txBz,
 			EthereumMessageIndexes:  ethMsgIndexes,
+			EthereumGasUsed:         cumulativeTxEthGasUsed,
 			TotalMessages:           len(msgs),
 			BlockHash:               blockHash,
 			BlockNumber:             blockNumber,
@@ -318,7 +319,7 @@ func (b *Backend) liveVirtualBlockView(
 			return nil, err
 		}
 
-		if virtualTx != nil {
+		for _, virtualTx := range virtualTxs {
 			logIndex += uint(len(virtualTx.Receipt.Logs))
 			appendVirtualTx(virtualTx)
 			rpcTxIndex++

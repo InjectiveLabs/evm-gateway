@@ -14,6 +14,7 @@ interface IInjectiveIBCHooks {
         address indexed contractAddress,
         bool success,
         bytes returnData,
-        string errorMessage
+        string errorMessage,
+        uint256 indexed msgIndex
     );
 }

@@ -3,10 +3,12 @@ package virtual
 import (
 	"fmt"
 	"math/big"
+	"sort"
 
 	"github.com/cometbft/cometbft/abci/types"
 	cmtypes "github.com/cometbft/cometbft/types"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
 
 	virtualbank "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtual/bank"
@@ -32,6 +34,7 @@ type Response struct {
 type TxContext struct {
 	Tx                      cmtypes.Tx
 	EthereumMessageIndexes  map[int]bool
+	EthereumGasUsed         uint64
 	TotalMessages           int
 	BlockHash               common.Hash
 	BlockNumber             uint64
@@ -93,45 +96,100 @@ func ParseResponse(resp *types.ExecTxResult) (*Response, error) {
 
 // LogsForMessage returns virtual logs belonging to a genuine MsgEthereumTx.
 func (r *Response) LogsForMessage(msgIndex, totalMessages int, ctx LogContext) []*RPCLog {
-	raw := make([]*ethtypes.Log, 0)
+	logs := make([]*RPCLog, 0)
 	for _, event := range r.entries {
 		if belongsToMessage(event.msgIndex, msgIndex, totalMessages) {
-			raw = append(raw, event.logs...)
+			eventLogs := WrapLogs(event.logs, true, nil)
+			if event.hook != nil {
+				for _, log := range eventLogs {
+					log.CosmosMsgIndex = hookMsgIndex(event.hook)
+				}
+			}
+			logs = append(logs, eventLogs...)
 		}
 	}
 
-	logs := WrapLogs(raw, true, nil)
 	SetLogMetadata(logs, ctx)
 	return logs
 }
 
-// SyntheticTx creates the complete synthetic transaction and receipt for
-// virtual events belonging to non-Ethereum Cosmos messages.
-func (r *Response) SyntheticTx(ctx TxContext) (*Tx, error) {
-	rawLogs := make([]*ethtypes.Log, 0)
-	var hook *virtualibc.HookCall
+// SyntheticTxs preserves the transaction-wide bank projection and gives every
+// non-Ethereum IBC hook its own transaction identified by the message index.
+func (r *Response) SyntheticTxs(ctx TxContext) ([]*Tx, error) {
+	bankEvents := make([]entry, 0)
+	hooks := make([]entry, 0)
 	for _, event := range r.entries {
+		if len(event.logs) == 0 {
+			continue
+		}
 		if !belongsToNonEthereumMessage(event.msgIndex, ctx.EthereumMessageIndexes, ctx.TotalMessages) {
 			continue
 		}
 
-		rawLogs = append(rawLogs, event.logs...)
-
 		if event.hook != nil {
-			if hook != nil {
-				return nil, fmt.Errorf("multiple IBC hook calls in one synthetic Cosmos transaction")
-			}
-
-			hook = event.hook
+			hooks = append(hooks, event)
+		} else {
+			bankEvents = append(bankEvents, event)
 		}
 	}
 
-	if len(rawLogs) == 0 {
+	if len(bankEvents) == 0 && len(hooks) == 0 {
 		return nil, nil
 	}
 
+	if len(hooks) == 0 {
+		return []*Tx{r.syntheticTx(ctx, bankEvents, nil, CosmosTxHash(ctx.Tx), r.gasUsed)}, nil
+	}
+
+	// A message index is necessary to derive a stable identity. Do not guess
+	// indexes for ambiguous responses or silently overwrite duplicate hashes.
+	seen := make(map[int]bool, len(hooks))
+	for _, event := range hooks {
+		if event.msgIndex == nil || *event.msgIndex < 0 || *event.msgIndex >= ctx.TotalMessages {
+			return nil, fmt.Errorf("IBC hook calls require valid msg_index attributes")
+		}
+		if seen[*event.msgIndex] {
+			return nil, fmt.Errorf("multiple IBC hook calls for msg_index %d", *event.msgIndex)
+		}
+		seen[*event.msgIndex] = true
+	}
+	sort.Slice(hooks, func(i, j int) bool { return *hooks[i].msgIndex < *hooks[j].msgIndex })
+	ctx.CumulativeGasUsedBefore += ctx.EthereumGasUsed
+
+	// Allocate the remaining Cosmos gas to the bank envelope. Hook gas and
+	// genuine Ethereum message gas are accounted for separately, exactly once.
+	bankGasUsed := r.gasUsed
+	accountGas := func(gas uint64) {
+		if gas >= bankGasUsed {
+			bankGasUsed = 0
+		} else {
+			bankGasUsed -= gas
+		}
+	}
+	accountGas(ctx.EthereumGasUsed)
+	for _, event := range hooks {
+		accountGas(event.hook.GasUsed)
+	}
+
+	txs := make([]*Tx, 0, len(hooks)+1)
+	appendTx := func(tx *Tx) {
+		txs = append(txs, tx)
+		ctx.TxIndex++
+		ctx.FirstLogIndex += uint(len(tx.Receipt.Logs))
+		ctx.CumulativeGasUsedBefore = tx.Receipt.CumulativeGasUsed
+	}
+	if len(bankEvents) > 0 {
+		appendTx(r.syntheticTx(ctx, bankEvents, nil, CosmosTxHash(ctx.Tx), bankGasUsed))
+	}
+	for _, event := range hooks {
+		hash := IBCHookTxHash(ctx.Tx, *event.msgIndex)
+		appendTx(r.syntheticTx(ctx, []entry{event}, event.hook, hash, event.hook.GasUsed))
+	}
+	return txs, nil
+}
+
+func (r *Response) syntheticTx(ctx TxContext, events []entry, hook *virtualibc.HookCall, txHash common.Hash, gasUsed uint64) *Tx {
 	cosmosHash := OriginalCosmosTxHash(ctx.Tx)
-	txHash := CosmosTxHash(ctx.Tx)
 	logCtx := LogContext{
 		BlockHash:     ctx.BlockHash,
 		BlockNumber:   ctx.BlockNumber,
@@ -141,7 +199,16 @@ func (r *Response) SyntheticTx(ctx TxContext) (*Tx, error) {
 		CosmosHash:    &cosmosHash,
 	}
 
-	logs := WrapLogs(rawLogs, true, &cosmosHash)
+	logs := make([]*RPCLog, 0)
+	for _, event := range events {
+		eventLogs := WrapLogs(event.logs, true, &cosmosHash)
+		if event.hook != nil {
+			for _, log := range eventLogs {
+				log.CosmosMsgIndex = hookMsgIndex(event.hook)
+			}
+		}
+		logs = append(logs, eventLogs...)
+	}
 	SetLogMetadata(logs, logCtx)
 
 	var (
@@ -149,7 +216,7 @@ func (r *Response) SyntheticTx(ctx TxContext) (*Tx, error) {
 		to             = virtualbank.ContractAddress
 		input          = []byte{}
 		txGas          = uint64(0)
-		receiptGasUsed = r.gasUsed
+		receiptGasUsed = gasUsed
 		status         = uint64(ethtypes.ReceiptStatusSuccessful)
 		vmError        = ""
 	)
@@ -175,6 +242,9 @@ func (r *Response) SyntheticTx(ctx TxContext) (*Tx, error) {
 		txHash, ctx.BlockHash, ctx.BlockNumber, ctx.TxIndex, ctx.ChainID,
 		&cosmosHash, from, to, input, txGas,
 	)
+	if hook != nil {
+		tx.CosmosMsgIndex = hookMsgIndex(hook)
+	}
 
 	receipt := &Receipt{
 		Status:            status,
@@ -192,7 +262,15 @@ func (r *Response) SyntheticTx(ctx TxContext) (*Tx, error) {
 		Type:              uint64(ethtypes.LegacyTxType),
 	}
 
-	return &Tx{Transaction: tx, Receipt: receipt}, nil
+	return &Tx{Transaction: tx, Receipt: receipt}
+}
+
+func hookMsgIndex(hook *virtualibc.HookCall) *hexutil.Uint64 {
+	if hook.MsgIndex != nil {
+		index := hexutil.Uint64(*hook.MsgIndex)
+		return &index
+	}
+	return nil
 }
 
 // SplitBlockEvents parses virtualizable FinalizeBlock events and separates the

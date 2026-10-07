@@ -72,7 +72,10 @@ The IBC summary ABI is `contracts/InjectiveIBCHooks.sol`. Its summary log is emi
 Virtual transaction rules:
 
 - EVM transactions keep their real transaction hash. Any bank side-effect logs from the same `MsgEthereumTx` are appended after that transaction's native EVM logs.
-- Non-EVM Cosmos transactions with tracked events get one virtual RPC transaction. Its hash is `keccak256(cosmos_tx_hash)`, and its JSON includes `virtual: true` and `cosmos_hash`. Bank and IBC events from the same Cosmos transaction share that transaction and receipt.
+- All tracked bank events belonging to non-Ethereum messages remain together in one bank-only virtual transaction with the existing `keccak256(cosmos_tx_hash)` hash, before any hook transactions. Bank events without a message index remain in this aggregate. Bank event signatures are unchanged. Virtual Cosmos transaction JSON includes `virtual: true` and `cosmos_hash`.
+- Every non-Ethereum IBC hook gets a separate virtual transaction and receipt, including single-hook transactions, ordered by the original message index. Its hash is `keccak256(cosmos_tx_hash_bytes32 || "@" || decimal_ascii(msg_index))`: the Cosmos hash is raw bytes, `@` is one ASCII byte, and the index is decimal with no padding. This requires a valid SDK `msg_index` attribute and at most one hook per message. Missing, duplicate, or out-of-range hook indexes produce an error rather than ambiguous transaction identities.
+- The IBC summary event adds `uint256 indexed msgIndex` as its final argument, making the signature `IBCHookCall(string,string,uint64,address,bool,bytes,string,uint256)`. The contract address remains topic 1 and the message index is topic 2. Hook transactions and logs also expose `cosmos_msg_index` as an Ethereum hex quantity, including `"0x0"` for message zero. Bank transactions and logs do not expose this new field.
+- Hook contract logs and summaries belong only to their respective hook receipts. When hooks accompany bank events, the bank receipt accounts for Cosmos gas remaining after genuine EVM messages and hooks, so gas is not charged again for every child. Bank-only receipt gas is unchanged.
 - Finalize block events are split by their `mode` attribute. `mode=BeginBlock` events go into the begin-block virtual transaction. All other tracked finalize events go into the end-block virtual transaction.
 - Begin-block and end-block virtual transaction hashes are deterministic hashes of the phase name and height. They include `virtual: true` but no `cosmos_hash`.
 - Bank-only virtual transactions use empty input, zero gas/value defaults, legacy tx type, and `to = 0x0000000000000000000000000000000000000800`.
@@ -85,6 +88,8 @@ Block ordering in virtualized mode is:
 ```
 
 Log ordering follows the same block order. For EVM transactions with native bank side effects, real EVM logs remain first and virtual bank logs are appended after them.
+
+To discover individual hooks using an original Cosmos transaction hash, obtain its block height from the Cosmos transaction query, then use `eth_getLogs` for that block with the IBC summary address and signature topic. Select logs whose `cosmos_hash` matches the transaction. Decode `msgIndex` with the IBC ABI to map each hook to its Cosmos message. Each log's `transactionHash` can be passed directly to `eth_getTransactionByHash` and `eth_getTransactionReceipt`. Alternatively, knowing the original Cosmos hash and message index, derive the hook hash using the formula above and query those same existing methods directly. No additional RPC method is required.
 
 ## Sync Semantics
 
