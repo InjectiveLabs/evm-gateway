@@ -162,11 +162,11 @@ jobs:
       # command is run separately because the action's prompt input maps to
       # `codex exec`, while /review maps to `codex exec review --base`.
       - name: Set up Codex
-        uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56 # v1.11
+        uses: openai/codex-action@bdf19a4a223ec2549a3e2274a0cf61556bc07675 # v1.13
         with:
           openai-api-key: ${{ secrets.CODEX_API_KEY }}
           responses-api-endpoint: ${{ secrets.CODEX_RESPONSES_API_ENDPOINT }}
-          codex-version: 0.154.0
+          codex-version: 0.162.0
           codex-home: ${{ runner.temp }}/codex-review-home
           safety-strategy: unsafe
 
