@@ -83,8 +83,12 @@ func TestSyntheticTxsSeparateBankAndSingleIBCHook(t *testing.T) {
 	if virtualTx.Transaction.Hash != IBCHookTxHash(rawTx, 0) || virtualTx.Transaction.CosmosMsgIndex == nil || *virtualTx.Transaction.CosmosMsgIndex != 0 {
 		t.Fatalf("unexpected single-hook identity: %#v", virtualTx.Transaction)
 	}
-	if virtualTx.Transaction.From != virtualibc.ContractAddress || virtualTx.Transaction.To == nil || *virtualTx.Transaction.To != target {
+	caller := common.HexToAddress(evmtypes.IBCHookCallerAddressHex)
+	if virtualTx.Transaction.From != caller || virtualTx.Transaction.To == nil || *virtualTx.Transaction.To != target {
 		t.Fatalf("unexpected transaction endpoints: from=%s to=%v", virtualTx.Transaction.From, virtualTx.Transaction.To)
+	}
+	if virtualTx.Receipt.ToMap()["from"] != caller {
+		t.Fatalf("unexpected receipt sender: %s", virtualTx.Receipt.From)
 	}
 	if string(virtualTx.Transaction.Input) != string(hook.Input) || uint64(virtualTx.Transaction.Gas) != hook.GasUsed {
 		t.Fatalf("unexpected transaction input/gas: input=%s gas=%d", hexutil.Encode(virtualTx.Transaction.Input), virtualTx.Transaction.Gas)
@@ -96,6 +100,9 @@ func TestSyntheticTxsSeparateBankAndSingleIBCHook(t *testing.T) {
 	logs := virtualTx.Receipt.Logs
 	if len(logs) != 2 {
 		t.Fatalf("expected embedded and summary logs; got %d", len(logs))
+	}
+	if logs[0].Address != emitter || logs[1].Address != virtualibc.ContractAddress {
+		t.Fatalf("unexpected hook log addresses: %#v", logs)
 	}
 	wantTopics := []common.Hash{embeddedTopic, virtualibc.TopicHookCall}
 	for i, want := range wantTopics {
@@ -141,6 +148,10 @@ func TestFailedIBCHookBuildsFailedQueryableTx(t *testing.T) {
 		t.Fatalf("expected one synthetic transaction, got %d", len(virtualTxs))
 	}
 	virtualTx := virtualTxs[0]
+	caller := common.HexToAddress(evmtypes.IBCHookCallerAddressHex)
+	if virtualTx.Transaction.From != caller || virtualTx.Receipt.ToMap()["from"] != caller {
+		t.Fatalf("unexpected failed hook senders: tx=%s receipt=%s", virtualTx.Transaction.From, virtualTx.Receipt.From)
+	}
 	if virtualTx.Receipt.Status != ethtypes.ReceiptStatusFailed || virtualTx.Receipt.VMError != "execution reverted" {
 		t.Fatalf("unexpected failed receipt: %#v", virtualTx.Receipt)
 	}
@@ -180,6 +191,6 @@ func TestVirtualIBCSharesVirtualAddressWithBank(t *testing.T) {
 		t.Fatalf("virtual IBC address %s must equal virtual bank address %s", virtualibc.ContractAddress, virtualbank.ContractAddress)
 	}
 	if virtualibc.ContractAddress == common.HexToAddress(evmtypes.IBCHookCallerAddressHex) {
-		t.Fatalf("virtual IBC records must not use the real IBC precompile address %s", evmtypes.IBCHookCallerAddressHex)
+		t.Fatalf("synthetic IBC summary logs must not use the real IBC precompile address %s", evmtypes.IBCHookCallerAddressHex)
 	}
 }
