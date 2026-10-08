@@ -13,6 +13,7 @@ import (
 
 	virtualbank "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtual/bank"
 	virtualibc "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtual/ibc"
+	evmtypes "github.com/InjectiveLabs/sdk-go/chain/evm/types"
 )
 
 type entry struct {
@@ -226,7 +227,7 @@ func (r *Response) syntheticTx(ctx TxContext, events []entry, hook *virtualibc.H
 	}
 
 	if hook != nil {
-		from = virtualibc.ContractAddress
+		from = common.HexToAddress(evmtypes.IBCHookCallerAddressHex)
 		to = hook.Contract
 		input = hook.Input
 		txGas = hook.GasUsed

@@ -406,18 +406,22 @@ func TestKVIndexerSeparatesBankAndSingleIBCHook(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rpcTx.From != virtualibc.ContractAddress || rpcTx.To == nil || *rpcTx.To != target || uint64(rpcTx.Gas) != 88 {
+	caller := common.HexToAddress(evmtypes.IBCHookCallerAddressHex)
+	if rpcTx.From != caller || rpcTx.To == nil || *rpcTx.To != target || uint64(rpcTx.Gas) != 88 {
 		t.Fatalf("unexpected hook transaction: %#v", rpcTx)
 	}
 	receipt, err := kv.GetReceiptByTxHash(hashes[1])
 	if err != nil {
 		t.Fatal(err)
 	}
+	if receipt["from"] != caller {
+		t.Fatalf("unexpected cached hook receipt sender: %#v", receipt["from"])
+	}
 	logs, ok := receipt["logs"].([]*virtual.RPCLog)
 	if !ok || len(logs) != 2 {
 		t.Fatalf("expected embedded and summary logs: %#v", receipt["logs"])
 	}
-	if logs[0].Topics[0] != embeddedTopic || logs[1].Topics[0] != virtualibc.TopicHookCall {
+	if logs[0].Topics[0] != embeddedTopic || logs[1].Topics[0] != virtualibc.TopicHookCall || logs[1].Address != virtualibc.ContractAddress {
 		t.Fatalf("unexpected hook log order: %#v", logs)
 	}
 }
