@@ -3,7 +3,9 @@ package backend
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 
+	appconfig "github.com/InjectiveLabs/evm-gateway/internal/config"
 	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
 	evmtypes "github.com/InjectiveLabs/sdk-go/chain/evm/types"
 	"github.com/bytedance/sonic"
@@ -14,9 +16,53 @@ import (
 	"upd.dev/xlab/gotracer"
 )
 
+// normalizeTraceTimeout treats the requested timeout as an upper bound. Apply it
+// before cache lookups so oversized requests cannot reuse cached upstream
+// timeout-validation errors and share results with the effective configuration.
+func (b *Backend) normalizeTraceTimeout(config *rpctypes.TraceConfig) *rpctypes.TraceConfig {
+	cap := b.cfg.JSONRPC.TraceTimeoutCap
+	if cap <= 0 {
+		cap = appconfig.DefaultTraceTimeoutCap
+	}
+	// Keep legacy cache keys for omitted timeouts at the upstream 30s default.
+	// A custom cap must also apply when the client omits its timeout.
+	if config == nil {
+		if cap == appconfig.DefaultTraceTimeoutCap {
+			return nil
+		}
+		return &rpctypes.TraceConfig{TraceConfig: evmtypes.TraceConfig{Timeout: cap.String()}}
+	}
+	if config.Timeout == "" {
+		if cap == appconfig.DefaultTraceTimeoutCap {
+			return config
+		}
+	} else {
+		timeout, err := time.ParseDuration(config.Timeout)
+		if err != nil || timeout <= cap {
+			return config
+		}
+	}
+	normalized := *config
+	normalized.Timeout = cap.String()
+	return &normalized
+}
+
 // TraceTransaction returns the structured logs created during the execution of EVM
-// and returns them as a JSON object.
+// and returns them as a JSON object. A tx that failed in the ante handler was
+// never executed: instead of the replay error, it gets a trace matching its
+// failed receipt.
 func (b *Backend) TraceTransaction(hash common.Hash, config *rpctypes.TraceConfig) (interface{}, error) {
+	config = b.normalizeTraceTimeout(config)
+	result, err := b.traceTransaction(hash, config)
+	if err != nil {
+		if trace, ok := b.anteFailedTxTrace(hash, config); ok {
+			return trace, nil
+		}
+	}
+	return result, err
+}
+
+func (b *Backend) traceTransaction(hash common.Hash, config *rpctypes.TraceConfig) (interface{}, error) {
 	ctx := b.operationContext()
 	if b.ctx != nil {
 		defer gotracer.Trace(&ctx, b.baseTraceTags)()
@@ -164,8 +210,23 @@ func (b *Backend) convertConfig(config *rpctypes.TraceConfig) *evmtypes.TraceCon
 
 // TraceBlock configures a new tracer according to the provided configuration, and
 // executes all the transactions contained within. The return value will be one item
-// per transaction, dependent on the requested tracer.
+// per transaction, dependent on the requested tracer. Entries of txs that
+// failed in the ante handler carry a trace matching their failed receipt
+// instead of the replay error.
 func (b *Backend) TraceBlock(height rpctypes.BlockNumber,
+	config *rpctypes.TraceConfig,
+	block *cmrpctypes.ResultBlock,
+) ([]*rpctypes.TxTraceResult, error) {
+	config = b.normalizeTraceTimeout(config)
+	results, err := b.traceBlock(height, config, block)
+	if err != nil {
+		return nil, err
+	}
+	b.fillAnteFailedBlockTraces(results, height, block, config)
+	return results, nil
+}
+
+func (b *Backend) traceBlock(height rpctypes.BlockNumber,
 	config *rpctypes.TraceConfig,
 	block *cmrpctypes.ResultBlock,
 ) ([]*rpctypes.TxTraceResult, error) {
@@ -413,6 +474,7 @@ func traceBlockContextHeight(height rpctypes.BlockNumber, block *cmrpctypes.Resu
 func (b *Backend) TraceCall(
 	args rpctypes.TransactionArgs, blockNrOrHash rpctypes.BlockNumberOrHash, config *rpctypes.TraceConfig,
 ) (interface{}, error) {
+	config = b.normalizeTraceTimeout(config)
 	ctx := b.operationContext()
 	if b.ctx != nil {
 		defer gotracer.Trace(&ctx, b.baseTraceTags)()
