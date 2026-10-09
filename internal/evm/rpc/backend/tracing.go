@@ -178,6 +178,26 @@ func (b *Backend) TraceBlock(height rpctypes.BlockNumber,
 	b = b.WithContext(ctx).(*Backend)
 
 	cacheHeight, cacheable := b.traceCacheHeight(height, block)
+	// The EVM keeper's current TraceBlock query starts from H-1 and accepts only
+	// MsgEthereumTx values. It cannot replay a native Cosmos message that ran
+	// before an Ethereum message in the same block. Resolve and validate the
+	// original block before consulting the trace cache so an older, incomplete
+	// cache entry cannot be returned for this unsafe ordering.
+	if block == nil && cacheable && !b.cfg.OfflineRPCOnly {
+		var err error
+		block, err = b.TendermintBlockByNumber(rpctypes.BlockNumber(cacheHeight))
+		if err != nil {
+			return nil, errors.Wrap(err, "block not found")
+		}
+		if block == nil || block.Block == nil {
+			return nil, errors.New("block not found")
+		}
+	}
+	if block != nil {
+		if err := b.validateTraceBlockReplayOrder(block); err != nil {
+			return nil, err
+		}
+	}
 	if b.indexer != nil && cacheable {
 		cached, err := b.indexer.GetTraceBlockByHeight(cacheHeight, config)
 		if err == nil {
@@ -211,6 +231,9 @@ func (b *Backend) TraceBlock(height rpctypes.BlockNumber,
 		}
 		cacheHeight = block.Block.Height
 		cacheable = true
+		if err := b.validateTraceBlockReplayOrder(block); err != nil {
+			return nil, err
+		}
 	}
 
 	txsMessages, txHashes := b.traceBlockEthereumTransactions(block)
@@ -264,6 +287,62 @@ func (b *Backend) TraceBlock(height rpctypes.BlockNumber,
 	}
 
 	return decodedResults, nil
+}
+
+// validateTraceBlockReplayOrder rejects block layouts that the current EVM
+// gRPC tracing contract cannot reproduce. TraceBlock accepts only Ethereum
+// messages, so dropping a preceding native message would expose a trace from a
+// different state transition. Native messages after the final Ethereum
+// message cannot influence an earlier EVM execution and remain traceable.
+func (b *Backend) validateTraceBlockReplayOrder(block *cmrpctypes.ResultBlock) error {
+	if block == nil || block.Block == nil {
+		return errors.New("block not found")
+	}
+
+	txDecoder := b.clientCtx.TxConfig.TxDecoder()
+	type replayMessage struct {
+		txIndex  int
+		msgIndex int
+		msg      sdk.Msg
+		err      error
+	}
+	messages := make([]replayMessage, 0)
+	for txIndex, txBz := range block.Block.Txs {
+		decodedTx, err := txDecoder(txBz)
+		if err != nil {
+			messages = append(messages, replayMessage{txIndex: txIndex, msgIndex: -1, err: err})
+			continue
+		}
+		for msgIndex, msg := range decodedTx.GetMsgs() {
+			messages = append(messages, replayMessage{txIndex: txIndex, msgIndex: msgIndex, msg: msg})
+		}
+	}
+
+	ethereumFollows := false
+	for i := len(messages) - 1; i >= 0; i-- {
+		entry := messages[i]
+		if _, ok := entry.msg.(*evmtypes.MsgEthereumTx); ok {
+			ethereumFollows = true
+			continue
+		}
+		if !ethereumFollows {
+			continue
+		}
+		if entry.err != nil {
+			return fmt.Errorf(
+				"ordered Cosmos/EVM block replay is unavailable: decode transaction %d before an Ethereum message: %w",
+				entry.txIndex,
+				entry.err,
+			)
+		}
+		return fmt.Errorf(
+			"ordered Cosmos/EVM block replay is unavailable: native message %T at transaction %d message %d precedes an Ethereum message",
+			entry.msg,
+			entry.txIndex,
+			entry.msgIndex,
+		)
+	}
+	return nil
 }
 
 func (b *Backend) traceBlockEthereumTransactions(
