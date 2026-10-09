@@ -120,8 +120,8 @@ func (b *Backend) GetTransactionByHash(txHash common.Hash) (*rpctypes.RPCTransac
 		return nil, nil
 	}
 
-	if b.virtualBankEnabled() {
-		view, err := b.liveVirtualBankBlockView(block, blockRes)
+	if b.virtualizationEnabled() {
+		view, err := b.liveVirtualBlockView(block, blockRes)
 		if err != nil {
 			return nil, err
 		}
@@ -293,8 +293,8 @@ func (b *Backend) GetTransactionReceipt(hash common.Hash) (map[string]interface{
 		b.logger.Warn("failed to retrieve block results", "height", res.Height, "error", err.Error())
 		return nil, nil
 	}
-	if b.virtualBankEnabled() {
-		view, err := b.liveVirtualBankBlockView(resBlock, blockRes)
+	if b.virtualizationEnabled() {
+		view, err := b.liveVirtualBlockView(resBlock, blockRes)
 		if err != nil {
 			return nil, err
 		}
@@ -690,8 +690,8 @@ func (b *Backend) GetTransactionByBlockAndIndex(block *cmrpctypes.ResultBlock, i
 		return nil, nil
 	}
 
-	if b.virtualBankEnabled() {
-		view, err := b.liveVirtualBankBlockView(block, blockRes)
+	if b.virtualizationEnabled() {
+		view, err := b.liveVirtualBlockView(block, blockRes)
 		if err != nil {
 			return nil, err
 		}

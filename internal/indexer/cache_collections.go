@@ -13,7 +13,7 @@ import (
 	"upd.dev/xlab/gotracer"
 
 	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
-	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtualbank"
+	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtual"
 	evmtypes "github.com/InjectiveLabs/sdk-go/chain/evm/types"
 )
 
@@ -150,22 +150,22 @@ func isHexHashString(value string) bool {
 }
 
 type CachedReceipt struct {
-	Status            uint64                `json:"status"`
-	CumulativeGasUsed uint64                `json:"cumulative_gas_used"`
-	GasUsed           uint64                `json:"gas_used"`
-	Reason            *string               `json:"reason,omitempty"`
-	VMError           *string               `json:"vm_error,omitempty"`
-	LogsBloom         string                `json:"logs_bloom"`
-	Logs              []*virtualbank.RPCLog `json:"logs"`
-	TransactionHash   string                `json:"transaction_hash"`
-	ContractAddress   *string               `json:"contract_address,omitempty"`
-	BlockHash         string                `json:"block_hash"`
-	BlockNumber       uint64                `json:"block_number"`
-	TransactionIndex  uint64                `json:"transaction_index"`
-	EffectiveGasPrice string                `json:"effective_gas_price"`
-	From              string                `json:"from"`
-	To                *string               `json:"to,omitempty"`
-	Type              uint64                `json:"type"`
+	Status            uint64            `json:"status"`
+	CumulativeGasUsed uint64            `json:"cumulative_gas_used"`
+	GasUsed           uint64            `json:"gas_used"`
+	Reason            *string           `json:"reason,omitempty"`
+	VMError           *string           `json:"vm_error,omitempty"`
+	LogsBloom         string            `json:"logs_bloom"`
+	Logs              []*virtual.RPCLog `json:"logs"`
+	TransactionHash   string            `json:"transaction_hash"`
+	ContractAddress   *string           `json:"contract_address,omitempty"`
+	BlockHash         string            `json:"block_hash"`
+	BlockNumber       uint64            `json:"block_number"`
+	TransactionIndex  uint64            `json:"transaction_index"`
+	EffectiveGasPrice string            `json:"effective_gas_price"`
+	From              string            `json:"from"`
+	To                *string           `json:"to,omitempty"`
+	Type              uint64            `json:"type"`
 }
 
 func (r CachedReceipt) ToMap() map[string]interface{} {
@@ -204,7 +204,7 @@ func (r CachedReceipt) ToMap() map[string]interface{} {
 		receipt["to"] = &to
 	}
 	if r.Logs == nil {
-		receipt["logs"] = []*virtualbank.RPCLog{}
+		receipt["logs"] = []*virtual.RPCLog{}
 	}
 
 	return receipt
@@ -351,7 +351,7 @@ func (kv *KVIndexer) GetReceiptByTxHash(hash common.Hash) (map[string]interface{
 }
 
 // IsVirtualRPCTransaction reports whether a cached RPC transaction was
-// synthesized by the virtual bank event indexer.
+// synthesized from Cosmos events.
 func (kv *KVIndexer) IsVirtualRPCTransaction(hash common.Hash) (bool, error) {
 	ctx := kv.operationContext()
 	if kv.ctx != nil {
@@ -414,7 +414,7 @@ func (kv *KVIndexer) GetBlockMetaByHash(hash common.Hash) (*CachedBlockMeta, err
 
 // GetLogsByBlockHeight returns grouped logs from the indexed KV cache for a
 // block height.
-func (kv *KVIndexer) GetLogsByBlockHeight(height int64) ([][]*virtualbank.RPCLog, error) {
+func (kv *KVIndexer) GetLogsByBlockHeight(height int64) ([][]*virtual.RPCLog, error) {
 	ctx := kv.operationContext()
 	if kv.ctx != nil {
 		defer gotracer.Trace(&ctx, kv.baseTraceTags)()
@@ -439,7 +439,7 @@ func (kv *KVIndexer) GetFilteredLogsByBlockHeight(
 	height int64,
 	addresses []common.Address,
 	topics [][]common.Hash,
-) ([]*virtualbank.RPCLog, error) {
+) ([]*virtual.RPCLog, error) {
 	ctx := kv.operationContext()
 	if kv.ctx != nil {
 		defer gotracer.Trace(&ctx, kv.baseTraceTags)()
@@ -460,7 +460,7 @@ func (kv *KVIndexer) GetFilteredLogsByBlockHeight(
 
 // GetLogsByBlockHash resolves a block hash through the indexed hash map and
 // returns grouped cached logs.
-func (kv *KVIndexer) GetLogsByBlockHash(hash common.Hash) ([][]*virtualbank.RPCLog, error) {
+func (kv *KVIndexer) GetLogsByBlockHash(hash common.Hash) ([][]*virtual.RPCLog, error) {
 	ctx := kv.operationContext()
 	if kv.ctx != nil {
 		defer gotracer.Trace(&ctx, kv.baseTraceTags)()
@@ -486,7 +486,7 @@ func (kv *KVIndexer) GetFilteredLogsByBlockHash(
 	hash common.Hash,
 	addresses []common.Address,
 	topics [][]common.Hash,
-) ([]*virtualbank.RPCLog, error) {
+) ([]*virtual.RPCLog, error) {
 	ctx := kv.operationContext()
 	if kv.ctx != nil {
 		defer gotracer.Trace(&ctx, kv.baseTraceTags)()
@@ -528,7 +528,7 @@ func buildCachedReceipt(
 	gasUsed uint64,
 	reason string,
 	vmError string,
-	logs []*virtualbank.RPCLog,
+	logs []*virtual.RPCLog,
 	txHash common.Hash,
 	contractAddress *common.Address,
 	blockHash common.Hash,
@@ -592,6 +592,6 @@ func receiptEffectiveGasPrice(tx *ethtypes.Transaction, baseFee *big.Int) *big.I
 
 // evmLogsBloom calculates the Ethereum bloom for cached RPC logs, ignoring
 // virtual-only metadata.
-func evmLogsBloom(logs []*virtualbank.RPCLog) []byte {
-	return evmtypes.LogsBloom(virtualbank.EthLogs(logs))
+func evmLogsBloom(logs []*virtual.RPCLog) []byte {
+	return evmtypes.LogsBloom(virtual.EthLogs(logs))
 }
