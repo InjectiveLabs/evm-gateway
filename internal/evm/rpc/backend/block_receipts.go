@@ -128,15 +128,18 @@ func (b *Backend) cachedBlockReceipts(blockNrOrHash rpctypes.BlockNumberOrHash) 
 
 // materializedReceiptByHash returns an indexed receipt, using the in-memory
 // materialized cache to avoid decoding the same KV payload repeatedly.
+// Cached entries are only served within the indexer cache epoch they were read
+// in, so receipts rewritten by re-indexing are never served stale.
 func (b *Backend) materializedReceiptByHash(hash common.Hash) (map[string]interface{}, error) {
-	if receipt, ok := b.materialized.getReceipt(hash); ok {
+	epoch := b.indexerCacheEpoch()
+	if receipt, ok := b.materialized.getReceipt(hash, epoch); ok {
 		return receipt, nil
 	}
 	receipt, err := b.indexer.GetReceiptByTxHash(hash)
 	if err != nil {
 		return nil, err
 	}
-	b.materialized.addReceipt(hash, receipt)
+	b.materialized.addReceipt(hash, receipt, epoch)
 	return receipt, nil
 }
 
@@ -209,6 +212,12 @@ func (b *Backend) liveBlockReceipts(resBlock *cmrpctypes.ResultBlock) ([]map[str
 		tx, err := b.clientCtx.TxConfig.TxDecoder()(txBz)
 		if err != nil {
 			b.logger.Warn("failed to decode tx in block", "height", resBlock.Block.Height, "txIndex", txIndex, "error", err.Error())
+			cumulativeBlockGasUsed += resultGasUsed
+			continue
+		}
+
+		if rpctypes.TxAnteFailed(txResult) {
+			// failed in the ante handler: not an Ethereum-visible inclusion
 			cumulativeBlockGasUsed += resultGasUsed
 			continue
 		}

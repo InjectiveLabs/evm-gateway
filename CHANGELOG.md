@@ -34,6 +34,24 @@ Ref: https://keepachangelog.com/en/1.1.0/
 
 # Changelog
 
+## [Unreleased]
+
+### Bug Fixes
+
+* (indexer) Ethereum txs whose Cosmos tx failed in the ante handler (nonce not consumed, e.g. insufficient funds) are no longer exposed. The same signed tx can be included again later, which made `eth_getTransactionReceipt`, `eth_getBlockReceipts` and `eth_getTransactionByHash` disagree on its block.
+* (indexer) Re-indexing a block no longer deletes the hash-keyed records of a tx owned by another height; a stale owner is reassigned to the block being indexed.
+* (rpc) In-memory receipt and block-log caches are invalidated whenever indexed data is rewritten, so re-indexed receipts are never served stale.
+* (rpc) Live (cache-miss) block, receipt and tx paths skip ante-failed Ethereum txs.
+* (debug) `debug_traceTransaction` resolves cached block traces by tx hash; it returned another tx's frame or `{"type":0}` when virtual txs preceded the tx.
+* (debug) Block and tx traces no longer replay ante-failed txs; block traces drop entries of non-visible txs and report an error entry instead of a fake frame for visible txs missing from the trace.
+
+* (cli) `--env-file` is now applied: the file is loaded before options take their defaults from the environment. Previously only `.env` in the working directory was read. An explicit file that does not exist is an error.
+
+### Features
+
+* (docs) `docs/gas-used-semantics.md` documents how `gasUsed`, `cumulativeGasUsed` and `effectiveGasPrice` relate to the fees Injective charges; gas reporting is unchanged.
+* (cli) Added `migrate ante-failed-txs` to repair existing indexes: offline scan of local state, verification of candidate heights against block results, and resync of affected heights only. See `docs/migrations/ante-failed-txs.md`.
+
 ## [v1.4.2] - 2026-06-30
 
 ### Features

@@ -36,8 +36,8 @@ type gatewayCLIOptions struct {
 
 func initGlobalOptions(app *cli.Cli, opts *gatewayCLIOptions) {
 	opts.envFile = app.String(cli.StringOpt{
-		Name: "env-file",
-		Desc: "Path to .env file with WEB3INJ_ variables.",
+		Name: envFileFlag,
+		Desc: "Path to .env file with WEB3INJ_ variables (default: .env in the working directory, if present). Must precede the command.",
 	})
 
 	opts.printVersion = app.Bool(cli.BoolOpt{

@@ -292,23 +292,7 @@ func (s *Syncer) Resync(ctx context.Context, targets []BlockRange) (ResyncStats,
 		s.logger.Info("resyncing segment", "start", target.Start, "end", target.End)
 		pace := blocksync.NewPace("blocks resynced", paceInterval, s.logger.With("sync_queue", "resync"))
 
-		err := rangeSyncer.SyncRange(ctx, target.Start, target.End, func(block blocksync.NewBlockData) error {
-			if block.Skipped {
-				return fmt.Errorf("block %d was skipped during resync", block.Height)
-			}
-			indexStats, err := s.indexBlockForResync(block.Block, block.BlockResults)
-			if err != nil {
-				if cleanupErr := s.cleanupFailedBlock(block.Height); cleanupErr != nil {
-					return joinErrors(errors.Wrapf(err, "index block %d", block.Height), cleanupErr)
-				}
-				return errors.Wrapf(err, "index block %d", block.Height)
-			}
-
-			stats.BlocksSynced++
-			stats.UniqueTxnsSeen += indexStats.IndexedEthTxs
-			pace.Add(1)
-			return nil
-		})
+		err := rangeSyncer.SyncRange(ctx, target.Start, target.End, s.resyncBlockHandler(&stats, pace))
 		pace.Stop()
 		if err != nil {
 			return stats, err
@@ -316,6 +300,51 @@ func (s *Syncer) Resync(ctx context.Context, targets []BlockRange) (ResyncStats,
 	}
 
 	return stats, nil
+}
+
+// ResyncHeights reindexes a set of possibly scattered heights. Blocks are
+// fetched concurrently across heights (Resync only parallelizes within a
+// contiguous range, which serializes scattered single heights) and indexed
+// one at a time in ascending order.
+func (s *Syncer) ResyncHeights(ctx context.Context, heights []int64) (ResyncStats, error) {
+	defer gotracer.Trace(&ctx, txIndexerSyncerTraceTag)()
+
+	var stats ResyncStats
+
+	if s.indexer == nil {
+		return stats, errors.New("tx indexer not configured")
+	}
+	if len(heights) == 0 {
+		return stats, errors.New("no resync heights provided")
+	}
+
+	s.logger.Info("resyncing heights", "heights", len(heights), "jobs", s.cfg.FetchJobs)
+	pace := blocksync.NewPace("blocks resynced", paceInterval, s.logger.With("sync_queue", "resync"))
+	defer pace.Stop()
+
+	heightSyncer := blocksync.NewSyncer(s.client, s.logger, s.cfg.FetchJobs, false, false)
+	err := heightSyncer.SyncHeights(ctx, heights, s.resyncBlockHandler(&stats, pace))
+	return stats, err
+}
+
+func (s *Syncer) resyncBlockHandler(stats *ResyncStats, pace *blocksync.Pace) blocksync.Handler {
+	return func(block blocksync.NewBlockData) error {
+		if block.Skipped {
+			return fmt.Errorf("block %d was skipped during resync", block.Height)
+		}
+		indexStats, err := s.indexBlockForResync(block.Block, block.BlockResults)
+		if err != nil {
+			if cleanupErr := s.cleanupFailedBlock(block.Height); cleanupErr != nil {
+				return joinErrors(errors.Wrapf(err, "index block %d", block.Height), cleanupErr)
+			}
+			return errors.Wrapf(err, "index block %d", block.Height)
+		}
+
+		stats.BlocksSynced++
+		stats.UniqueTxnsSeen += indexStats.IndexedEthTxs
+		pace.Add(1)
+		return nil
+	}
 }
 
 func (s *Syncer) resolveEarliestBlock(ctx context.Context, requested int64) (int64, error) {

@@ -148,22 +148,32 @@ func (kv *KVIndexer) GetTraceBlockByHeight(height int64, config *rpctypes.TraceC
 	return json.RawMessage(raw), nil
 }
 
-func (kv *KVIndexer) deleteTraceKeysForBlock(batch interface {
+type batchDeleter interface {
 	Delete(key []byte) error
-}, height int64, txHashes []common.Hash) error {
+}
+
+// deleteTraceTxKeys stages the removal of cached traces of a tx for every
+// trace config.
+func (kv *KVIndexer) deleteTraceTxKeys(batch batchDeleter, txHash common.Hash) error {
+	start := traceTxPrefixStart(txHash)
+	it, err := kv.db.Iterator(start, prefixRangeEnd(start))
+	if err != nil {
+		return errorsmod.Wrapf(err, "delete tx trace iterator %s", txHash.Hex())
+	}
+	defer it.Close()
+	for ; it.Valid(); it.Next() {
+		if err := batch.Delete(it.Key()); err != nil {
+			return errorsmod.Wrapf(err, "delete tx trace %s", txHash.Hex())
+		}
+	}
+	return nil
+}
+
+func (kv *KVIndexer) deleteTraceKeysForBlock(batch batchDeleter, height int64, txHashes []common.Hash) error {
 	for _, txHash := range txHashes {
-		start := traceTxPrefixStart(txHash)
-		it, err := kv.db.Iterator(start, prefixRangeEnd(start))
-		if err != nil {
-			return errorsmod.Wrapf(err, "delete tx trace iterator %d", height)
+		if err := kv.deleteTraceTxKeys(batch, txHash); err != nil {
+			return errorsmod.Wrapf(err, "block %d", height)
 		}
-		for ; it.Valid(); it.Next() {
-			if err := batch.Delete(it.Key()); err != nil {
-				it.Close()
-				return errorsmod.Wrapf(err, "delete tx trace %d", height)
-			}
-		}
-		it.Close()
 	}
 
 	start := traceBlockPrefixStart(height)

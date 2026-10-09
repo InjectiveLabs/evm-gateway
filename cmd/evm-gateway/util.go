@@ -1,31 +1,53 @@
 package main
 
 import (
-	"bufio"
-	"bytes"
-	"log/slog"
 	"os"
 	"strings"
+
+	"github.com/InjectiveLabs/evm-gateway/internal/config"
 )
 
-// readEnv is a special utility that reads `.env` file into actual environment variables
-// of the current app, similar to `dotenv` Node package.
-func readEnv() {
-	if envdata, _ := os.ReadFile(".env"); len(envdata) > 0 {
-		s := bufio.NewScanner(bytes.NewReader(envdata))
-		for s.Scan() {
-			txt := s.Text()
-			valIdx := strings.IndexByte(txt, '=')
-			if valIdx < 0 {
-				continue
-			}
+// envFileFlag is the global option naming the env file to load.
+const envFileFlag = "env-file"
 
-			strValue := strings.Trim(txt[valIdx+1:], `"`)
-			if err := os.Setenv(txt[:valIdx], strValue); err != nil {
-				slog.With("name", txt[:valIdx], "error", err).Warn("failed to override EVN variable")
-			}
-		}
+// loadEnv loads WEB3INJ_ variables into the process environment before the CLI
+// is built: options take their defaults from the environment when they are
+// declared, which happens before arguments are parsed. The file named by
+// --env-file is loaded if given, otherwise `.env` in the working directory if
+// present.
+func loadEnv(args []string) error {
+	return config.LoadEnvFile(envFileFromArgs(args))
+}
+
+// envFileFromArgs returns the value of the --env-file option, scanning
+// arguments up to "--". Without the CLI spec, option values can't be told
+// apart from commands, so every argument is scanned; no command defines an
+// option of the same name, and a misplaced one is still rejected by the CLI.
+func envFileFromArgs(args []string) string {
+	if len(args) > 0 {
+		args = args[1:]
 	}
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			return ""
+		}
+		if !strings.HasPrefix(arg, "-") {
+			continue
+		}
+		name, value, hasValue := strings.Cut(strings.TrimLeft(arg, "-"), "=")
+		if name != envFileFlag {
+			continue
+		}
+		if hasValue {
+			return value
+		}
+		if i+1 < len(args) {
+			return args[i+1]
+		}
+		return ""
+	}
+	return ""
 }
 
 func parseCSV(value string, fallback []string) []string {

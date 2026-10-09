@@ -6,8 +6,10 @@ import (
 	"math/big"
 	"strconv"
 
+	abci "github.com/cometbft/cometbft/abci/types"
 	cmrpcclient "github.com/cometbft/cometbft/rpc/client"
 	cmrpctypes "github.com/cometbft/cometbft/rpc/core/types"
+	tmtypes "github.com/cometbft/cometbft/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	grpctypes "github.com/cosmos/cosmos-sdk/types/grpc"
 	"github.com/ethereum/go-ethereum/common"
@@ -456,10 +458,40 @@ func (b *Backend) EthMsgsFromTendermintBlock(
 		return nil
 	}
 
-	var result []*evmtypes.MsgEthereumTx
 	block := resBlock.Block
+	var txResults []*abci.ExecTxResult
+	blockRes, err := b.TendermintBlockResultByNumber(&block.Height)
+	if err != nil || blockRes == nil {
+		errMsg := "nil block results"
+		if err != nil {
+			errMsg = err.Error()
+		}
+		b.logger.Debug("block results unavailable; ante-failed ethereum txs cannot be filtered", "height", block.Height, "error", errMsg)
+	} else {
+		txResults = blockRes.TxResults
+	}
 
-	for _, tx := range block.Txs {
+	return b.ethMsgsFromBlock(block, txResults, len(block.Txs))
+}
+
+// ethMsgsFromBlock returns the MsgEthereumTxs of block.Txs[:txLimit] that are
+// exposed over JSON-RPC. Txs whose result shows they failed in the ante
+// handler are skipped: they never consumed their nonce and had no effect on
+// chain. When txResults is unavailable every MsgEthereumTx is returned.
+func (b *Backend) ethMsgsFromBlock(block *tmtypes.Block, txResults []*abci.ExecTxResult, txLimit int) []*evmtypes.MsgEthereumTx {
+	if block == nil {
+		return nil
+	}
+	if txLimit > len(block.Txs) {
+		txLimit = len(block.Txs)
+	}
+
+	var result []*evmtypes.MsgEthereumTx
+	for txIndex, tx := range block.Txs[:txLimit] {
+		if txIndex < len(txResults) && rpctypes.TxAnteFailed(txResults[txIndex]) {
+			continue
+		}
+
 		decodedTx, err := b.clientCtx.TxConfig.TxDecoder()(tx)
 		if err != nil {
 			b.logger.Warn("failed to decode transaction in block", "height", block.Height, "error", err.Error())
