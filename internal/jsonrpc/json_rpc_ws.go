@@ -30,7 +30,9 @@ import (
 )
 
 const (
-	messageSizeLimit = 10 * 1024 * 1024 // 10MB
+	messageSizeLimit             = 10 * 1024 * 1024 // 10MB
+	websocketPingInterval        = 20 * time.Second
+	websocketControlWriteTimeout = 5 * time.Second
 )
 
 type WebsocketsServer interface {
@@ -77,10 +79,11 @@ type wsRPCRequest struct {
 }
 
 type websocketsServer struct {
-	rpcAddr string // listen address of rest-server
-	wsAddr  string // listen address of ws server
-	api     *pubSubAPI
-	logger  *slog.Logger
+	rpcAddr      string // listen address of rest-server
+	wsAddr       string // listen address of ws server
+	api          *pubSubAPI
+	logger       *slog.Logger
+	pingInterval time.Duration
 }
 
 func NewWebsocketsServer(
@@ -95,10 +98,11 @@ func NewWebsocketsServer(
 	logger.Info("Starting JSON WebSocket server", "address", jsonRPCConfig.WsAddress)
 
 	return &websocketsServer{
-		rpcAddr: "localhost:" + port, // FIXME: this shouldn't be hardcoded to localhost
-		wsAddr:  jsonRPCConfig.WsAddress,
-		api:     newPubSubAPI(clientCtx, logger, stream),
-		logger:  logger,
+		rpcAddr:      "localhost:" + port, // FIXME: this shouldn't be hardcoded to localhost
+		wsAddr:       jsonRPCConfig.WsAddress,
+		api:          newPubSubAPI(clientCtx, logger, stream),
+		logger:       logger,
+		pingInterval: websocketPingInterval,
 	}
 }
 
@@ -132,10 +136,27 @@ func (s *websocketsServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	conn.SetReadLimit(messageSizeLimit)
 
-	s.readLoop(&wsConn{
+	peer := &wsConn{
 		mux:  new(sync.Mutex),
 		conn: conn,
-	})
+	}
+	interval := s.pingInterval
+	if interval <= 0 {
+		interval = websocketPingInterval
+	}
+	ctx, cancel := context.WithCancel(r.Context())
+	heartbeatDone := make(chan struct{})
+	go func() {
+		defer close(heartbeatDone)
+		peer.heartbeat(ctx, interval)
+	}()
+	defer func() {
+		cancel()
+		_ = peer.Close()
+		<-heartbeatDone
+	}()
+
+	s.readLoop(peer)
 }
 
 func (s *websocketsServer) sendErrResponse(wsConn *wsConn, msg string) {
@@ -174,10 +195,32 @@ func (w *wsConn) WriteMessage(messageType int, data []byte) error {
 }
 
 func (w *wsConn) Close() error {
-	w.mux.Lock()
-	defer w.mux.Unlock()
-
+	// Gorilla permits Close concurrently with writes. Do not wait for a stalled
+	// subscription writer before closing the socket and unblocking it.
 	return w.conn.Close()
+}
+
+func (w *wsConn) heartbeat(ctx context.Context, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			// Application traffic already keeps the connection active. Do not let
+			// a heartbeat deadline interrupt a slow archival response.
+			if !w.mux.TryLock() {
+				continue
+			}
+			err := w.conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(websocketControlWriteTimeout))
+			w.mux.Unlock()
+			if err != nil {
+				_ = w.Close()
+				return
+			}
+		}
+	}
 }
 
 func (w *wsConn) ReadMessage() (messageType int, p []byte, err error) {
