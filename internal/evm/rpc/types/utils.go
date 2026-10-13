@@ -272,3 +272,33 @@ func TxExceedBlockGasLimit(res *abci.ExecTxResult) bool {
 func TxSuccessOrExceedsBlockGasLimit(res *abci.ExecTxResult) bool {
 	return res.Code == 0 || TxExceedBlockGasLimit(res)
 }
+
+// MsgExecutionFailedLog is the wrapper cosmos-sdk baseapp puts around errors
+// returned by message handlers, i.e. after the ante handler succeeded.
+const MsgExecutionFailedLog = "failed to execute message"
+
+// TxAnteFailed reports whether a Cosmos tx result failed in the ante handler.
+//
+// The EVM ante handler bumps the sender nonce as its last step, and baseapp
+// discards all ante state when the ante handler fails. Such a tx is part of the
+// Comet block, but it was never executed and never consumed its nonce.
+// Failures after a successful ante handler (VM errors, message handler errors,
+// panics recovered during message execution, block gas limit) were executed.
+//
+// The decisive signal is the result events: for a failed tx, baseapp returns
+// the events emitted by a successful ante handler (the EVM ante handler always
+// emits at least the fee event), and none when the ante handler failed. Panics
+// recovered during message execution carry no "failed to execute message"
+// wrapper, so the log alone is not enough.
+func TxAnteFailed(res *abci.ExecTxResult) bool {
+	if res == nil || res.Code == abci.CodeTypeOK {
+		return false
+	}
+	if len(res.Events) > 0 {
+		return false
+	}
+	if res.Codespace == evmtypes.ModuleName || TxExceedBlockGasLimit(res) {
+		return false
+	}
+	return !strings.Contains(res.Log, MsgExecutionFailedLog)
+}

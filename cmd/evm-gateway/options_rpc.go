@@ -36,4 +36,11 @@ func initRPCOptions(app *cli.Cli, opts *gatewayCLIOptions, defaults config.Confi
 		EnvVar: "WEB3INJ_JSONRPC_API",
 		Value:  strings.Join(defaults.JSONRPC.API, ","),
 	})
+
+	opts.traceTimeoutCap = app.String(cli.StringOpt{
+		Name:   "rpc-trace-timeout-cap",
+		Desc:   "Maximum trace timeout (positive duration; must not exceed the upstream limit).",
+		EnvVar: "WEB3INJ_JSONRPC_TRACE_TIMEOUT_CAP",
+		Value:  defaults.JSONRPC.TraceTimeoutCap.String(),
+	})
 }

@@ -16,6 +16,9 @@ import (
 
 const envPrefix = "WEB3INJ_"
 
+// DefaultTraceTimeoutCap matches the upstream Injective trace timeout limit.
+const DefaultTraceTimeoutCap = 30 * time.Second
+
 // Config is the top-level configuration for evm-gateway.
 type Config struct {
 	Env        string
@@ -52,6 +55,7 @@ type JSONRPCConfig struct {
 	EnableUnsafeCors   bool
 	GasCap             uint64
 	EVMTimeout         time.Duration
+	TraceTimeoutCap    time.Duration
 	TxFeeCap           float64
 	FilterCap          int32
 	FeeHistoryCap      int32
@@ -108,6 +112,7 @@ func DefaultConfig() Config {
 			EnableUnsafeCors:   false,
 			GasCap:             25000000,
 			EVMTimeout:         5 * time.Second,
+			TraceTimeoutCap:    DefaultTraceTimeoutCap,
 			TxFeeCap:           1.0,
 			FilterCap:          200,
 			FeeHistoryCap:      100,
@@ -142,7 +147,9 @@ func Load(envFile string) (Config, error) {
 		_ = loadEnvFileIfExists(".env")
 	}
 
-	applyEnvOverrides(&cfg)
+	if err := applyEnvOverrides(&cfg); err != nil {
+		return cfg, err
+	}
 	cfg.Normalize()
 	if err := cfg.Validate(); err != nil {
 		return cfg, err
@@ -172,6 +179,9 @@ func (c Config) Validate() error {
 	}
 	if c.JSONRPC.HTTPTimeout < 0 || c.JSONRPC.HTTPIdleTimeout < 0 {
 		return errors.New("jsonrpc http timeouts cannot be negative")
+	}
+	if c.JSONRPC.TraceTimeoutCap <= 0 {
+		return errors.New("jsonrpc trace-timeout-cap must be positive")
 	}
 	if c.Shutdown.Timeout <= 0 {
 		return errors.New("shutdown timeout must be positive")
@@ -252,7 +262,7 @@ func loadEnvFile(path string) error {
 	return nil
 }
 
-func applyEnvOverrides(cfg *Config) {
+func applyEnvOverrides(cfg *Config) error {
 	cfg.Env = getEnvString("ENV", cfg.Env)
 	cfg.LogFormat = getEnvString("LOG_FORMAT", cfg.LogFormat)
 	cfg.LogVerbose = getEnvBool("LOG_VERBOSE", cfg.LogVerbose)
@@ -282,6 +292,13 @@ func applyEnvOverrides(cfg *Config) {
 	cfg.JSONRPC.EnableUnsafeCors = getEnvBool("JSONRPC_ENABLE_UNSAFE_CORS", cfg.JSONRPC.EnableUnsafeCors)
 	cfg.JSONRPC.GasCap = uint64(getEnvInt64("JSONRPC_GAS_CAP", int64(cfg.JSONRPC.GasCap)))
 	cfg.JSONRPC.EVMTimeout = getEnvDuration("JSONRPC_EVM_TIMEOUT", cfg.JSONRPC.EVMTimeout)
+	if value := os.Getenv(envPrefix + "JSONRPC_TRACE_TIMEOUT_CAP"); value != "" {
+		parsedCap, err := time.ParseDuration(value)
+		if err != nil {
+			return errors.Wrap(err, "invalid jsonrpc trace-timeout-cap")
+		}
+		cfg.JSONRPC.TraceTimeoutCap = parsedCap
+	}
 	cfg.JSONRPC.TxFeeCap = getEnvFloat("JSONRPC_TXFEE_CAP", cfg.JSONRPC.TxFeeCap)
 	cfg.JSONRPC.FilterCap = int32(getEnvInt("JSONRPC_FILTER_CAP", int(cfg.JSONRPC.FilterCap)))
 	cfg.JSONRPC.FeeHistoryCap = int32(getEnvInt("JSONRPC_FEEHISTORY_CAP", int(cfg.JSONRPC.FeeHistoryCap)))
@@ -299,6 +316,7 @@ func applyEnvOverrides(cfg *Config) {
 	cfg.Tracing.CollectorAuthorizationField = getEnvString("GOTRACER_COLLECTOR_AUTHORIZATION_HEADER", cfg.Tracing.CollectorAuthorizationField)
 	cfg.Tracing.CollectorEnableTLS = getEnvBool("GOTRACER_COLLECTOR_ENABLE_TLS", cfg.Tracing.CollectorEnableTLS)
 	cfg.Tracing.ClusterID = getEnvString("GOTRACER_CLUSTER_ID", cfg.Tracing.ClusterID)
+	return nil
 }
 
 func expandPath(path string) string {
