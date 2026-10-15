@@ -79,7 +79,7 @@ Virtual transaction rules:
 - Finalize block events are split by their `mode` attribute. `mode=BeginBlock` events go into the begin-block virtual transaction. All other tracked finalize events go into the end-block virtual transaction.
 - Begin-block and end-block virtual transaction hashes are deterministic hashes of the phase name and height. They include `virtual: true` but no `cosmos_hash`.
 - Bank-only virtual transactions use empty input, zero gas/value defaults, legacy tx type, and `to = 0x0000000000000000000000000000000000000800`.
-- IBC-hook virtual transactions use `from = 0x0000000000000000000000000000000000000800`, the called contract as `to`, the hook calldata as `input`, and the event's EVM outcome and gas usage in the receipt. Failed calls remain queryable and contain the IBC summary log.
+- IBC-hook virtual transactions use `from = 0x0000000000000000000000000000000000000069` (`evmtypes.IBCHookCallerAddressHex`), the called contract as `to`, the hook calldata as `input`, and the event's EVM outcome and gas usage in the receipt. Failed calls remain queryable and contain the IBC summary log.
 
 Block ordering in virtualized mode is:
 
