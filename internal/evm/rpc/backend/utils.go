@@ -22,7 +22,7 @@ import (
 	"upd.dev/xlab/gotracer"
 
 	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
-	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtualbank"
+	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtual"
 	evmtypes "github.com/InjectiveLabs/sdk-go/chain/evm/types"
 )
 
@@ -236,8 +236,8 @@ func ShouldIgnoreGasUsed(res *abci.ExecTxResult) bool {
 // GetLogsFromBlockResults returns native EVM logs decoded from live Comet block
 // results. It is the non-virtualized live path and does not synthesize Cosmos
 // x/bank events.
-func GetLogsFromBlockResults(blockRes *cmrpctypes.ResultBlockResults) ([][]*virtualbank.RPCLog, error) {
-	blockLogs := [][]*virtualbank.RPCLog{}
+func GetLogsFromBlockResults(blockRes *cmrpctypes.ResultBlockResults) ([][]*virtual.RPCLog, error) {
+	blockLogs := [][]*virtual.RPCLog{}
 	normalizedTxResults, err := types.NormalizeTxResponseIndexes(blockRes.TxResults)
 	if err != nil {
 		return nil, err
@@ -248,7 +248,7 @@ func GetLogsFromBlockResults(blockRes *cmrpctypes.ResultBlockResults) ([][]*virt
 		if err != nil {
 			return nil, err
 		}
-		blockLogs = append(blockLogs, virtualbank.WrapLogs(logs, false, nil))
+		blockLogs = append(blockLogs, virtual.WrapLogs(logs, false, nil))
 	}
 	return blockLogs, nil
 }

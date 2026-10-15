@@ -16,7 +16,7 @@ import (
 
 	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/backend"
 	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
-	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtualbank"
+	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtual"
 	evmtypes "github.com/InjectiveLabs/sdk-go/chain/evm/types"
 )
 
@@ -94,7 +94,7 @@ type EthereumAPI interface {
 	// Other
 	Syncing(ctx context.Context) (interface{}, error)
 	Coinbase(ctx context.Context) (string, error)
-	GetTransactionLogs(ctx context.Context, txHash common.Hash) ([]*virtualbank.RPCLog, error)
+	GetTransactionLogs(ctx context.Context, txHash common.Hash) ([]*virtual.RPCLog, error)
 	FillTransaction(ctx context.Context, args rpctypes.TransactionArgs) (*rpctypes.SignTransactionResult, error)
 	GetPendingTransactions(ctx context.Context) ([]*rpctypes.RPCTransaction, error)
 	// eth_signTransaction (on Ethereum.org)
@@ -421,8 +421,8 @@ func (e *PublicAPI) Coinbase(ctx context.Context) (string, error) {
 
 // GetTransactionLogs returns the receipt logs for a transaction hash. The logs
 // may come from an indexed receipt or a live receipt, and may include
-// virtualized Cosmos x/bank events when that mode is enabled.
-func (e *PublicAPI) GetTransactionLogs(ctx context.Context, txHash common.Hash) ([]*virtualbank.RPCLog, error) {
+// virtualized Cosmos events when that mode is enabled.
+func (e *PublicAPI) GetTransactionLogs(ctx context.Context, txHash common.Hash) ([]*virtual.RPCLog, error) {
 	defer gotracer.Trace(&ctx)()
 	e.logger.Debug("eth_getTransactionLogs", "hash", txHash)
 	receipt, err := e.backend.WithContext(ctx).GetTransactionReceipt(txHash)
@@ -434,10 +434,10 @@ func (e *PublicAPI) GetTransactionLogs(ctx context.Context, txHash common.Hash) 
 		return nil, nil
 	}
 	switch logs := logsRaw.(type) {
-	case []*virtualbank.RPCLog:
+	case []*virtual.RPCLog:
 		return logs, nil
 	case []*ethtypes.Log:
-		return virtualbank.WrapLogs(logs, false, nil), nil
+		return virtual.WrapLogs(logs, false, nil), nil
 	default:
 		return nil, nil
 	}
