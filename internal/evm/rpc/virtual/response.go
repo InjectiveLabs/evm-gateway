@@ -143,18 +143,17 @@ func (r *Response) SyntheticTxs(ctx TxContext) ([]*Tx, error) {
 	}
 
 	// A message index is necessary to derive a stable identity. Do not guess
-	// indexes for ambiguous responses or silently overwrite duplicate hashes.
-	seen := make(map[int]bool, len(hooks))
+	// indexes for ambiguous responses.
+	hooksPerMessage := make(map[int]int, len(hooks))
 	for _, event := range hooks {
 		if event.msgIndex == nil || *event.msgIndex < 0 || *event.msgIndex >= ctx.TotalMessages {
 			return nil, fmt.Errorf("IBC hook calls require valid msg_index attributes")
 		}
-		if seen[*event.msgIndex] {
-			return nil, fmt.Errorf("multiple IBC hook calls for msg_index %d", *event.msgIndex)
-		}
-		seen[*event.msgIndex] = true
+		hooksPerMessage[*event.msgIndex]++
 	}
-	sort.Slice(hooks, func(i, j int) bool { return *hooks[i].msgIndex < *hooks[j].msgIndex })
+	// Nested messages, e.g. several MsgRecvPacket inside one authz MsgExec, share
+	// the outer msg_index. Keep their event order within the message.
+	sort.SliceStable(hooks, func(i, j int) bool { return *hooks[i].msgIndex < *hooks[j].msgIndex })
 	ctx.CumulativeGasUsedBefore += ctx.EthereumGasUsed
 
 	// Allocate the remaining Cosmos gas to the bank envelope. Hook gas and
@@ -182,8 +181,16 @@ func (r *Response) SyntheticTxs(ctx TxContext) ([]*Tx, error) {
 	if len(bankEvents) > 0 {
 		appendTx(r.syntheticTx(ctx, bankEvents, nil, CosmosTxHash(ctx.Tx), bankGasUsed))
 	}
-	for _, event := range hooks {
+	ordinal := 0
+	for i, event := range hooks {
+		if i > 0 && *hooks[i-1].msgIndex != *event.msgIndex {
+			ordinal = 0
+		}
 		hash := IBCHookTxHash(ctx.Tx, *event.msgIndex)
+		if hooksPerMessage[*event.msgIndex] > 1 {
+			hash = NestedIBCHookTxHash(ctx.Tx, *event.msgIndex, ordinal)
+		}
+		ordinal++
 		appendTx(r.syntheticTx(ctx, []entry{event}, event.hook, hash, event.hook.GasUsed))
 	}
 	return txs, nil

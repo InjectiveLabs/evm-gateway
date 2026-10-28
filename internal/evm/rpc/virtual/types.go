@@ -279,6 +279,18 @@ func IBCHookTxHash(tx cmtypes.Tx, msgIndex int) common.Hash {
 	return crypto.Keccak256Hash(OriginalCosmosTxHash(tx).Bytes(), []byte("@"), []byte(strconv.Itoa(msgIndex)))
 }
 
+// NestedIBCHookTxHash identifies one of several IBC hooks of a single Cosmos
+// message, e.g. MsgRecvPackets nested in an authz MsgExec, which share the outer
+// msg_index: keccak256(raw Cosmos hash || "@" || decimal message index || "#" ||
+// decimal position among that message's hooks, in event order).
+func NestedIBCHookTxHash(tx cmtypes.Tx, msgIndex, position int) common.Hash {
+	return crypto.Keccak256Hash(
+		OriginalCosmosTxHash(tx).Bytes(),
+		[]byte("@"), []byte(strconv.Itoa(msgIndex)),
+		[]byte("#"), []byte(strconv.Itoa(position)),
+	)
+}
+
 func BeginBlockHash(height int64) common.Hash { return blockPhaseHash(blockPhaseBegin, height) }
 func EndBlockHash(height int64) common.Hash   { return blockPhaseHash(blockPhaseEnd, height) }
 

@@ -95,22 +95,41 @@ func TestSyntheticTxsMultipleHooksWithoutBankEventsUseMessageOrder(t *testing.T)
 	assertMultiHookMetadata(t, ctx, txs)
 }
 
-func TestSyntheticTxsRejectAmbiguousMultipleHookIdentities(t *testing.T) {
-	for _, tc := range []struct{ name, first, second string }{
-		{"duplicate", "2", "2"},
-		{"out_of_range", "2", "7"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			response, err := ParseResponse(&types.ExecTxResult{Events: []types.Event{
-				multiHookEvent(t, tc.first, true, 70),
-				multiHookEvent(t, tc.second, true, 40),
-			}})
-			require.NoError(t, err)
-			txs, err := response.SyntheticTxs(multiHookContext())
-			require.ErrorContains(t, err, "msg_index")
-			require.Empty(t, txs)
-		})
+func TestSyntheticTxsRejectOutOfRangeHookIdentity(t *testing.T) {
+	response, err := ParseResponse(&types.ExecTxResult{Events: []types.Event{
+		multiHookEvent(t, "2", true, 70),
+		multiHookEvent(t, "7", true, 40),
+	}})
+	require.NoError(t, err)
+	txs, err := response.SyntheticTxs(multiHookContext())
+	require.ErrorContains(t, err, "msg_index")
+	require.Empty(t, txs)
+}
+
+// Several MsgRecvPacket nested in one authz MsgExec share its msg_index. Anyone
+// can relay that way, so this must not make the whole block fail.
+func TestSyntheticTxsSeparateHooksSharingAMessageIndex(t *testing.T) {
+	ctx := multiHookContext()
+	response, err := ParseResponse(&types.ExecTxResult{GasUsed: 500, Events: []types.Event{
+		multiHookEvent(t, "2", true, 70),
+		multiHookEvent(t, "2", false, 40),
+		multiHookEvent(t, "5", true, 30),
+	}})
+	require.NoError(t, err)
+	txs, err := response.SyntheticTxs(ctx)
+	require.NoError(t, err)
+	require.Len(t, txs, 3)
+
+	require.Equal(t, crypto.Keccak256Hash(ctx.Tx.Hash(), []byte("@2#0")), txs[0].Transaction.Hash)
+	require.Equal(t, crypto.Keccak256Hash(ctx.Tx.Hash(), []byte("@2#1")), txs[1].Transaction.Hash)
+	require.Equal(t, NestedIBCHookTxHash(ctx.Tx, 2, 1), txs[1].Transaction.Hash)
+	require.Equal(t, IBCHookTxHash(ctx.Tx, 5), txs[2].Transaction.Hash, "a lone hook keeps the plain hash")
+	require.EqualValues(t, ethtypes.ReceiptStatusSuccessful, txs[0].Receipt.Status)
+	require.EqualValues(t, ethtypes.ReceiptStatusFailed, txs[1].Receipt.Status, "event order is kept")
+	for i, msgIndex := range []uint64{2, 2, 5} {
+		require.EqualValues(t, msgIndex, *txs[i].Transaction.CosmosMsgIndex)
 	}
+	assertMultiHookMetadata(t, ctx, txs)
 }
 
 func TestSyntheticTxsRejectOutOfRangeSingleHook(t *testing.T) {
