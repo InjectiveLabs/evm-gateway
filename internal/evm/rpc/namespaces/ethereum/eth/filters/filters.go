@@ -167,10 +167,11 @@ func (f *Filter) Logs(ctx context.Context, logLimit int, blockLimit int64) ([]*v
 	logs := []*virtual.RPCLog{}
 
 	for height := from; height <= to; height++ {
+		// A partial result would let clients advance past logs they never received.
 		bloom, err := backend.GetBlockBloomByHeight(height)
 		if err != nil {
 			f.logger.Debug("failed to fetch block bloom", "height", height, "error", err.Error())
-			return logs, nil
+			return nil, fmt.Errorf("failed to fetch block bloom at height %d: %w", height, err)
 		}
 		if !bloomFilter(bloom, f.criteria.Addresses, f.criteria.Topics) {
 			continue
@@ -179,7 +180,7 @@ func (f *Filter) Logs(ctx context.Context, logLimit int, blockLimit int64) ([]*v
 		filtered, err := f.blockLogsByHeight(height)
 		if err != nil {
 			f.logger.Debug("failed to fetch block logs", "height", height, "error", err.Error())
-			return logs, nil
+			return nil, fmt.Errorf("failed to fetch block logs at height %d: %w", height, err)
 		}
 
 		// check logs limit
