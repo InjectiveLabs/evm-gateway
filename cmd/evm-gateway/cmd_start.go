@@ -1,8 +1,10 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/InjectiveLabs/sdk-go/chain/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
@@ -63,6 +65,11 @@ func buildConfig(opts *gatewayCLIOptions) (config.Config, error) {
 	cfg.JSONRPC.Address = *opts.rpcAddr
 	cfg.JSONRPC.WsAddress = *opts.wsAddr
 	cfg.JSONRPC.API = parseCSV(*opts.rpcAPI, cfg.JSONRPC.API)
+	traceTimeoutCap, err := time.ParseDuration(*opts.traceTimeoutCap)
+	if err != nil {
+		return cfg, fmt.Errorf("invalid jsonrpc trace-timeout-cap: %w", err)
+	}
+	cfg.JSONRPC.TraceTimeoutCap = traceTimeoutCap
 	cfg.Tracing.Enabled = *opts.tracingEnabled
 	cfg.Tracing.CollectorDSN = *opts.tracingDSN
 	cfg.Tracing.CollectorAuthorization = *opts.tracingCollectorAuthorization
