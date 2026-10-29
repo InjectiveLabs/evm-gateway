@@ -15,7 +15,7 @@ import (
 
 	rpcfilters "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/namespaces/ethereum/eth/filters"
 	rpcstream "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/stream"
-	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtualbank"
+	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtual"
 	"github.com/bytedance/sonic"
 	"github.com/cosmos/cosmos-sdk/client"
 	"github.com/ethereum/go-ethereum/common"
@@ -537,7 +537,7 @@ func (api *pubSubAPI) subscribeLogs(wsConn *wsConn, subID rpc.ID, extra interfac
 
 	ctx, cancel := context.WithCancel(context.Background())
 	//nolint:errcheck // one liner
-	go api.events.LogStream().Subscribe(ctx, func(txLogs []*virtualbank.RPCLog, _ int) error {
+	go api.events.LogStream().Subscribe(ctx, func(txLogs []*virtual.RPCLog, _ int) error {
 		logs := rpcfilters.FilterLogs(txLogs, crit.FromBlock, crit.ToBlock, crit.Addresses, crit.Topics)
 		if len(logs) == 0 {
 			return nil
