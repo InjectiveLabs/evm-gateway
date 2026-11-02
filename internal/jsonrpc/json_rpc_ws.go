@@ -296,7 +296,12 @@ func (s *websocketsServer) readLoop(wsConn *wsConn) {
 			}
 
 			if err := wsConn.WriteJSON(res); err != nil {
-				break
+				// Stop reading: a peer that cannot receive responses must not keep
+				// opening subscriptions from messages already buffered on the socket.
+				// Returning runs the deferred cleanup that cancels all subscriptions.
+				_ = wsConn.Close()
+				s.logger.Debug("failed to write websocket response, closing peer", "error", err.Error())
+				return
 			}
 		case "eth_unsubscribe":
 			params, ok := s.getParamsAndCheckValid(msg.Params, wsConn)
@@ -324,7 +329,12 @@ func (s *websocketsServer) readLoop(wsConn *wsConn) {
 			}
 
 			if err := wsConn.WriteJSON(res); err != nil {
-				break
+				// Stop reading: a peer that cannot receive responses must not keep
+				// opening subscriptions from messages already buffered on the socket.
+				// Returning runs the deferred cleanup that cancels all subscriptions.
+				_ = wsConn.Close()
+				s.logger.Debug("failed to write websocket response, closing peer", "error", err.Error())
+				return
 			}
 		default:
 			// otherwise, call the usual rpc server to respond

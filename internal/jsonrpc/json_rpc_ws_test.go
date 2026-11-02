@@ -300,3 +300,69 @@ func TestWebsocketHeartbeatDoesNotInterruptSlowApplicationWrite(t *testing.T) {
 		t.Fatal("connection was not usable after the slow application write")
 	}
 }
+
+// TestReadLoopStopsAfterResponseWriteFailure covers Immunefi #68091: when a
+// subscription response cannot be written, readLoop must stop instead of
+// processing further pipelined requests from a dead peer.
+func TestReadLoopStopsAfterResponseWriteFailure(t *testing.T) {
+	tests := []struct {
+		name    string
+		request string
+	}{
+		{
+			name:    "eth_subscribe",
+			request: `{"jsonrpc":"2.0","id":1,"method":"eth_subscribe","params":["newHeads"]}`,
+		},
+		{
+			name:    "eth_unsubscribe",
+			request: `{"jsonrpc":"2.0","id":1,"method":"eth_unsubscribe","params":["0x1"]}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+			server := &websocketsServer{
+				api:    newPubSubAPI(client.Context{}, logger, rpcstream.NewRPCStream(nil)),
+				logger: logger,
+			}
+
+			readLoopDone := make(chan struct{})
+			httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+				if err != nil {
+					return
+				}
+				// Fail every server-side write while leaving reads intact, which is
+				// what a peer that stopped receiving looks like to readLoop.
+				if err := conn.SetWriteDeadline(time.Now().Add(-time.Second)); err != nil {
+					t.Errorf("set write deadline: %v", err)
+					return
+				}
+				server.readLoop(&wsConn{conn: conn, mux: new(sync.Mutex)})
+				close(readLoopDone)
+			}))
+			t.Cleanup(httpServer.Close)
+
+			conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(httpServer.URL, "http"), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = conn.Close() })
+
+			// Pipeline several requests and keep the client connection open, so
+			// readLoop can only return by reacting to the failed response write.
+			for range 5 {
+				if err := conn.WriteMessage(websocket.TextMessage, []byte(tt.request)); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			select {
+			case <-readLoopDone:
+			case <-time.After(5 * time.Second):
+				t.Fatal("readLoop kept reading after a failed response write")
+			}
+		})
+	}
+}
