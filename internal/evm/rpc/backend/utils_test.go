@@ -27,8 +27,9 @@ func TestGetLogsFromBlockResultsPatchesShiftedTransactionIndex(t *testing.T) {
 		Height: 42,
 		TxResults: []*abci.ExecTxResult{
 			{
-				Code: 1,
-				Log:  `failed to execute message; message index: 0: {"tx_hash":"0xabc","reason":"reverted"}`,
+				Code:      3,
+				Codespace: evmtypes.ModuleName,
+				Log:       `failed to execute message; message index: 0: {"tx_hash":"0x0000000000000000000000000000000000000000000000000000000000000abc","gas_used":21000,"reason":"reverted","vm_error":"execution reverted"}`,
 			},
 			{
 				Code: 0,
