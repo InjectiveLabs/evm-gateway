@@ -346,10 +346,15 @@ func (b *Backend) GlobalMinGasPrice() (sdkmath.LegacyDec, error) {
 	return res.Params.MinGasPrice, nil
 }
 
-// BaseFee returns the base fee tracked by the txfees module.
+// BaseFee returns the base fee the given block was executed with.
+//
+// The txfees BeginBlocker records that value in a "txfees" event, so the event
+// is the source of truth. The GetEipBaseFee query is only a fallback for blocks
+// without the event: txfees keeps the base fee in memory and ignores the query
+// height, so for blocks within two of the head it returns the live value
+// (already updated by later EndBlockers) instead of the block's own, and it
+// errors for older blocks.
 // If the base fee is not enabled globally, the query returns nil.
-// If the London hard fork is not activated at the current height, the query will
-// return nil.
 func (b *Backend) BaseFee(blockRes *cmtrpctypes.ResultBlockResults) (*big.Int, error) {
 	ctx := b.operationContext()
 	if b.ctx != nil {
@@ -359,21 +364,17 @@ func (b *Backend) BaseFee(blockRes *cmtrpctypes.ResultBlockResults) (*big.Int, e
 	}
 	b = b.WithContext(ctx).(*Backend)
 
-	// return BaseFee if London hard fork is activated and feemarket is enabled
-	res, err := b.queryClient.TxFeesQueryClient.GetEipBaseFee(b.contextWithHeight(blockRes.Height), &txfeestypes.QueryEipBaseFeeRequest{})
-	if err != nil || res.BaseFee == nil {
-		baseFee := rpctypes.BaseFeeFromEvents(blockRes.FinalizeBlockEvents)
-		if baseFee != nil {
-			return baseFee, nil
-		}
-		return nil, err
+	if baseFee := rpctypes.BaseFeeFromEvents(blockRes.FinalizeBlockEvents); baseFee != nil {
+		return baseFee, nil
 	}
 
-	if res.BaseFee == nil {
+	res, err := b.queryClient.TxFeesQueryClient.GetEipBaseFee(b.contextWithHeight(blockRes.Height), &txfeestypes.QueryEipBaseFeeRequest{})
+	if err != nil {
+		return nil, err
+	}
+	if res == nil || res.BaseFee == nil {
 		return nil, nil
 	}
 
-	baseFee := res.BaseFee.BaseFee.RoundInt().BigInt()
-
-	return baseFee, nil
+	return res.BaseFee.BaseFee.RoundInt().BigInt(), nil
 }
