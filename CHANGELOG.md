@@ -42,6 +42,7 @@ Ref: https://keepachangelog.com/en/1.1.0/
 
 ### Security
 
+* (rpc) \#22 Close WebSocket connections when a subscription response cannot be written, instead of continuing to process pipelined `eth_subscribe` requests from the dead peer.
 * (rpc) \#21 Failed non-EVM txs no longer shift `transactionIndex` of later EVM logs in the block. A failed tx now counts as a failed Ethereum tx only when it has the `evm` or `undefined` codespace and its log ends with the EVM VM error JSON.
 
 ## [v1.4.2] - 2026-06-30
