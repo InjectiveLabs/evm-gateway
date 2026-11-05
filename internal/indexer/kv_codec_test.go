@@ -55,6 +55,21 @@ func TestKVCapnpBlockLogsRoundTrip(t *testing.T) {
 	require.Equal(t, cosmosHash, *got[0][0].CosmosHash)
 }
 
+// TestKVCapnpLogWithoutTopicsDecodesEmptyTopics verifies a cached LOG0 log
+// decodes with a non-nil topic list, so it serializes as "topics": [].
+func TestKVCapnpLogWithoutTopicsDecodesEmptyTopics(t *testing.T) {
+	logs := [][]*virtual.RPCLog{{
+		{Address: common.HexToAddress("0x69065dfaba632ace25e6bb4730e3235a04ea6750"), Data: []byte{0x01}},
+	}}
+
+	got, err := unmarshalBlockLogsPayload(mustMarshalBlockLogs(logs))
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Len(t, got[0], 1)
+	require.NotNil(t, got[0][0].Topics)
+	require.Empty(t, got[0][0].Topics)
+}
+
 // TestKVCapnpReceiptRoundTripPreservesOptionalZeroBig verifies optional receipt
 // fields survive Cap'n Proto encoding, including zero-valued fee quantities.
 func TestKVCapnpReceiptRoundTripPreservesOptionalZeroBig(t *testing.T) {
