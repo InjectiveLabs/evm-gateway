@@ -159,7 +159,7 @@ func (l *RPCLog) UnmarshalJSON(input []byte) error {
 	}
 
 	*l = RPCLog(dec)
-	l.Topics = append([]common.Hash(nil), dec.Topics...)
+	l.Topics = CopyTopics(dec.Topics)
 	l.Data = append(hexutil.Bytes(nil), dec.Data...)
 	l.CosmosHash = copyHashPtr(dec.CosmosHash)
 	if dec.CosmosMsgIndex != nil {
@@ -176,7 +176,7 @@ func NewRPCLog(log *ethtypes.Log, isVirtual bool, cosmosHash *common.Hash) *RPCL
 
 	return &RPCLog{
 		Address:     log.Address,
-		Topics:      append([]common.Hash(nil), log.Topics...),
+		Topics:      CopyTopics(log.Topics),
 		Data:        append(hexutil.Bytes(nil), log.Data...),
 		BlockNumber: hexutil.Uint64(log.BlockNumber),
 		TxHash:      log.TxHash,
@@ -209,7 +209,7 @@ func EthLog(log *RPCLog) *ethtypes.Log {
 
 	return &ethtypes.Log{
 		Address:     log.Address,
-		Topics:      append([]common.Hash(nil), log.Topics...),
+		Topics:      CopyTopics(log.Topics),
 		Data:        append([]byte(nil), log.Data...),
 		BlockNumber: uint64(log.BlockNumber),
 		TxHash:      log.TxHash,
@@ -349,4 +349,10 @@ func copyHashPtr(hash *common.Hash) *common.Hash {
 
 	value := *hash
 	return &value
+}
+
+// CopyTopics copies topics into a non-nil slice. A log with no topics (LOG0)
+// must serialize as "topics": [], as in geth; null breaks strict clients.
+func CopyTopics(topics []common.Hash) []common.Hash {
+	return append(make([]common.Hash, 0, len(topics)), topics...)
 }

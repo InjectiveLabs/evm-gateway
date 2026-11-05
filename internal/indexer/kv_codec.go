@@ -832,7 +832,7 @@ func capnpLogListToRPC(src kvcapnp.Log_List) ([]*virtual.RPCLog, error) {
 
 // capnpLogToRPC converts one Cap'n Proto log struct into an RPC log.
 func capnpLogToRPC(src kvcapnp.Log) (*virtual.RPCLog, error) {
-	var out virtual.RPCLog
+	out := virtual.RPCLog{Topics: []common.Hash{}}
 	if src.HasAddress() {
 		bz, err := src.Address()
 		if err != nil {
