@@ -78,10 +78,16 @@ type wsRPCRequest struct {
 	ID     json.RawMessage `json:"id"`
 }
 
+// subscriber opens eth_subscribe subscriptions. pubSubAPI is the production
+// implementation; tests substitute it to observe subscription lifecycles.
+type subscriber interface {
+	subscribe(wsConn *wsConn, subID rpc.ID, params []interface{}) (context.CancelFunc, error)
+}
+
 type websocketsServer struct {
 	rpcAddr      string // listen address of rest-server
 	wsAddr       string // listen address of ws server
-	api          *pubSubAPI
+	api          subscriber
 	logger       *slog.Logger
 	pingInterval time.Duration
 }
@@ -159,7 +165,7 @@ func (s *websocketsServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.readLoop(peer)
 }
 
-func (s *websocketsServer) sendErrResponse(wsConn *wsConn, msg string) {
+func (s *websocketsServer) sendErrResponse(wsConn *wsConn, msg string) error {
 	res := &ErrorResponseJSON{
 		Jsonrpc: "2.0",
 		Error: &ErrorMessageJSON{
@@ -169,7 +175,7 @@ func (s *websocketsServer) sendErrResponse(wsConn *wsConn, msg string) {
 		ID: nil,
 	}
 
-	_ = wsConn.WriteJSON(res)
+	return wsConn.WriteJSON(res)
 }
 
 type wsConn struct {
@@ -251,97 +257,75 @@ func (s *websocketsServer) readLoop(wsConn *wsConn) {
 			return
 		}
 
-		if isBatch(mb) {
-			if err := s.tcpGetAndSendResponse(wsConn, mb); err != nil {
-				s.sendErrResponse(wsConn, err.Error())
-			}
-			continue
+		if err := s.handleMessage(wsConn, mb, subscriptions); err != nil {
+			// The peer cannot receive responses: gorilla/websocket keeps a write
+			// error sticky, so every later response would fail too. Stop reading
+			// so that requests already buffered on the socket are not served
+			// (no new subscriptions, no proxied RPC work) for a dead peer.
+			// Returning runs the deferred cleanup that cancels all subscriptions.
+			_ = wsConn.Close()
+			s.logger.Debug("failed to write websocket response, closing peer", "error", err.Error())
+			return
+		}
+	}
+}
+
+// handleMessage serves a single websocket request. It returns an error only
+// when the response could not be written to the peer; request-level failures
+// are reported to the peer as JSON-RPC errors.
+func (s *websocketsServer) handleMessage(wsConn *wsConn, mb []byte, subscriptions map[rpc.ID]context.CancelFunc) error {
+	if isBatch(mb) {
+		return s.forwardRequest(wsConn, mb)
+	}
+
+	var msg wsRPCRequest
+	if err := sonic.Unmarshal(mb, &msg); err != nil {
+		return s.sendErrResponse(wsConn, err.Error())
+	}
+
+	switch msg.Method {
+	case "eth_subscribe":
+		if err := checkParams(msg.Params); err != nil {
+			return s.sendErrResponse(wsConn, err.Error())
 		}
 
-		var msg wsRPCRequest
-		if err = sonic.Unmarshal(mb, &msg); err != nil {
-			s.sendErrResponse(wsConn, err.Error())
-			continue
+		subID := rpc.NewID()
+		unsubFn, err := s.api.subscribe(wsConn, subID, msg.Params)
+		if err != nil {
+			return s.sendErrResponse(wsConn, err.Error())
+		}
+		subscriptions[subID] = unsubFn
+
+		return wsConn.WriteJSON(&SubscriptionResponseJSON{
+			Jsonrpc: "2.0",
+			ID:      msg.ID,
+			Result:  subID,
+		})
+	case "eth_unsubscribe":
+		if err := checkParams(msg.Params); err != nil {
+			return s.sendErrResponse(wsConn, err.Error())
 		}
 
-		// check if method == eth_subscribe or eth_unsubscribe
-		if msg.Method == "" {
-			// otherwise, call the usual rpc server to respond
-			if err := s.tcpGetAndSendResponse(wsConn, mb); err != nil {
-				s.sendErrResponse(wsConn, err.Error())
-			}
-
-			continue
+		id, ok := msg.Params[0].(string)
+		if !ok {
+			return s.sendErrResponse(wsConn, "invalid parameters")
 		}
 
-		switch msg.Method {
-		case "eth_subscribe":
-			params, ok := s.getParamsAndCheckValid(msg.Params, wsConn)
-			if !ok {
-				continue
-			}
-
-			subID := rpc.NewID()
-			unsubFn, err := s.api.subscribe(wsConn, subID, params)
-			if err != nil {
-				s.sendErrResponse(wsConn, err.Error())
-				continue
-			}
-			subscriptions[subID] = unsubFn
-
-			res := &SubscriptionResponseJSON{
-				Jsonrpc: "2.0",
-				ID:      msg.ID,
-				Result:  subID,
-			}
-
-			if err := wsConn.WriteJSON(res); err != nil {
-				// Stop reading: a peer that cannot receive responses must not keep
-				// opening subscriptions from messages already buffered on the socket.
-				// Returning runs the deferred cleanup that cancels all subscriptions.
-				_ = wsConn.Close()
-				s.logger.Debug("failed to write websocket response, closing peer", "error", err.Error())
-				return
-			}
-		case "eth_unsubscribe":
-			params, ok := s.getParamsAndCheckValid(msg.Params, wsConn)
-			if !ok {
-				continue
-			}
-
-			id, ok := params[0].(string)
-			if !ok {
-				s.sendErrResponse(wsConn, "invalid parameters")
-				continue
-			}
-
-			subID := rpc.ID(id)
-			unsubFn, ok := subscriptions[subID]
-			if ok {
-				delete(subscriptions, subID)
-				unsubFn()
-			}
-
-			res := &SubscriptionResponseJSON{
-				Jsonrpc: "2.0",
-				ID:      msg.ID,
-				Result:  ok,
-			}
-
-			if err := wsConn.WriteJSON(res); err != nil {
-				// Stop reading: a peer that cannot receive responses must not keep
-				// opening subscriptions from messages already buffered on the socket.
-				// Returning runs the deferred cleanup that cancels all subscriptions.
-				_ = wsConn.Close()
-				s.logger.Debug("failed to write websocket response, closing peer", "error", err.Error())
-				return
-			}
-		default:
-			// otherwise, call the usual rpc server to respond
-			if err := s.tcpGetAndSendResponse(wsConn, mb); err != nil {
-				s.sendErrResponse(wsConn, err.Error())
-			}
+		subID := rpc.ID(id)
+		unsubFn, ok := subscriptions[subID]
+		if ok {
+			delete(subscriptions, subID)
+			unsubFn()
 		}
+
+		return wsConn.WriteJSON(&SubscriptionResponseJSON{
+			Jsonrpc: "2.0",
+			ID:      msg.ID,
+			Result:  ok,
+		})
+	default:
+		// any other method (or a request without one) goes to the usual rpc server
+		return s.forwardRequest(wsConn, mb)
 	}
 }
 
@@ -350,47 +334,56 @@ func isExpectedWebsocketClose(err error) bool {
 		errors.Is(err, net.ErrClosed)
 }
 
-// getParamsAndCheckValid sends an error response to the client if params are invalid.
-func (s *websocketsServer) getParamsAndCheckValid(params []interface{}, wsConn *wsConn) ([]interface{}, bool) {
+// checkParams validates the params of eth_subscribe and eth_unsubscribe.
+func checkParams(params []interface{}) error {
 	if params == nil {
-		s.sendErrResponse(wsConn, "invalid parameters")
-		return nil, false
+		return errors.New("invalid parameters")
 	}
 
 	if len(params) == 0 {
-		s.sendErrResponse(wsConn, "empty parameters")
-		return nil, false
+		return errors.New("empty parameters")
 	}
 
-	return params, true
+	return nil
 }
 
-// tcpGetAndSendResponse connects to the rest-server over tcp, posts a JSON-RPC request, and sends the response
-// to the client over websockets
-func (s *websocketsServer) tcpGetAndSendResponse(wsConn *wsConn, mb []byte) error {
+// forwardRequest proxies a request to the rest-server and writes its response
+// to the peer. A failed proxy call is reported to the peer as a JSON-RPC error.
+// The returned error is non-nil only if the peer could not be written to.
+func (s *websocketsServer) forwardRequest(wsConn *wsConn, mb []byte) error {
+	body, err := s.tcpGetResponse(mb)
+	if err != nil {
+		return s.sendErrResponse(wsConn, err.Error())
+	}
+
+	return wsConn.WriteMessage(websocket.TextMessage, body)
+}
+
+// tcpGetResponse connects to the rest-server over tcp, posts a JSON-RPC request, and returns the response body.
+func (s *websocketsServer) tcpGetResponse(mb []byte) ([]byte, error) {
 	ctx := context.Background()
 	defer gotracer.Traceless(&ctx, jsonRPCTraceTag)()
 
 	req, err := http.NewRequestWithContext(ctx, "POST", "http://"+s.rpcAddr, bytes.NewBuffer(mb))
 	if err != nil {
-		return errors.Wrap(err, "Could not build request")
+		return nil, errors.Wrap(err, "Could not build request")
 	}
 
 	req.Header.Set("Content-Type", "application/json")
 	httpClient := &http.Client{}
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return errors.Wrap(err, "Could not perform request")
+		return nil, errors.Wrap(err, "Could not perform request")
 	}
 
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return errors.Wrap(err, "could not read body from response")
+		return nil, errors.Wrap(err, "could not read body from response")
 	}
 
-	return wsConn.WriteMessage(websocket.TextMessage, body)
+	return body, nil
 }
 
 // pubSubAPI is the eth_ prefixed set of APIs in the Web3 JSON-RPC spec
