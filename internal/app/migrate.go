@@ -174,6 +174,12 @@ func runMigrateAnteFailed(cfg config.Config, logger *slog.Logger, opts MigrateAn
 		logger.Info("phase 3/3: nothing to resync")
 	}
 
+	if opts.From > 0 || opts.To > 0 {
+		// A bounded run repairs part of the history only: the migration is
+		// not complete, so a later unbounded run must still do its work.
+		logger.Info("bounded run: completion marker not written", "from", opts.From, "to", opts.To)
+		return finishMigrationReport(report, opts.ReportPath, logger)
+	}
 	if err := txindexer.SaveMigrationMarker(idxDB, txindexer.MigrationMarker{
 		Name:          txindexer.AnteFailedTxsMigration,
 		CompletedAt:   time.Now().UTC(),

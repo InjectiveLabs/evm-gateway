@@ -661,3 +661,25 @@ func TestOpenMigrationNodeUnreachableComet(t *testing.T) {
 		t.Fatalf("expected unreachable comet error")
 	}
 }
+
+func TestMigrateAnteFailedBoundedRunDoesNotComplete(t *testing.T) {
+	cfg := migrateTestConfig(t)
+	seedLegacyState(t, cfg)
+
+	bounded := MigrateAnteFailedOptions{From: mainnetfx.HeightEx2Failed, To: mainnetfx.HeightEx2Included}
+	if err := runMigrateAnteFailed(cfg, migrateTestLogger(), bounded, newFakeNode(t).deps()); err != nil {
+		t.Fatalf("bounded run: %v", err)
+	}
+	if marker := loadMarker(t, cfg); marker != nil {
+		t.Fatalf("bounded run wrote the completion marker: %+v", marker)
+	}
+
+	// The unbounded run still repairs the rest of the history and completes.
+	if err := runMigrateAnteFailed(cfg, migrateTestLogger(), MigrateAnteFailedOptions{}, newFakeNode(t).deps()); err != nil {
+		t.Fatalf("unbounded run: %v", err)
+	}
+	marker := loadMarker(t, cfg)
+	if marker == nil || marker.ResyncedCount == 0 {
+		t.Fatalf("unbounded run after a bounded one: marker %+v", marker)
+	}
+}

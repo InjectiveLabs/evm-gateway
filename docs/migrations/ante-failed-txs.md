@@ -37,7 +37,7 @@ On the mainnet production snapshot of 2026-11-20 (indexed up to `192563293`), 4 
 - Hash-keyed records owned by another height are never deleted by a reset.
 - The completion marker (`KeyPrefixMigration` = `12`, key `ante-failed-txs-v1`) makes a rerun a no-op. `--force` runs it again.
 - `--scan-only` and `--dry-run` never write and ignore the marker.
-- `--from` / `--to` bound the scan; `--report FILE` writes a JSON report of every phase.
+- `--from` / `--to` bound the scan. A bounded run repairs its range but does not write the completion marker, so a later unbounded run still covers the rest. `--report FILE` writes a JSON report of every phase.
 
 ## Requirements
 
