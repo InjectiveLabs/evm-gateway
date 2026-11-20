@@ -20,8 +20,56 @@ var failedEthereumTxLogRegex = regexp.MustCompile(`failed to execute message; me
 
 // NormalizeTxResponseIndexes returns cloned tx results with EVM response log
 // indexes normalized to account for failed Ethereum txs that still consume block
-// tx slots.
+// tx slots. Without the block txs, the number of Ethereum txs of a failed tx is
+// inferred from its log; prefer NormalizeBlockTxResponseIndexes.
 func NormalizeTxResponseIndexes(input []*abci.ExecTxResult) ([]*abci.ExecTxResult, error) {
+	return normalizeTxResponseIndexes(input, nil)
+}
+
+// NormalizeBlockTxResponseIndexes is NormalizeTxResponseIndexes with the block
+// txs: a failed tx consumes one slot per MsgEthereumTx it carries unless it
+// failed in the ante handler, exactly the txs the gateway exposes. This also
+// covers failed txs whose log names only the failed message (the others of a
+// multi-message tx failed with it) or carries no VM error. Txs that can't be
+// decoded fall back to the log inference.
+func NormalizeBlockTxResponseIndexes(decoder sdk.TxDecoder, txs [][]byte, input []*abci.ExecTxResult) ([]*abci.ExecTxResult, error) {
+	if decoder == nil {
+		return NormalizeTxResponseIndexes(input)
+	}
+	counts := make([]int, len(input))
+	for i, res := range input {
+		counts[i] = -1
+		if res == nil || res.Code == abci.CodeTypeOK || i >= len(txs) {
+			continue
+		}
+		tx, err := decoder(txs[i])
+		if err != nil {
+			continue
+		}
+		counts[i] = FailedEthereumTxCount(tx, res)
+	}
+	return normalizeTxResponseIndexes(input, counts)
+}
+
+// FailedEthereumTxCount returns the number of Ethereum txs exposed for a failed
+// Cosmos tx: none if it failed in the ante handler (no nonce consumed), else
+// one per MsgEthereumTx.
+func FailedEthereumTxCount(tx sdk.Tx, res *abci.ExecTxResult) int {
+	if tx == nil || TxAnteFailed(res) {
+		return 0
+	}
+	count := 0
+	for _, msg := range tx.GetMsgs() {
+		if _, ok := msg.(*evmtypes.MsgEthereumTx); ok {
+			count++
+		}
+	}
+	return count
+}
+
+// normalizeTxResponseIndexes normalizes the indexes. failedEthTxCounts holds,
+// per tx result, the number of Ethereum txs of a failed tx, or -1 when unknown.
+func normalizeTxResponseIndexes(input []*abci.ExecTxResult, failedEthTxCounts []int) ([]*abci.ExecTxResult, error) {
 	if len(input) == 0 {
 		return nil, nil
 	}
@@ -41,20 +89,27 @@ func NormalizeTxResponseIndexes(input []*abci.ExecTxResult) ([]*abci.ExecTxResul
 		logIndex uint64
 	)
 
-	for _, res := range normalized {
+	for i, res := range normalized {
 		if res == nil {
 			continue
 		}
 
-		ethTxCount := countEthereumTxEvents(res.Events)
-		inferredEthTxCount := inferFailedEthereumTxCount(res.Codespace, res.Log)
-		if inferredEthTxCount > ethTxCount {
-			ethTxCount = inferredEthTxCount
-		}
-
 		if res.Code != abci.CodeTypeOK {
+			if i < len(failedEthTxCounts) && failedEthTxCounts[i] >= 0 {
+				txIndex += uint64(failedEthTxCounts[i])
+				continue
+			}
+			ethTxCount := countEthereumTxEvents(res.Events)
+			if inferred := inferFailedEthereumTxCount(res.Codespace, res.Log); inferred > ethTxCount {
+				ethTxCount = inferred
+			}
 			txIndex += uint64(ethTxCount)
 			continue
+		}
+
+		ethTxCount := countEthereumTxEvents(res.Events)
+		if inferred := inferFailedEthereumTxCount(res.Codespace, res.Log); inferred > ethTxCount {
+			ethTxCount = inferred
 		}
 
 		if len(res.Data) == 0 {

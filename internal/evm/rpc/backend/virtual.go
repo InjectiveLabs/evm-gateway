@@ -124,7 +124,7 @@ func (b *Backend) liveVirtualBlockView(
 		b.logger.Debug("failed to query base fee for virtualized live block", "height", block.Height, "error", err.Error())
 	}
 
-	normalizedTxResults, err := rpctypes.NormalizeTxResponseIndexes(blockRes.TxResults)
+	normalizedTxResults, err := rpctypes.NormalizeBlockTxResponseIndexes(b.clientCtx.TxConfig.TxDecoder(), block.Txs.ToSliceOfBytes(), blockRes.TxResults)
 	if err != nil {
 		return nil, err
 	}
@@ -212,10 +212,13 @@ func (b *Backend) liveVirtualBlockView(
 			b.logger.Warn("failed to parse tx result", "height", block.Height, "txIndex", txIndex, "error", parsedErr.Error())
 		}
 
+		// a tx that failed in the ante handler is not an Ethereum-visible inclusion
+		anteFailed := rpctypes.TxAnteFailed(txResult)
+
 		var cumulativeTxEthGasUsed uint64
 		for msgIndex, msg := range msgs {
 			ethMsg, ok := msg.(*evmtypes.MsgEthereumTx)
-			if !ok {
+			if !ok || anteFailed {
 				continue
 			}
 

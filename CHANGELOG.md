@@ -38,7 +38,22 @@ Ref: https://keepachangelog.com/en/1.1.0/
 
 ### Bug Fixes
 
-* (debug) `debug_traceTransaction` and `debug_traceBlockBy*` no longer fail for Ethereum txs whose Cosmos tx failed in the ante handler (e.g. insufficient funds for the transferred value). Such txs were never executed; replaying them returned `insufficient balance for transfer` as a JSON-RPC error. They now get a trace that matches their failed receipt: a `callTracer` top-level frame with `gasUsed` equal to the gas limit and the ante error, or a failed struct log without steps. Other tracers keep the node error.
+* (indexer) \#16 Ethereum txs whose Cosmos tx failed in the ante handler (nonce not consumed, e.g. insufficient funds) are no longer exposed. The same signed tx can be included again later, which made `eth_getTransactionReceipt`, `eth_getBlockReceipts` and `eth_getTransactionByHash` disagree on its block.
+* (indexer) \#16 Re-indexing a block no longer deletes the hash-keyed records of a tx owned by another height; a stale owner is reassigned to the block being indexed.
+* (rpc) \#16 In-memory receipt and block-log caches are invalidated whenever indexed data is rewritten, so re-indexed receipts are never served stale.
+* (rpc) \#16 Live (cache-miss) block, receipt and tx paths skip ante-failed Ethereum txs.
+* (debug) \#16 `debug_traceTransaction` resolves cached block traces by tx hash; it returned another tx's frame or `{"type":0}` when virtual txs preceded the tx.
+* (debug) \#16 Block and tx traces no longer replay ante-failed txs; block traces drop entries of non-visible txs and report an error entry instead of a fake frame for visible txs missing from the trace. This replaces the unreleased synthetic trace for ante-failed txs (`insufficient balance for transfer`, mainnet 185556799): such a tx is not an Ethereum tx, so `debug_traceTransaction` reports it as not found and block traces omit it.
+* (indexer) \#16 Cosmos txs with several `MsgEthereumTx` that fail during execution are indexed. The error log names only the failed message, so the indexer rejected the block (`msg index not found in results`) and the syncer skipped it: `eth_getBlockReceipts` listed the txs from the live path, while `eth_getTransactionByHash` and `eth_getTransactionReceipt` returned `null` (mainnet 185519530). Every message of such a tx consumed its nonce and is now a failed tx; the failed message reports the gas used from the log, the others their gas limit. Previously skipped blocks are gaps and are re-indexed by the startup gap sync.
+* (rpc) \#16 When a later message of a multi-message Cosmos tx failed, the parsed result of message 0 took the failed message's hash.
+* (rpc) \#16 Log `transactionIndex` counts every Ethereum tx of a failed Cosmos tx that the gateway exposes, decoded from the block txs, instead of inferring the count from the error log. Logs after a failed multi-message tx had a `transactionIndex` lower than their receipt's.
+* (indexer) \#16 Block sync stops handling fetched blocks as soon as its context is canceled. A block already fetched could still be indexed and published as a new tip after shutdown began, and a cancellation that closed the block stream was logged as `forward sync stopped` instead of returned.
+* (cli) \#16 `--env-file` is now applied: the file is loaded before options take their defaults from the environment. Previously only `.env` in the working directory was read. An explicit file that does not exist is an error.
+
+### Features
+
+* (docs) \#16 `docs/gas-used-semantics.md` documents how `gasUsed`, `cumulativeGasUsed` and `effectiveGasPrice` relate to the fees Injective charges; gas reporting is unchanged.
+* (cli) \#16 Added `migrate ante-failed-txs` to repair existing indexes: offline scan of local state, verification of candidate heights against block results, and resync of affected heights only. See `docs/migrations/ante-failed-txs.md`.
 
 ### Security
 

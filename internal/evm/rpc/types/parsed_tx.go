@@ -72,6 +72,9 @@ func ParseTxResult(result *abci.ExecTxResult, tx sdk.Tx) (*ParsedTxs, error) {
 		if err := p.parseFromLog(result, tx); err != nil {
 			return nil, err
 		}
+		if tx != nil {
+			p.alignFailedMsgs(tx)
+		}
 
 		return p, nil
 	}
@@ -184,6 +187,55 @@ func (p *ParsedTxs) parseFromLog(result *abci.ExecTxResult, tx sdk.Tx) error {
 	p.Txs = append(p.Txs, parsedTx)
 	p.TxHashes[txHash] = msgIndex
 	return nil
+}
+
+// alignFailedMsgs rebuilds the parsed txs of a Cosmos tx that failed during
+// message execution so that there is exactly one entry per message, at its
+// message index.
+//
+// Baseapp reports only the message that failed ("message index: N"); the
+// events of all messages are discarded. The ante handler succeeded, so every
+// MsgEthereumTx of the Cosmos tx consumed its nonce and was charged its gas
+// limit, and all of them are failed Ethereum txs:
+//   - the failed message keeps the hash, gas used and error from the log;
+//   - messages before it executed, but their state was reverted;
+//   - messages after it never executed.
+//
+// The other messages report their gas limit as gas used, the gas the ante
+// handler charged for them (see docs/gas-used-semantics.md). Non-Ethereum
+// messages keep a placeholder entry with a zero hash.
+func (p *ParsedTxs) alignFailedMsgs(tx sdk.Tx) {
+	msgs := tx.GetMsgs()
+	byMsgIndex := make(map[int]ParsedTx, len(p.Txs))
+	for _, parsed := range p.Txs {
+		if _, ok := byMsgIndex[parsed.MsgIndex]; !ok {
+			byMsgIndex[parsed.MsgIndex] = parsed
+		}
+	}
+
+	aligned := make([]ParsedTx, len(msgs))
+	hashes := make(map[common.Hash]int, len(msgs))
+	for msgIndex, msg := range msgs {
+		ethMsg, ok := msg.(*evmtypes.MsgEthereumTx)
+		if !ok {
+			aligned[msgIndex] = ParsedTx{MsgIndex: msgIndex, EthTxIndex: EthTxIndexUnitialized, Failed: true}
+			continue
+		}
+		parsed, ok := byMsgIndex[msgIndex]
+		if !ok {
+			parsed = ParsedTx{
+				MsgIndex:   msgIndex,
+				Hash:       ethMsg.Hash(),
+				EthTxIndex: EthTxIndexUnitialized,
+				GasUsed:    ethMsg.GetGas(),
+			}
+		}
+		parsed.Failed = true
+		aligned[msgIndex] = parsed
+		hashes[parsed.Hash] = msgIndex
+	}
+	p.Txs = aligned
+	p.TxHashes = hashes
 }
 
 func failedTxFromTextLog(tx sdk.Tx, result *abci.ExecTxResult, msgIndex int, vmError string) (ParsedTx, error) {

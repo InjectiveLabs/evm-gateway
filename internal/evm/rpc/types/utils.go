@@ -281,9 +281,11 @@ const MsgExecutionFailedLog = "failed to execute message"
 //
 // The EVM ante handler bumps the sender nonce as its last step, and baseapp
 // discards all ante state when the ante handler fails. Such a tx is part of the
-// Comet block, but it was never executed and never consumed its nonce.
-// Failures after a successful ante handler (VM errors, message handler errors,
-// panics recovered during message execution, block gas limit) were executed.
+// Comet block, but it never consumed its nonce, so the same signed Ethereum tx
+// may be included again in a later block. It must not be exposed as an
+// Ethereum transaction. Failures after a successful ante handler (VM errors,
+// message handler errors, panics recovered during message execution, block gas
+// limit) consumed the nonce and stay visible.
 //
 // The decisive signal is the result events: for a failed tx, baseapp returns
 // the events emitted by a successful ante handler (the EVM ante handler always

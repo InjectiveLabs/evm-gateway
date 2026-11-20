@@ -1,6 +1,10 @@
 package config
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestDefaultConfigEnablesParallelTipAndGapSync(t *testing.T) {
 	cfg := DefaultConfig()
@@ -89,5 +93,26 @@ func TestValidateRejectsInvalidEVMChainID(t *testing.T) {
 
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("expected invalid evm-chain-id validation error")
+	}
+}
+
+func TestLoadEnvFile(t *testing.T) {
+	t.Setenv("WEB3INJ_CHAIN_ID", "")
+	path := filepath.Join(t.TempDir(), "x.env")
+	if err := os.WriteFile(path, []byte("WEB3INJ_CHAIN_ID=injective-1\n"), 0o600); err != nil {
+		t.Fatalf("write env file: %v", err)
+	}
+	if err := LoadEnvFile(path); err != nil {
+		t.Fatalf("LoadEnvFile: %v", err)
+	}
+	if got := os.Getenv("WEB3INJ_CHAIN_ID"); got != "injective-1" {
+		t.Fatalf("unexpected chain id: %q", got)
+	}
+	if err := LoadEnvFile(filepath.Join(t.TempDir(), "missing.env")); err == nil {
+		t.Fatalf("expected error for missing explicit env file")
+	}
+	t.Chdir(t.TempDir())
+	if err := LoadEnvFile(""); err != nil {
+		t.Fatalf("missing default .env must be ignored: %v", err)
 	}
 }

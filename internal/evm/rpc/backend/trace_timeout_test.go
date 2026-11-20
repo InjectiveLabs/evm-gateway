@@ -269,3 +269,16 @@ func (i *timeoutTraceIndexer) GetTraceTransaction(hash common.Hash, config *rpct
 	i.txReads = append(i.txReads, config.Timeout)
 	return i.TxIndexer.GetTraceTransaction(hash, config)
 }
+
+func marshalMap(t *testing.T, v interface{}) map[string]interface{} {
+	t.Helper()
+	bz, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var out map[string]interface{}
+	if err := json.Unmarshal(bz, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	return out
+}

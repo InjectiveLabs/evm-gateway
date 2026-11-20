@@ -81,11 +81,12 @@ func (b *Backend) GetFilteredLogs(
 	b = b.WithContext(ctx).(*Backend)
 
 	if b.indexer != nil {
+		epoch := b.indexerCacheEpoch()
 		meta, metaErr := b.indexer.GetBlockMetaByHash(hash)
 		if metaErr == nil && meta != nil && b.cachedMetaMatchesVirtualization(meta) {
 			if filtered, ok := b.indexer.(filteredLogIndexer); ok {
 				if broadLogFilter(addresses, topics) {
-					if logs, ok := b.materialized.getBlockLogs(meta.Height); ok {
+					if logs, ok := b.materialized.getBlockLogs(meta.Height, epoch); ok {
 						if b.syncStatus != nil {
 							b.syncStatus.RecordBlockLogsCacheHit()
 						}
@@ -95,7 +96,7 @@ func (b *Backend) GetFilteredLogs(
 				logs, err := filtered.GetFilteredLogsByBlockHash(hash, addresses, topics)
 				if err == nil {
 					if broadLogFilter(addresses, topics) {
-						b.materialized.addBlockLogs(meta.Height, logs)
+						b.materialized.addBlockLogs(meta.Height, logs, epoch)
 					}
 					if b.syncStatus != nil {
 						b.syncStatus.RecordBlockLogsCacheHit()
@@ -183,7 +184,12 @@ func (b *Backend) GetLogsByHeight(height *int64) ([][]*virtual.RPCLog, error) {
 		return view.Logs, nil
 	}
 
-	return GetLogsFromBlockResults(blockRes)
+	resBlock, err := b.TendermintBlockByNumber(rpctypes.BlockNumber(*height))
+	if err != nil || resBlock == nil || resBlock.Block == nil || b.clientCtx.TxConfig == nil {
+		b.logger.Debug("block unavailable for live logs; inferring tx indexes from results", "height", *height)
+		return GetLogsFromBlockResults(blockRes)
+	}
+	return GetLogsFromBlock(b.clientCtx.TxConfig.TxDecoder(), resBlock.Block.Txs.ToSliceOfBytes(), blockRes)
 }
 
 // GetFilteredLogsByHeight returns filtered logs for a block height using
@@ -202,11 +208,12 @@ func (b *Backend) GetFilteredLogsByHeight(
 	b = b.WithContext(ctx).(*Backend)
 
 	if b.indexer != nil {
+		epoch := b.indexerCacheEpoch()
 		meta, metaErr := b.indexer.GetBlockMetaByHeight(height)
 		if metaErr == nil && meta != nil && b.cachedMetaMatchesVirtualization(meta) {
 			if filtered, ok := b.indexer.(filteredLogIndexer); ok {
 				if broadLogFilter(addresses, topics) {
-					if logs, ok := b.materialized.getBlockLogs(height); ok {
+					if logs, ok := b.materialized.getBlockLogs(height, epoch); ok {
 						if b.syncStatus != nil {
 							b.syncStatus.RecordBlockLogsCacheHit()
 						}
@@ -216,7 +223,7 @@ func (b *Backend) GetFilteredLogsByHeight(
 				logs, err := filtered.GetFilteredLogsByBlockHeight(height, addresses, topics)
 				if err == nil {
 					if broadLogFilter(addresses, topics) {
-						b.materialized.addBlockLogs(height, logs)
+						b.materialized.addBlockLogs(height, logs, epoch)
 					}
 					if b.syncStatus != nil {
 						b.syncStatus.RecordBlockLogsCacheHit()

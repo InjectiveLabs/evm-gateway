@@ -86,6 +86,18 @@ Use `resync` to rewrite specific blocks or contiguous ranges in the local KV sto
 
 The command normalizes overlapping targets, deletes the cached data for those heights, re-fetches the blocks from the configured chain endpoints, and exits after the requested ranges are rebuilt.
 
+## Migrations
+
+One-off repairs of the local KV store run as `migrate` subcommands while the service is stopped (the KV store takes an exclusive lock):
+
+```bash
+./evm-gateway migrate ante-failed-txs --scan-only --report scan.json   # offline, read-only
+./evm-gateway migrate ante-failed-txs --dry-run --report plan.json     # verifies candidates, read-only
+./evm-gateway migrate ante-failed-txs --report apply.json              # repairs affected heights
+```
+
+Migrations are optional and never run automatically. Each records a completion marker; rerunning it is a no-op unless `--force` is passed. `--from`/`--to` bound the scanned heights; a bounded run does not write the marker. See [`docs/migrations`](migrations/) for the runbook of each migration, including whether you need it.
+
 ## Sync Status
 
 When JSON-RPC is enabled, the gateway exposes:
