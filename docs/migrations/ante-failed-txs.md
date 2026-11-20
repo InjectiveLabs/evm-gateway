@@ -10,6 +10,7 @@ Repairs indexes written by gateway versions up to and including `v1.4.4`, which 
 |---|---|---|
 | New blocks | Correct right away. | Nothing. |
 | Blocks skipped by older versions ([below](#blocks-skipped-by-older-versions), e.g. 185519530) | Re-indexed by the startup gap sync, in seconds. | A Comet RPC that still serves those heights (archival on mainnet). On a pruned node they stay gaps, with no error and no startup delay. |
+| Log `transactionIndex` lower than the receipt's in 3 mainnet heights ([below](#optional-log-transactionindex-fix-3-mainnet-heights)) | Stays as it is. | A one-line `resync` against an archival node. |
 | Ante-failed txs in old blocks; tx hashes indexed in two blocks | Stay as they are: a few dozen txs in about 25–30 mainnet heights keep a failed receipt, and 9 re-included hashes can keep a receipt from the wrong block. | **This migration**, which needs an archival node. |
 
 Operators who want the old data repaired have two options:
@@ -49,6 +50,16 @@ Older versions also **rejected** some blocks and skipped them (`skipping block w
 A skipped block has no block meta, so it is a gap. The new release re-indexes it during the **startup gap sync**; no migration step is needed. The Comet RPC must serve `block` + `block_results` at those heights for that first start (an archival node, or a targeted `resync` of the gap heights against one). `/status/sync` lists the remaining gaps.
 
 On the mainnet production snapshot of 2026-11-20 (indexed up to `192563293`), 4 single-block gaps existed above `127250000`. The startup gap sync of this release filled 3 of them, including `185519530`. The fourth, `186584820`, fails for an unrelated reason: tx #7 (`permissions.MsgCreateNamespace`) uses `Namespace` field 9, which the pinned `sdk-go v1.64.0-ibc.evm.*` does not know, so the block (and its Ethereum tx #6) stays unindexed until sdk-go is updated.
+
+## Optional: log `transactionIndex` fix (3 mainnet heights)
+
+Older versions counted a failed Ethereum tx in log `transactionIndex` only when its error log carried the EVM VM error JSON. After a post-ante failure without that JSON (a recovered panic, an `erc20` gas limit error), the logs of later txs in the block were stored with a `transactionIndex` one lower than their receipt's. This affects non-virtualized indexes only (`WEB3INJ_VIRTUALIZE_COSMOS_EVENTS=false`). The ante-failed migration does not cover it.
+
+A scan of all 8.4M receipts of the mainnet production snapshot (2026-11-20) found 3 affected receipts, one per height. Resyncing those heights fixes them (archival node, seconds):
+
+```bash
+evm-gateway resync 151951156 154990103 185515899
+```
 
 ## What the migration does
 
