@@ -17,6 +17,14 @@ From this release on, ante-failed txs are not indexed. A failure counts as an an
 
 The migration fixes **history**. Blocks indexed by the new version are correct without it.
 
+## Blocks skipped by older versions
+
+Older versions also **rejected** some blocks and skipped them (`skipping block with parsing errors`): Cosmos txs with several `MsgEthereumTx` that failed during execution, whose error log names only the failed message (see [`docs/gas-used-semantics.md`](../gas-used-semantics.md#multi-message-cosmos-txs-that-fail-during-execution)). `eth_getBlockReceipts` served such blocks from the live path, while `eth_getTransactionByHash` and `eth_getTransactionReceipt` returned `null` for every Ethereum tx of the block.
+
+A skipped block has no block meta, so it is a gap. The new release re-indexes it during the **startup gap sync**; no migration step is needed. The Comet RPC must serve `block` + `block_results` at those heights for that first start (an archival node, or a targeted `resync` of the gap heights against one). `/status/sync` lists the remaining gaps.
+
+On the mainnet production snapshot of 2026-11-20 (indexed up to `192563293`), 4 single-block gaps existed above `127250000`. The startup gap sync of this release filled 3 of them, including `185519530`. The fourth, `186584820`, fails for an unrelated reason: tx #7 (`permissions.MsgCreateNamespace`) uses `Namespace` field 9, which the pinned `sdk-go v1.64.0-ibc.evm.*` does not know, so the block (and its Ethereum tx #6) stays unindexed until sdk-go is updated.
+
 ## What the migration does
 
 | Phase | Network | Writes | Description |
