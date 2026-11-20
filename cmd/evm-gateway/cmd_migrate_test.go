@@ -28,6 +28,7 @@ func migrateTestCLIOptions(t *testing.T) *gatewayCLIOptions {
 		rpcAddr:                           stringPtr("127.0.0.1:0"),
 		wsAddr:                            stringPtr("127.0.0.1:0"),
 		rpcAPI:                            stringPtr("eth"),
+		traceTimeoutCap:                   stringPtr("30s"),
 		tracingEnabled:                    boolPtr(false),
 		tracingDSN:                        stringPtr(""),
 		tracingCollectorAuthorization:     stringPtr(""),
