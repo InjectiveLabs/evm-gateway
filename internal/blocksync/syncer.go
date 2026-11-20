@@ -95,6 +95,12 @@ func (s *Syncer) SyncRange(ctx context.Context, start, end int64, handler Handle
 		case <-ctx.Done():
 			return ctx.Err()
 		case nextBlock, ok := <-newBlocks:
+			// select picks randomly among ready cases: a fetched block must not
+			// be handled once the context is canceled, and a stream closed by
+			// the cancellation is a cancellation.
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			if !ok {
 				return errors.New("block stream closed")
 			}
@@ -130,6 +136,12 @@ func (s *Syncer) SyncForward(ctx context.Context, start int64, handler Handler) 
 		case <-ctx.Done():
 			return ctx.Err()
 		case nextBlock, ok := <-newBlocks:
+			// select picks randomly among ready cases: a fetched block must not
+			// be handled once the context is canceled, and a stream closed by
+			// the cancellation is a cancellation.
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			if !ok {
 				return errors.New("block stream closed")
 			}

@@ -100,6 +100,10 @@ func (s *Syncer) SyncHeights(ctx context.Context, heights []int64, handler Handl
 				if ready.err != nil {
 					return fmt.Errorf("fetch block %d: %w", sorted[next], ready.err)
 				}
+				// do not handle fetched blocks once the context is canceled
+				if err := ctx.Err(); err != nil {
+					return err
+				}
 				if !ready.data.Skipped {
 					if err := handler(ready.data); err != nil {
 						return err
