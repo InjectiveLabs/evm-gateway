@@ -2,6 +2,31 @@
 
 Repairs indexes written by gateway versions up to and including `v1.4.4`, which exposed Ethereum txs whose Cosmos tx failed in the ante handler.
 
+## Do I need to run this?
+
+**No. The migration is optional and never runs automatically.** Upgrading is enough for everything indexed from then on.
+
+| What | Without the migration | Needs |
+|---|---|---|
+| New blocks | Correct right away. | Nothing. |
+| Blocks skipped by older versions ([below](#blocks-skipped-by-older-versions), e.g. 185519530) | Re-indexed by the startup gap sync, in seconds. | A Comet RPC that still serves those heights (archival on mainnet). On a pruned node they stay gaps, with no error and no startup delay. |
+| Ante-failed txs in old blocks; tx hashes indexed in two blocks | Stay as they are: a few dozen txs in about 25–30 mainnet heights keep a failed receipt, and 9 re-included hashes can keep a receipt from the wrong block. | **This migration**, which needs an archival node. |
+
+Operators who want the old data repaired have two options:
+
+1. **Snapshot swap (recommended, no archival node).** Download the official `evm-gateway` snapshot published after this release. It is migrated once upstream (steps below). Then start the new release on it: the gap sync indexes the blocks produced since the snapshot.
+2. **Migrate in place.** Run the steps below against an archival node. Measured on mainnet (8.4M indexed txs):
+
+| Phase | Network | Duration |
+|---|---|---|
+| Scan (`--scan-only`) | none | ~3.5 min |
+| Verify | `block_results` of ~44k candidate heights, archival | ~45 min at `WEB3INJ_FETCH_JOBS=32` with a direct connection; hours over a slow link |
+| Repair | `block` + `block_results` of ~25–30 heights | seconds |
+
+The service must be stopped while the migration writes (exclusive DB lock), or the migration runs on a copy that is swapped in afterwards.
+
+Skipping the migration is safe: the gateway runs normally on an unmigrated index, and live (cache-miss) paths already hide ante-failed txs.
+
 ## Background
 
 CometBFT includes a tx in a block before executing it. When an Ethereum tx fails in the EVM ante handler (e.g. `insufficient funds`, `code=5 codespace=sdk`, `gas_used=0`), all ante state is discarded, **including the nonce bump** (the last ante step in injective-core `v1.20.4`). The same signed tx stays valid and can be included again in a later block, where it executes.
@@ -115,6 +140,8 @@ docker compose run --rm -e WEB3INJ_COMET_RPC=http://archival-node:26657 \
 1. Run `migrate ante-failed-txs --report apply.json` with the new binary on the snapshot from step 1.
 2. Stop the service, move the migrated snapshot into place as the data dir, and keep the old dir as the backup.
 3. Start the new release (step 3). Its gap sync re-indexes the blocks produced since the snapshot with the fixed indexer. The node serving `WEB3INJ_COMET_RPC` must still have those blocks.
+
+**Upstream.** Strategy B is also how the official snapshot gets migrated once: run steps 1–2 on it with the archival node, check it with step 4, and republish it. Operators then only swap in the new snapshot.
 
 ### 3. Start the new release
 

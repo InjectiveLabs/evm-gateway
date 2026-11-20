@@ -96,7 +96,7 @@ One-off repairs of the local KV store run as `migrate` subcommands while the ser
 ./evm-gateway migrate ante-failed-txs --report apply.json              # repairs affected heights
 ```
 
-Each migration records a completion marker; rerunning it is a no-op unless `--force` is passed. `--from`/`--to` bound the scanned heights. See [`docs/migrations`](migrations/) for the runbook of each migration.
+Migrations are optional and never run automatically. Each records a completion marker; rerunning it is a no-op unless `--force` is passed. `--from`/`--to` bound the scanned heights; a bounded run does not write the marker. See [`docs/migrations`](migrations/) for the runbook of each migration, including whether you need it.
 
 ## Sync Status
 
