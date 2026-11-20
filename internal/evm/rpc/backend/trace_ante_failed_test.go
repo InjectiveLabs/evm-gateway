@@ -16,6 +16,7 @@ import (
 	cmtjson "github.com/cometbft/cometbft/libs/json"
 	cmrpcclient "github.com/cometbft/cometbft/rpc/client"
 	cmrpctypes "github.com/cometbft/cometbft/rpc/core/types"
+	dbm "github.com/cosmos/cosmos-db"
 	"github.com/cosmos/cosmos-sdk/client"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/stretchr/testify/mock"
@@ -161,11 +162,25 @@ func (c *fixtureCometClient) TxSearch(context.Context, string, bool, *int, *int,
 }
 
 // fixtureTraceIndexer resolves tx hashes of the fixture block and serves an
-// optional cached block trace.
+// optional cached block trace. Every other lookup goes to a KV indexer that
+// indexed the fixture block, so trace paths that read more of the indexer (for
+// example the visible transaction hashes a block trace is aligned with) see what
+// production would see instead of a nil interface.
 type fixtureTraceIndexer struct {
 	indexer.TxIndexer
 	fx          *anteFailedFixture
 	cachedBlock json.RawMessage
+}
+
+func newFixtureTraceIndexer(t *testing.T, fx *anteFailedFixture) *fixtureTraceIndexer {
+	t.Helper()
+	db := dbm.NewMemDB()
+	t.Cleanup(func() { _ = db.Close() })
+	kv := indexer.NewKVIndexer(db, backendTestLogger(), fixtureClientContext(t))
+	if err := kv.IndexBlockWithResults(fx.block.Block, fx.results); err != nil {
+		t.Fatalf("index fixture block: %v", err)
+	}
+	return &fixtureTraceIndexer{TxIndexer: kv, fx: fx}
 }
 
 func (i *fixtureTraceIndexer) WithContext(context.Context) indexer.TxIndexer { return i }
@@ -211,7 +226,7 @@ func newAnteFailedTestEnv(t *testing.T) *anteFailedTestEnv {
 	fx := loadAnteFailedFixture(t)
 	comet := &fixtureCometClient{fx: fx}
 	query := &rpcmocks.EVMQueryClient{}
-	idx := &fixtureTraceIndexer{fx: fx}
+	idx := newFixtureTraceIndexer(t, fx)
 	b := &Backend{
 		logger:      backendTestLogger(),
 		cfg:         appconfig.Config{},
