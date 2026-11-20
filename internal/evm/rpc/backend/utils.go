@@ -235,10 +235,17 @@ func ShouldIgnoreGasUsed(res *abci.ExecTxResult) bool {
 
 // GetLogsFromBlockResults returns native EVM logs decoded from live Comet block
 // results. It is the non-virtualized live path and does not synthesize Cosmos
-// x/bank events.
+// x/bank events. Log tx indexes are inferred from the results alone; use
+// GetLogsFromBlock when the block is available.
 func GetLogsFromBlockResults(blockRes *cmrpctypes.ResultBlockResults) ([][]*virtual.RPCLog, error) {
+	return GetLogsFromBlock(nil, nil, blockRes)
+}
+
+// GetLogsFromBlock is GetLogsFromBlockResults with the block txs, so that log
+// tx indexes count failed Ethereum txs exactly as the gateway exposes them.
+func GetLogsFromBlock(decoder sdk.TxDecoder, txs [][]byte, blockRes *cmrpctypes.ResultBlockResults) ([][]*virtual.RPCLog, error) {
 	blockLogs := [][]*virtual.RPCLog{}
-	normalizedTxResults, err := types.NormalizeTxResponseIndexes(blockRes.TxResults)
+	normalizedTxResults, err := types.NormalizeBlockTxResponseIndexes(decoder, txs, blockRes.TxResults)
 	if err != nil {
 		return nil, err
 	}

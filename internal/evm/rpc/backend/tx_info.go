@@ -305,7 +305,7 @@ func (b *Backend) GetTransactionReceipt(hash common.Hash) (map[string]interface{
 		}
 		return nil, nil
 	}
-	normalizedTxResults, err := rpctypes.NormalizeTxResponseIndexes(blockRes.TxResults)
+	normalizedTxResults, err := rpctypes.NormalizeBlockTxResponseIndexes(b.clientCtx.TxConfig.TxDecoder(), resBlock.Block.Txs.ToSliceOfBytes(), blockRes.TxResults)
 	if err != nil {
 		b.logger.Warn("failed to normalize tx response indexes", "height", res.Height, "error", err.Error())
 		normalizedTxResults = blockRes.TxResults

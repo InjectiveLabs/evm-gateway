@@ -177,7 +177,7 @@ func (kv *KVIndexer) indexBlockWithStats(block *cmtypes.Block, blockResults *cor
 	blockGasLimit := kv.cachedGasLimit
 	txResults := blockTxResults(blockResults)
 
-	normalizedTxResults, err := rpctypes.NormalizeTxResponseIndexes(txResults)
+	normalizedTxResults, err := rpctypes.NormalizeBlockTxResponseIndexes(kv.clientCtx.TxConfig.TxDecoder(), block.Txs.ToSliceOfBytes(), txResults)
 	if err != nil {
 		return stats, newBlockParseError(err, "block %d: failed to normalize tx response indexes", block.Height)
 	}

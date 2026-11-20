@@ -124,7 +124,7 @@ func (b *Backend) liveVirtualBlockView(
 		b.logger.Debug("failed to query base fee for virtualized live block", "height", block.Height, "error", err.Error())
 	}
 
-	normalizedTxResults, err := rpctypes.NormalizeTxResponseIndexes(blockRes.TxResults)
+	normalizedTxResults, err := rpctypes.NormalizeBlockTxResponseIndexes(b.clientCtx.TxConfig.TxDecoder(), block.Txs.ToSliceOfBytes(), blockRes.TxResults)
 	if err != nil {
 		return nil, err
 	}

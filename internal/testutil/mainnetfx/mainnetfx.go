@@ -56,6 +56,24 @@ const (
 	// part of Heights.
 	HeightPanicInExecution int64 = 151947794
 
+	// HeightAnteFailedTraceReport holds Cosmos tx #131, an ante-failed
+	// Ethereum tx (insufficient funds for the transferred value) whose
+	// debug_traceTransaction returned "insufficient balance for transfer".
+	// Not part of Heights.
+	HeightAnteFailedTraceReport int64 = 185556799
+
+	// HeightMultiMsgFailure holds Cosmos tx #5 with two MsgEthereumTx of
+	// one sender (nonces 3003 and 3004). Message 0 reverted, so the Cosmos tx
+	// failed (code 3, evm codespace) and message 1 never executed. The ante
+	// handler succeeded: both nonces were consumed and the fee was charged for
+	// both gas limits (141000 = 120000 + 21000). Not part of Heights.
+	HeightMultiMsgFailure int64 = 185519530
+	// GasUsedMultiMsgReverted is the gas used reported by the error log of the
+	// reverted message (also the Cosmos tx gas used).
+	GasUsedMultiMsgReverted uint64 = 38609
+	// GasLimitMultiMsgUnexecuted is the gas limit of the unexecuted message.
+	GasLimitMultiMsgUnexecuted uint64 = 21000
+
 	// GasUsedEx2Included is the chain gas used of each re-included tx in
 	// HeightEx2Included.
 	GasUsedEx2Included uint64 = 28209
@@ -114,8 +132,31 @@ var (
 		},
 	}
 
-	// Heights lists all fixture heights in ascending order.
+	// TxAnteFailedTraceReport is the ante-failed Ethereum tx of
+	// HeightAnteFailedTraceReport.
+	TxAnteFailedTraceReport = common.HexToHash("0xa3151a9b8c52a0c4f741f7cd908b30e8e1de5f54770c3092090457f56f927c03")
+
+	// TxMultiMsgReverted and TxMultiMsgUnexecuted are messages 0 and 1 of
+	// Cosmos tx #5 (0x85e2887505ecca5a9b4b01be4e3a8bbe05bae79f9aece154a5e307e4eee60c62)
+	// of HeightMultiMsgFailure.
+	TxMultiMsgReverted   = common.HexToHash("0xa3929affbfa58375a0e8217936f7d12b96ccf00e416612241bc794bf68a5894a")
+	TxMultiMsgUnexecuted = common.HexToHash("0x02826641ed392c090ace6d896b89c74510c63b685d04dec482334b15c9ea58bf")
+
+	// Heights lists the fixture heights of the re-included tx incident in
+	// ascending order.
 	Heights = []int64{HeightEx1Failed, HeightEx1Included, HeightEx2Failed, HeightEx2Included}
+
+	// AllHeights lists every height with block and block results fixtures,
+	// for invariants that must hold on any block.
+	AllHeights = []int64{
+		HeightPanicInExecution,
+		HeightMultiMsgFailure,
+		HeightAnteFailedTraceReport,
+		HeightEx1Failed,
+		HeightEx1Included,
+		HeightEx2Failed,
+		HeightEx2Included,
+	}
 )
 
 // AnteFailedTx is an Ethereum tx whose Cosmos tx failed in the ante handler.

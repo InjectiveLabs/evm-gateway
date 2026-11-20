@@ -33,6 +33,20 @@ Consequences:
    - In the production index, 150 of 312 sampled blocks containing such failures have a decreasing `cumulativeGasUsed`.
 3. **Failed and successful receipts measure different things**: a gas limit vs. execution gas.
 
+### Multi-message Cosmos txs that fail during execution
+
+A Cosmos tx can carry several `MsgEthereumTx`. When one of them fails, baseapp fails the whole Cosmos tx: the state of every message is reverted, and the log names only the failed message (`failed to execute message; message index: N: {"tx_hash":…,"gas_used":…}`). The ante handler succeeded, so **every message consumed its nonce and was charged its gas limit**; all of them are failed Ethereum txs:
+
+| Message | `status` | `gasUsed` |
+|---|---|---|
+| the failed one (index `N`) | `0x0` | gas used from the error log |
+| before `N` (executed, state reverted) | `0x0` | gas limit |
+| after `N` (never executed) | `0x0` | gas limit |
+
+Example: mainnet block `185519530`, Cosmos tx `0x85e28875…` (code 3, `evm` codespace, gas limit 141,000, gas used 38,609, fee 141,000 × 5e8). Message 0 (`0xa3929aff…`, limit 120,000) reverted with `ERC20: transfer amount exceeds allowance` after using 38,609 gas. Message 1 (`0x02826641…`, a 21,000 self-transfer) never executed. The sender's nonce went from 3003 to 3005. The receipts report 38,609 and 21,000. The Cosmos tx reports 38,609 because only message 0 ran; message 1's 21,000 is the gas it was charged for, not gas it executed. The fee actually paid for both messages is their gas limit times the fee cap (Option D below).
+
+Until the indexer handled this case, it rejected such blocks (`msg index not found in results`) and the syncer skipped them. `eth_getBlockReceipts` then fell back to the live path and listed both txs, but `eth_getTransactionByHash` and `eth_getTransactionReceipt` returned `null`.
+
 ## Scale
 
 In the production index at `185625758`:

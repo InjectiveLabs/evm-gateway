@@ -184,7 +184,12 @@ func (b *Backend) GetLogsByHeight(height *int64) ([][]*virtual.RPCLog, error) {
 		return view.Logs, nil
 	}
 
-	return GetLogsFromBlockResults(blockRes)
+	resBlock, err := b.TendermintBlockByNumber(rpctypes.BlockNumber(*height))
+	if err != nil || resBlock == nil || resBlock.Block == nil || b.clientCtx.TxConfig == nil {
+		b.logger.Debug("block unavailable for live logs; inferring tx indexes from results", "height", *height)
+		return GetLogsFromBlockResults(blockRes)
+	}
+	return GetLogsFromBlock(b.clientCtx.TxConfig.TxDecoder(), resBlock.Block.Txs.ToSliceOfBytes(), blockRes)
 }
 
 // GetFilteredLogsByHeight returns filtered logs for a block height using

@@ -42,7 +42,7 @@ func newFixtureComet(t *testing.T) *fixtureComet {
 		blocks:  make(map[int64]*cmrpctypes.ResultBlock),
 		results: make(map[int64]*cmrpctypes.ResultBlockResults),
 	}
-	for _, height := range mainnetfx.Heights {
+	for _, height := range mainnetfx.AllHeights {
 		c.blocks[height] = mustFixtureResultBlock(t, height)
 		c.results[height] = mustFixtureBlockResults(t, height)
 	}
