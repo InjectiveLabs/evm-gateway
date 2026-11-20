@@ -164,6 +164,9 @@ func testTraceBlockTimeoutCap(t *testing.T, cap time.Duration) {
 		if len(got) != 1 || got[0] == nil || got[0].Error != "" || got[0].Result == nil {
 			t.Fatalf("attempt %d returned cached rejection instead of success: %#v", attempt, got)
 		}
+		if got[0].TxHash != ethMsg.Hash() {
+			t.Fatalf("attempt %d traced tx hash %s, want %s", attempt, got[0].TxHash, ethMsg.Hash())
+		}
 		result := marshalMap(t, got[0].Result)
 		if result["type"] != "CALL" || result["gasUsed"] != "0x5208" {
 			t.Fatalf("attempt %d changed trace payload: %#v", attempt, result)
@@ -175,12 +178,21 @@ func testTraceBlockTimeoutCap(t *testing.T, cap time.Duration) {
 	if !reflect.DeepEqual(idx.blockReads, []string{effectiveTimeout, effectiveTimeout}) || !reflect.DeepEqual(idx.blockWrites, []string{effectiveTimeout}) {
 		t.Fatalf("cache did not use the effective timeout consistently: reads=%v writes=%v", idx.blockReads, idx.blockWrites)
 	}
-	// The cached block trace carries the tx hash of each entry, so that
-	// debug_traceTransaction can resolve its entry by hash.
+	// The cached entry is the node trace with the tx hash attached, so compare
+	// decoded fields instead of the raw node response.
 	gotCached, err := idx.TxIndexer.GetTraceBlockByHeight(height, &normalized)
-	wantCached := `[{"txHash":"` + ethMsg.Hash().Hex() + `","result":{"type":"CALL","gasUsed":"0x5208"}}]`
-	if err != nil || !jsonEqual(t, gotCached, []byte(wantCached)) {
-		t.Fatalf("normalized success not cached: %s, %v", gotCached, err)
+	if err != nil {
+		t.Fatalf("normalized success not cached: %v", err)
+	}
+	var cached []*rpctypes.TxTraceResult
+	if err := json.Unmarshal(gotCached, &cached); err != nil {
+		t.Fatalf("decode cached block trace %s: %v", gotCached, err)
+	}
+	if len(cached) != 1 || cached[0] == nil || cached[0].Error != "" || cached[0].TxHash != ethMsg.Hash() {
+		t.Fatalf("normalized success not cached: %s", gotCached)
+	}
+	if result := marshalMap(t, cached[0].Result); result["type"] != "CALL" || result["gasUsed"] != "0x5208" {
+		t.Fatalf("cached trace payload changed: %s", gotCached)
 	}
 	gotOld, err := idx.TxIndexer.GetTraceBlockByHeight(height, config)
 	if err != nil || string(gotOld) != string(oldFailure) {
@@ -269,16 +281,4 @@ func marshalMap(t *testing.T, v interface{}) map[string]interface{} {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	return out
-}
-
-func jsonEqual(t *testing.T, a, b []byte) bool {
-	t.Helper()
-	var va, vb interface{}
-	if err := json.Unmarshal(a, &va); err != nil {
-		t.Fatalf("unmarshal %s: %v", a, err)
-	}
-	if err := json.Unmarshal(b, &vb); err != nil {
-		t.Fatalf("unmarshal %s: %v", b, err)
-	}
-	return reflect.DeepEqual(va, vb)
 }

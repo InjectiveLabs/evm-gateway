@@ -1,0 +1,63 @@
+name: Test
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  go-test:
+    # Private InjectiveLabs modules need the GH_TOKEN secret, which is not
+    # available to pull requests from forks.
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: blacksmith-4vcpu-ubuntu-2204
+    timeout-minutes: 30
+    env:
+      GOPRIVATE: github.com/InjectiveLabs
+      GONOSUMDB: github.com/InjectiveLabs
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      # Only this step gets access to private modules. Build, vet and test then
+      # run without credentials and must not need to download anything else.
+      - name: Download Go modules
+        run: ./scripts/with-private-git.sh go mod download
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+
+      - name: Build
+        run: go build ./...
+        env:
+          GOFLAGS: -mod=readonly
+
+      - name: Vet
+        run: go vet ./...
+        env:
+          GOFLAGS: -mod=readonly
+
+      # e2e suites skip themselves unless their WEB3INJ_E2E* gate is set, so
+      # this runs unit tests plus the chain-free e2e helpers.
+      - name: Test
+        run: go test -race -count=1 ./...
+        env:
+          GOFLAGS: -mod=readonly
