@@ -139,7 +139,7 @@ func newFixtureKV(t *testing.T, virtual bool) (*txindexer.KVIndexer, dbm.DB) {
 		t.Fatalf("ClientContext: %v", err)
 	}
 	db := dbm.NewMemDB()
-	kv := txindexer.NewKVIndexer(db, backendTestLogger(), clientCtx, txindexer.WithVirtualBankTransfers(virtual, fixtureEVMChainID))
+	kv := txindexer.NewKVIndexer(db, backendTestLogger(), clientCtx, txindexer.WithVirtualCosmosEvents(virtual, fixtureEVMChainID))
 	return kv, db
 }
 

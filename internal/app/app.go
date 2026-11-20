@@ -255,10 +255,10 @@ type evmParamsClient interface {
 
 // buildKVIndexerOptions wires startup configuration into the KV indexer,
 // including whether indexed receipts/logs should include virtualized Cosmos
-// bank events.
+// events.
 func buildKVIndexerOptions(ctx context.Context, cfg config.Config, clientCtx client.Context, logger *slog.Logger) []txindexer.KVIndexerOption {
 	opts := []txindexer.KVIndexerOption{
-		txindexer.WithVirtualBankTransfers(cfg.VirtualizeCosmosEvents, cfg.EVMChainID),
+		txindexer.WithVirtualCosmosEvents(cfg.VirtualizeCosmosEvents, cfg.EVMChainID),
 	}
 
 	gasLimit, ok, err := fetchStartupBlockGasLimit(ctx, clientCtx)

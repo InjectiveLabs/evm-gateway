@@ -7,7 +7,7 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 
 	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
-	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtualbank"
+	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtual"
 	"github.com/InjectiveLabs/evm-gateway/internal/testutil/mainnetfx"
 )
 
@@ -68,7 +68,7 @@ func TestReceiptCacheDropsStaleReceiptAfterReindex(t *testing.T) {
 func TestMaterializedCacheEpochs(t *testing.T) {
 	hash := common.HexToHash("0x01")
 	receipt := map[string]interface{}{"status": hexutil.Uint(1)}
-	logs := []*virtualbank.RPCLog{{}}
+	logs := []*virtual.RPCLog{{}}
 
 	c := newMaterializedCache()
 	c.addReceipt(hash, receipt, 3)
@@ -159,7 +159,7 @@ func TestBlockLogsCacheEpoch(t *testing.T) {
 		t.Fatalf("broad log query must populate the cache")
 	}
 
-	poisoned := []*virtualbank.RPCLog{{}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}}
+	poisoned := []*virtual.RPCLog{{}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}}
 	if len(poisoned) == len(real) {
 		t.Fatalf("poisoned logs must differ from real logs")
 	}

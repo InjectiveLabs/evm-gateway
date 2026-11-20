@@ -11,7 +11,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
-	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtualbank"
+	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtual"
+	virtualbank "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtual/bank"
 	chaintypes "github.com/InjectiveLabs/sdk-go/chain/types"
 )
 
@@ -19,7 +20,7 @@ import (
 // metadata through the Cap'n Proto cache codec.
 func TestKVCapnpBlockLogsRoundTrip(t *testing.T) {
 	cosmosHash := common.HexToHash("0xabc")
-	logs := [][]*virtualbank.RPCLog{{
+	logs := [][]*virtual.RPCLog{{
 		{
 			Address:     virtualbank.ContractAddress,
 			Topics:      []common.Hash{virtualbank.TopicTransfer, common.HexToHash("0x01")},
@@ -54,6 +55,21 @@ func TestKVCapnpBlockLogsRoundTrip(t *testing.T) {
 	require.Equal(t, cosmosHash, *got[0][0].CosmosHash)
 }
 
+// TestKVCapnpLogWithoutTopicsDecodesEmptyTopics verifies a cached LOG0 log
+// decodes with a non-nil topic list, so it serializes as "topics": [].
+func TestKVCapnpLogWithoutTopicsDecodesEmptyTopics(t *testing.T) {
+	logs := [][]*virtual.RPCLog{{
+		{Address: common.HexToAddress("0x69065dfaba632ace25e6bb4730e3235a04ea6750"), Data: []byte{0x01}},
+	}}
+
+	got, err := unmarshalBlockLogsPayload(mustMarshalBlockLogs(logs))
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Len(t, got[0], 1)
+	require.NotNil(t, got[0][0].Topics)
+	require.Empty(t, got[0][0].Topics)
+}
+
 // TestKVCapnpReceiptRoundTripPreservesOptionalZeroBig verifies optional receipt
 // fields survive Cap'n Proto encoding, including zero-valued fee quantities.
 func TestKVCapnpReceiptRoundTripPreservesOptionalZeroBig(t *testing.T) {
@@ -65,7 +81,7 @@ func TestKVCapnpReceiptRoundTripPreservesOptionalZeroBig(t *testing.T) {
 		GasUsed:           3,
 		Reason:            &reason,
 		LogsBloom:         hexutil.Encode(make([]byte, 256)),
-		Logs: []*virtualbank.RPCLog{{
+		Logs: []*virtual.RPCLog{{
 			Address: virtualbank.ContractAddress,
 			Data:    []byte("payload"),
 		}},
@@ -146,6 +162,23 @@ func TestKVCapnpRPCTransactionRoundTrip(t *testing.T) {
 	require.True(t, got.Virtual)
 	require.NotNil(t, got.CosmosHash)
 	require.Equal(t, cosmosHash, *got.CosmosHash)
+}
+
+func TestKVCapnpHookMessageIndexPreservesZeroAndAbsence(t *testing.T) {
+	zero, twelve := hexutil.Uint64(0), hexutil.Uint64(12)
+	for _, index := range []*hexutil.Uint64{nil, &zero, &twelve} {
+		tx := &rpctypes.RPCTransaction{Virtual: true, CosmosMsgIndex: index}
+		gotTx, err := unmarshalRPCTransactionPayload(mustMarshalRPCTransaction(tx))
+		require.NoError(t, err)
+		require.Equal(t, index, gotTx.CosmosMsgIndex)
+		logs := []*virtual.RPCLog{{Virtual: true, CosmosMsgIndex: index}}
+		gotLogs, err := unmarshalBlockLogsPayload(mustMarshalBlockLogs([][]*virtual.RPCLog{logs}))
+		require.NoError(t, err)
+		require.Equal(t, index, gotLogs[0][0].CosmosMsgIndex)
+		receipt, err := unmarshalReceiptPayload(mustMarshalReceipt(CachedReceipt{Logs: logs}))
+		require.NoError(t, err)
+		require.Equal(t, index, receipt.Logs[0].CosmosMsgIndex)
+	}
 }
 
 // TestKVCapnpTxResultAndTraceRoundTrip verifies TxResult and trace cache

@@ -53,6 +53,26 @@ This runs:
 - RPC parity against live `injectived`
 - sync orchestration scenarios
 
+## Run Only The Websocket Dead Peer Regression
+
+`TestWebsocketDeadPeerAgainstGateway` (Immunefi #68091) pipelines a request plus
+200 `eth_getTransactionByHash` probes in one TCP write, then resets the
+connection. The gateway fails to write the first response and must not serve the
+probes still buffered on the socket. Served probes are counted through the
+`tx_by_hash` cache-miss counter of `/status/sync`.
+
+The `offline_rpc_only` subtest needs no chain. The `live_chain` subtest also
+covers a successful `eth_subscribe` and is skipped when `WEB3INJ_COMET_RPC` is
+unreachable. Ports default to `8746`/`8747` and can be changed with
+`WEB3INJ_E2E_DEAD_PEER_RPC_PORT` and `WEB3INJ_E2E_DEAD_PEER_WS_PORT`.
+
+```bash
+WEB3INJ_E2E=1 \
+WEB3INJ_COMET_RPC=http://localhost:26657 \
+WEB3INJ_GRPC_ADDR=127.0.0.1:9900 \
+go test -vet=off ./e2e -run TestWebsocketDeadPeerAgainstGateway -count=1 -v
+```
+
 ## Run Only Parity
 
 ```bash
@@ -479,3 +499,4 @@ The test reports sync metrics through `/status/sync`, including cache counters.
 
 - parity test: `e2e/rpc_parity_test.go`
 - sync orchestration: `e2e/sync_orchestration_test.go`
+- websocket dead peer regression: `e2e/ws_dead_peer_test.go`

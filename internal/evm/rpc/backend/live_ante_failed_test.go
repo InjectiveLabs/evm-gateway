@@ -79,15 +79,15 @@ func TestLiveBlockReceiptsSkipAnteFailedTxs(t *testing.T) {
 	}
 }
 
-// TestLiveVirtualBankViewSkipsAnteFailedTxs covers the virtualized live view.
-func TestLiveVirtualBankViewSkipsAnteFailedTxs(t *testing.T) {
+// TestLiveVirtualViewSkipsAnteFailedTxs covers the virtualized live view.
+func TestLiveVirtualViewSkipsAnteFailedTxs(t *testing.T) {
 	comet := newFixtureComet(t)
 	b := newFixtureBackend(t, fixtureBackendOptions{comet: comet, virtual: true})
 
 	for _, height := range mainnetfx.Heights {
-		view, err := b.liveVirtualBankBlockView(comet.blocks[height], comet.results[height])
+		view, err := b.liveVirtualBlockView(comet.blocks[height], comet.results[height])
 		if err != nil {
-			t.Fatalf("liveVirtualBankBlockView(%d): %v", height, err)
+			t.Fatalf("liveVirtualBlockView(%d): %v", height, err)
 		}
 		hidden := make(map[common.Hash]bool)
 		for _, tx := range mainnetfx.AnteFailedTxs[height] {

@@ -4,7 +4,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	lru "github.com/hashicorp/golang-lru"
 
-	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtualbank"
+	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtual"
 	txindexer "github.com/InjectiveLabs/evm-gateway/internal/indexer"
 )
 
@@ -67,7 +67,7 @@ func (c *materializedCache) addReceipt(hash common.Hash, receipt map[string]inte
 
 // getBlockLogs returns fully materialized logs for broad indexed log queries
 // if they were cached during the current indexer cache epoch.
-func (c *materializedCache) getBlockLogs(height int64, epoch uint64) ([]*virtualbank.RPCLog, bool) {
+func (c *materializedCache) getBlockLogs(height int64, epoch uint64) ([]*virtual.RPCLog, bool) {
 	if c == nil || c.blockLogs == nil {
 		return nil, false
 	}
@@ -75,13 +75,13 @@ func (c *materializedCache) getBlockLogs(height int64, epoch uint64) ([]*virtual
 	if !ok {
 		return nil, false
 	}
-	logs, ok := value.([]*virtualbank.RPCLog)
+	logs, ok := value.([]*virtual.RPCLog)
 	return logs, ok
 }
 
 // addBlockLogs stores fully materialized indexed logs for a broad block query.
 // epoch must be observed before the logs were read from the KV store.
-func (c *materializedCache) addBlockLogs(height int64, logs []*virtualbank.RPCLog, epoch uint64) {
+func (c *materializedCache) addBlockLogs(height int64, logs []*virtual.RPCLog, epoch uint64) {
 	if c == nil || c.blockLogs == nil || logs == nil {
 		return
 	}

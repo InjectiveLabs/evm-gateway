@@ -35,6 +35,8 @@ struct Log {
   removed @8 :Bool;
   virtual @9 :Bool;
   cosmosHash @10 :Data;
+  cosmosMsgIndex @11 :UInt64;
+  cosmosMsgIndexPresent @12 :Bool;
 }
 
 struct LogGroup {
@@ -105,6 +107,8 @@ struct RPCTransaction {
   vPresent @29 :Bool;
   rPresent @30 :Bool;
   sPresent @31 :Bool;
+  cosmosMsgIndex @32 :UInt64;
+  cosmosMsgIndexPresent @33 :Bool;
 }
 
 struct TracePayload {

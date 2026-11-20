@@ -46,6 +46,15 @@ func TestTxAnteFailed(t *testing.T) {
 			want: true,
 		},
 		{
+			name: "ante insufficient funds (mainnet 185556799 tx 131)",
+			res: &abci.ExecTxResult{
+				Code:      5,
+				Codespace: "sdk",
+				Log:       "failed to transfer 60080000000000000 from address 0xA193925D4D6702d1595A0de635C913B06Bf38Fb0 using the EVM block context transfer function: insufficient funds",
+			},
+			want: true,
+		},
+		{
 			name: "ante invalid nonce",
 			res:  &abci.ExecTxResult{Code: 32, Codespace: "sdk", Log: "invalid nonce; got 5, expected 6: invalid sequence"},
 			want: true,
