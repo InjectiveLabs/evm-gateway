@@ -123,6 +123,7 @@ func TestWarmCacheServesReadsWithoutBackendRequests(t *testing.T) {
 
 			tracker := syncstatus.NewTracker(1, 1)
 			tracker.SetPhase(syncstatus.PhaseForwardSync)
+			tracker.SetHistoryCovered(true)
 			tracker.MarkBlock(heights[len(heights)-1], true)
 			b.syncStatus = tracker
 			comet.calls = make(map[string]int)

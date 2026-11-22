@@ -56,6 +56,10 @@ func TestTrackerCaughtUp(t *testing.T) {
 	}
 
 	tracker.SetPhase(PhaseForwardSync)
+	if tracker.CaughtUp(time.Minute) {
+		t.Fatalf("caught up while the node has blocks below the earliest block")
+	}
+	tracker.SetHistoryCovered(true)
 	if !tracker.CaughtUp(time.Minute) {
 		t.Fatalf("forward sync with a fresh block not caught up")
 	}
@@ -79,6 +83,7 @@ func TestTrackerCaughtUp(t *testing.T) {
 
 	parallel := NewTracker(4, 1)
 	parallel.SetPhase(PhaseParallelGapTipSync)
+	parallel.SetHistoryCovered(true)
 	parallel.SetGaps([]Range{{Start: 1, End: 5}})
 	parallel.MarkBlock(100, true)
 	if parallel.CaughtUp(time.Minute) {

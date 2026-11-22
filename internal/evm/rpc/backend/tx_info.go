@@ -253,17 +253,17 @@ func (b *Backend) GetTransactionReceipt(hash common.Hash) (map[string]interface{
 		}
 		if b.syncStatus != nil {
 			b.syncStatus.RecordReceiptCacheMiss()
-			b.syncStatus.RecordReceiptLiveFallback()
 		}
 	}
 
 	res, err := b.GetTxByEthHash(hash)
 	if err != nil {
 		b.logger.Debug("tx not found", "hash", hash, "error", err.Error())
-		if b.cfg.OfflineRPCOnly {
-			return nil, nil
-		}
 		return nil, nil
+	}
+	// the receipt is built from live block data
+	if b.indexer != nil && b.syncStatus != nil {
+		b.syncStatus.RecordReceiptLiveFallback()
 	}
 	resBlock, err := b.TendermintBlockByNumber(rpctypes.BlockNumber(res.Height))
 	if err != nil {

@@ -54,7 +54,7 @@ Ref: https://keepachangelog.com/en/1.1.0/
 
 ### Improvements
 
-* (rpc) \#16 Tx lookups by hash or by block and index no longer fall back to the Comet tx index (`TxSearch`) when the indexer is caught up: initial gap sync done with no gap left, forward sync running, and a block synced within the last 10s. The indexer miss is then authoritative, so unknown hashes (pending txs polled by wallets, hidden ante-failed txs) cost no Comet request beyond the mempool check of `eth_getTransactionByHash`, and no longer log `fallback to tendermint tx indexer!`. While the indexer is behind, has unsynced gaps or runs with sync disabled, the fallback works as before.
+* (rpc) \#16 Tx lookups by hash or by block and index no longer fall back to the Comet tx index (`TxSearch`) when the indexer holds every block the node has: the node serves no block below `WEB3INJ_EARLIEST_BLOCK` (probed at startup), initial gap sync is done with no gap left, forward sync runs, and a block was synced within the last 10s. The indexer miss is then authoritative, so unknown hashes (pending txs polled by wallets, hidden ante-failed txs) cost no Comet request beyond the mempool check of `eth_getTransactionByHash`, and no longer log `fallback to tendermint tx indexer!`. While the indexer is behind, has unsynced gaps, runs with sync disabled, or starts above the node's history (e.g. an archival node with `WEB3INJ_EARLIEST_BLOCK` set), the fallback works as before. `receipt_by_hash.live_fallbacks` in `/status/sync` now counts only receipts built from live data.
 
 ### Features
 

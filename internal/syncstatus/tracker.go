@@ -61,18 +61,20 @@ const (
 type Tracker struct {
 	threads int
 
-	mu                sync.RWMutex
-	phase             string
-	startedAt         time.Time
-	updatedAt         time.Time
-	earliestBlock     int64
-	chainHead         int64
-	lastSyncedBlock   int64
-	lastSyncedAt      time.Time
-	blocksProcessed   int64
-	blocksIndexed     int64
-	gapsTotal         int
-	gapsRemaining     int
+	mu              sync.RWMutex
+	phase           string
+	startedAt       time.Time
+	updatedAt       time.Time
+	earliestBlock   int64
+	chainHead       int64
+	lastSyncedBlock int64
+	lastSyncedAt    time.Time
+	blocksProcessed int64
+	blocksIndexed   int64
+	gapsTotal       int
+	gapsRemaining   int
+	// historyCovered: no block below earliestBlock is available on the node
+	historyCovered    bool
 	currentSegment    *Segment
 	lastSyncedSegment *Segment
 	recentBlocks      []time.Time
@@ -212,9 +214,19 @@ func (t *Tracker) MarkBlock(height int64, indexed bool) {
 	t.updatedAt = now
 }
 
-// CaughtUp reports whether the indexer follows the chain tip: the initial
-// gap sync is done with no gap left unsynced, forward sync runs, and a block
-// was synced within maxIdle. A nil tracker is never caught up.
+// SetHistoryCovered records whether the node has no block below the earliest
+// indexed height, i.e. the indexer starts at the node's history.
+func (t *Tracker) SetHistoryCovered(covered bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.historyCovered = covered
+	t.updatedAt = time.Now().UTC()
+}
+
+// CaughtUp reports whether the indexer holds every block the node has: it
+// starts at the node's history, the initial gap sync is done with no gap left
+// unsynced, forward sync runs, and a block was synced within maxIdle. A nil
+// tracker is never caught up.
 func (t *Tracker) CaughtUp(maxIdle time.Duration) bool {
 	if t == nil {
 		return false
@@ -224,7 +236,7 @@ func (t *Tracker) CaughtUp(maxIdle time.Duration) bool {
 	if t.phase != PhaseForwardSync && t.phase != PhaseParallelGapTipSync {
 		return false
 	}
-	if t.gapsRemaining > 0 || t.lastSyncedAt.IsZero() {
+	if !t.historyCovered || t.gapsRemaining > 0 || t.lastSyncedAt.IsZero() {
 		return false
 	}
 	return time.Since(t.lastSyncedAt) <= maxIdle

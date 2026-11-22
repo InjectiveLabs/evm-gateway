@@ -131,6 +131,7 @@ func (s *Syncer) Run(ctx context.Context) error {
 	if s.status != nil {
 		s.status.SetChainHead(head)
 		s.status.SetEarliestBlock(earliest)
+		s.status.SetHistoryCovered(s.nodeHistoryBelow(ctx, earliest) == historyNone)
 	}
 	if head < earliest {
 		s.logger.Info("chain head below earliest; nothing to sync", "head", head, "earliest", earliest)
@@ -368,6 +369,35 @@ func (s *Syncer) resolveEarliestBlock(ctx context.Context, requested int64) (int
 
 	s.logger.Warn("earliest block before chain history; using chain earliest", "requested", requested, "chain_earliest", chainEarliest)
 	return chainEarliest, nil
+}
+
+type nodeHistory int
+
+const (
+	historyNone nodeHistory = iota
+	historyAvailable
+	historyUnknown
+)
+
+// nodeHistoryBelow reports whether the node serves blocks below earliest. It
+// probes block earliest-1 rather than trusting the earliest height in the node
+// status, which a load-balanced endpoint may report for another backend.
+func (s *Syncer) nodeHistoryBelow(ctx context.Context, earliest int64) nodeHistory {
+	if earliest <= 1 {
+		return historyNone
+	}
+	below := earliest - 1
+	block, err := s.client.Block(ctx, &below)
+	switch {
+	case err == nil && block != nil && block.Block != nil:
+		return historyAvailable
+	case err != nil:
+		if lowest, ok := blocksync.LowestAvailableHeight(err); ok && lowest > below {
+			return historyNone
+		}
+		s.logger.Debug("cannot tell whether the node has blocks below the earliest block", "height", below, "error", err.Error())
+	}
+	return historyUnknown
 }
 
 func toStatusRanges(ranges []BlockRange) []syncstatus.Range {
