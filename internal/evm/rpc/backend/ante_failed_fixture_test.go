@@ -35,7 +35,9 @@ type fixtureComet struct {
 	resultsErr error
 	// resultsCalls counts BlockResults requests
 	resultsCalls int
-	nilBlock     bool
+	// calls counts requests per method
+	calls    map[string]int
+	nilBlock bool
 }
 
 func newFixtureComet(t *testing.T) *fixtureComet {
@@ -43,6 +45,7 @@ func newFixtureComet(t *testing.T) *fixtureComet {
 	c := &fixtureComet{
 		blocks:  make(map[int64]*cmrpctypes.ResultBlock),
 		results: make(map[int64]*cmrpctypes.ResultBlockResults),
+		calls:   make(map[string]int),
 	}
 	for _, height := range mainnetfx.AllHeights {
 		c.blocks[height] = mustFixtureResultBlock(t, height)
@@ -52,6 +55,7 @@ func newFixtureComet(t *testing.T) *fixtureComet {
 }
 
 func (c *fixtureComet) Block(_ context.Context, height *int64) (*cmrpctypes.ResultBlock, error) {
+	c.calls["Block"]++
 	if c.blockErr != nil {
 		return nil, c.blockErr
 	}
@@ -68,6 +72,7 @@ func (c *fixtureComet) Block(_ context.Context, height *int64) (*cmrpctypes.Resu
 }
 
 func (c *fixtureComet) BlockByHash(_ context.Context, hash []byte) (*cmrpctypes.ResultBlock, error) {
+	c.calls["BlockByHash"]++
 	for _, block := range c.blocks {
 		if bytes.Equal(block.BlockID.Hash, hash) {
 			return block, nil
@@ -77,6 +82,7 @@ func (c *fixtureComet) BlockByHash(_ context.Context, hash []byte) (*cmrpctypes.
 }
 
 func (c *fixtureComet) BlockResults(_ context.Context, height *int64) (*cmrpctypes.ResultBlockResults, error) {
+	c.calls["BlockResults"]++
 	c.resultsCalls++
 	if c.resultsErr != nil {
 		return nil, c.resultsErr
@@ -91,10 +97,17 @@ func (c *fixtureComet) BlockResults(_ context.Context, height *int64) (*cmrpctyp
 }
 
 func (c *fixtureComet) ConsensusParams(context.Context, *int64) (*cmrpctypes.ResultConsensusParams, error) {
+	c.calls["ConsensusParams"]++
 	return nil, errFixtureUnavailable
 }
 
+func (c *fixtureComet) UnconfirmedTxs(context.Context, *int) (*cmrpctypes.ResultUnconfirmedTxs, error) {
+	c.calls["UnconfirmedTxs"]++
+	return &cmrpctypes.ResultUnconfirmedTxs{}, nil
+}
+
 func (c *fixtureComet) TxSearch(context.Context, string, bool, *int, *int, string) (*cmrpctypes.ResultTxSearch, error) {
+	c.calls["TxSearch"]++
 	return nil, errFixtureUnavailable
 }
 
