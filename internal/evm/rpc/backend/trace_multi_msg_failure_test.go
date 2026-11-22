@@ -155,8 +155,8 @@ func TestTraceBlockMultiMsgFailure(t *testing.T) {
 
 // TestTraceMultiMsgFailureOfLaterMessage covers a Cosmos tx whose second
 // message failed: the first one executed and was reverted with it. The first
-// is not traceable, the second is traced on its own after the first, and no
-// other trace replays either of them.
+// is not traceable, debug_traceTransaction replays the second after the first,
+// and no other trace replays either of them.
 func TestTraceMultiMsgFailureOfLaterMessage(t *testing.T) {
 	height := mainnetfx.HeightMultiMsgFailure
 	before, after := multiMsgFixtureHashes(t)
@@ -196,8 +196,6 @@ func TestTraceMultiMsgFailureOfLaterMessage(t *testing.T) {
 		query := &rpcmocks.EVMQueryClient{}
 		query.On("TraceBlock", mock.Anything, traceBlockMatcher(height, []common.Hash{before, after})).
 			Return(traceBlockResponse(t, 2), nil).Once()
-		query.On("TraceTx", mock.Anything, traceTxMatcher(height, second, []common.Hash{before, first})).
-			Return(traceTxResponse("second"), nil).Once()
 
 		b := newFixtureBackend(t, fixtureBackendOptions{indexer: kv, comet: comet, query: query})
 		got, err := b.TraceBlock(rpctypes.BlockNumber(height), callTracerConfig, nil)
@@ -206,11 +204,15 @@ func TestTraceMultiMsgFailureOfLaterMessage(t *testing.T) {
 		}
 		query.AssertExpectations(t)
 		assertHashList(t, "trace hashes", traceHashes(got), []common.Hash{before, first, second, after})
-		if traceTag(t, got[0].Result) != "a" || traceTag(t, got[2].Result) != "second" || traceTag(t, got[3].Result) != "b" {
+		if traceTag(t, got[0].Result) != "a" || traceTag(t, got[3].Result) != "b" {
 			t.Fatalf("unexpected frames: %#v", got)
 		}
 		if got[1].Result != nil || !strings.Contains(got[1].Error, "was reverted") {
 			t.Fatalf("reverted entry: %#v", got[1])
+		}
+		// replaying it in sequence would need the reverted message first
+		if got[2].Result != nil || !strings.Contains(got[2].Error, "trace it with debug_traceTransaction") {
+			t.Fatalf("failed entry: %#v", got[2])
 		}
 	})
 }

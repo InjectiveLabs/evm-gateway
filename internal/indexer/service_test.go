@@ -1088,23 +1088,20 @@ func (f *faultyTxIndexer) GetTraceBlockByHeight(int64, *rpctypes.TraceConfig) (j
 }
 func (f *faultyTxIndexer) IsBlockIndexed(int64) (bool, error) { return false, nil }
 
-func TestSyncerNodeHistoryBelow(t *testing.T) {
+func TestSyncerNodeHasBlocksBelow(t *testing.T) {
 	pruned := errors.New(`{"jsonrpc":"2.0","id":-1,"error":{"code":-32603,"message":"Internal error","data":"height 59 is not available, lowest height is 60"}}`)
 	for _, tc := range []struct {
 		name     string
 		earliest int64
 		block    func(int64) (*coretypes.ResultBlock, error)
-		want     nodeHistory
+		want     bool
 	}{
-		{"from genesis", 1, nil, historyNone},
-		{"pruned below", 60, func(int64) (*coretypes.ResultBlock, error) { return nil, pruned }, historyNone},
+		{"from genesis", 1, nil, false},
+		{"pruned below", 60, func(int64) (*coretypes.ResultBlock, error) { return nil, pruned }, false},
 		{"served below", 60, func(int64) (*coretypes.ResultBlock, error) {
 			return &coretypes.ResultBlock{Block: &tmtypes.Block{}}, nil
-		}, historyAvailable},
-		{"lowest at probe", 59, func(int64) (*coretypes.ResultBlock, error) {
-			return nil, errors.New("height 50 is not available, lowest height is 58")
-		}, historyUnknown},
-		{"other error", 60, func(int64) (*coretypes.ResultBlock, error) { return nil, errors.New("connection refused") }, historyUnknown},
+		}, true},
+		{"other error", 60, func(int64) (*coretypes.ResultBlock, error) { return nil, errors.New("connection refused") }, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			client := &stubSyncClient{}
@@ -1117,8 +1114,8 @@ func TestSyncerNodeHistoryBelow(t *testing.T) {
 				}
 			}
 			syncer := NewSyncer(config.Config{}, testLogger(), client, nil, stubTxIndexer{}, nil)
-			if got := syncer.nodeHistoryBelow(context.Background(), tc.earliest); got != tc.want {
-				t.Fatalf("nodeHistoryBelow(%d) = %d want %d", tc.earliest, got, tc.want)
+			if got := syncer.nodeHasBlocksBelow(context.Background(), tc.earliest); got != tc.want {
+				t.Fatalf("nodeHasBlocksBelow(%d) = %v want %v", tc.earliest, got, tc.want)
 			}
 		})
 	}
