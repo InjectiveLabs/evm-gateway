@@ -1,6 +1,9 @@
 package syncstatus
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestTrackerMarkBlockDoesNotRegressLastSyncedBlock(t *testing.T) {
 	tracker := NewTracker(4, 1)
@@ -33,5 +36,56 @@ func TestTrackerCompleteGapKeepsCurrentForwardSegment(t *testing.T) {
 	}
 	if snapshot.LastSyncedSegment == nil || snapshot.LastSyncedSegment.Type != "gap" {
 		t.Fatalf("expected last synced gap segment, got %#v", snapshot.LastSyncedSegment)
+	}
+}
+
+func TestTrackerCaughtUp(t *testing.T) {
+	var none *Tracker
+	if none.CaughtUp(time.Minute) {
+		t.Fatalf("nil tracker caught up")
+	}
+
+	tracker := NewTracker(4, 1)
+	if tracker.CaughtUp(time.Minute) {
+		t.Fatalf("idle tracker caught up")
+	}
+	tracker.SetPhase("initial_gap_sync")
+	tracker.MarkBlock(10, true)
+	if tracker.CaughtUp(time.Minute) {
+		t.Fatalf("caught up during initial gap sync")
+	}
+
+	tracker.SetPhase(PhaseForwardSync)
+	if !tracker.CaughtUp(time.Minute) {
+		t.Fatalf("forward sync with a fresh block not caught up")
+	}
+
+	tracker.mu.Lock()
+	tracker.lastSyncedAt = time.Now().Add(-2 * time.Minute)
+	tracker.mu.Unlock()
+	if tracker.CaughtUp(time.Minute) {
+		t.Fatalf("stalled forward sync caught up")
+	}
+	tracker.MarkBlock(11, true)
+	if !tracker.CaughtUp(time.Minute) {
+		t.Fatalf("resumed forward sync not caught up")
+	}
+
+	// a gap that failed to sync stays remaining
+	tracker.SetGaps([]Range{{Start: 1, End: 5}})
+	if tracker.CaughtUp(time.Minute) {
+		t.Fatalf("caught up with a gap left")
+	}
+
+	parallel := NewTracker(4, 1)
+	parallel.SetPhase(PhaseParallelGapTipSync)
+	parallel.SetGaps([]Range{{Start: 1, End: 5}})
+	parallel.MarkBlock(100, true)
+	if parallel.CaughtUp(time.Minute) {
+		t.Fatalf("parallel sync caught up before its gaps")
+	}
+	parallel.CompleteGap(1, 5)
+	if !parallel.CaughtUp(time.Minute) {
+		t.Fatalf("parallel sync with gaps done not caught up")
 	}
 }

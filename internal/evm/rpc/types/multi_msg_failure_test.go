@@ -148,3 +148,35 @@ func firstEthLogTxIndexAfter(t *testing.T, results []*abci.ExecTxResult, after i
 	t.Fatalf("no EVM logs after tx %d", after)
 	return 0
 }
+
+func TestFailedMsgIndex(t *testing.T) {
+	results, err := mainnetfx.BlockResults(mainnetfx.HeightMultiMsgFailure)
+	if err != nil {
+		t.Fatalf("BlockResults: %v", err)
+	}
+	for txIndex, want := range map[int]int{2: 0, 5: 0} {
+		if got, ok := FailedMsgIndex(results.TxResults[txIndex]); !ok || got != want {
+			t.Fatalf("tx %d: FailedMsgIndex = %d %v, want %d", txIndex, got, ok, want)
+		}
+	}
+	for _, txIndex := range []int{0, 4, 7} {
+		if _, ok := FailedMsgIndex(results.TxResults[txIndex]); ok {
+			t.Fatalf("tx %d succeeded", txIndex)
+		}
+	}
+	if _, ok := FailedMsgIndex(nil); ok {
+		t.Fatalf("nil result")
+	}
+	ante := &abci.ExecTxResult{Code: 5, Codespace: "sdk", Log: "insufficient funds"}
+	if _, ok := FailedMsgIndex(ante); ok {
+		t.Fatalf("ante-failed tx")
+	}
+	unnamed := &abci.ExecTxResult{Code: 11, Codespace: "sdk", Log: "out of gas", Events: []abci.Event{{Type: "fee"}}}
+	if got, ok := FailedMsgIndex(unnamed); !ok || got != -1 {
+		t.Fatalf("unnamed failure: %d %v", got, ok)
+	}
+	later := &abci.ExecTxResult{Code: 3, Codespace: "evm", Log: "failed to execute message; message index: 2: {}", Events: []abci.Event{{Type: "fee"}}}
+	if got, ok := FailedMsgIndex(later); !ok || got != 2 {
+		t.Fatalf("message 2: %d %v", got, ok)
+	}
+}

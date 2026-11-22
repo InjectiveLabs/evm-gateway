@@ -180,7 +180,7 @@ func (s *Syncer) runParallelTipAndGaps(ctx context.Context, gaps []BlockRange, h
 	tipStart := head + 1
 	s.logger.Info("starting parallel gap and tip sync", "head", head, "tip_start", tipStart, "gaps", len(gaps))
 	if s.status != nil {
-		s.status.SetPhase("parallel_gap_tip_sync")
+		s.status.SetPhase(syncstatus.PhaseParallelGapTipSync)
 		s.status.StartSegment("forward", tipStart, nil)
 	}
 
@@ -246,7 +246,7 @@ func (s *Syncer) syncGaps(ctx context.Context, gaps []BlockRange, parallel bool)
 
 func (s *Syncer) runForwardSync(ctx context.Context, start int64, manageStatus bool) error {
 	if manageStatus && s.status != nil {
-		s.status.SetPhase("forward_sync")
+		s.status.SetPhase(syncstatus.PhaseForwardSync)
 		s.status.StartSegment("forward", start, nil)
 	}
 

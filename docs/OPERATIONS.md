@@ -44,6 +44,8 @@ Set `WEB3INJ_PARALLEL_SYNC_TIP_AND_GAPS=false` to keep the legacy behavior: the 
 
 `WEB3INJ_COMET_RPC` is the primary CometBFT endpoint used for chain reads, block fetching, sync, live fallbacks, and subscriptions.
 
+Tx lookups by hash or by block and index that miss the indexer fall back to the Comet tx index (`TxSearch`) only while the indexer is not caught up (initial gap sync running or a gap left unsynced, sync disabled, or no block synced in the last 10s). Once it follows the chain tip a miss is final, so polling unknown or pending hashes does not reach Comet, except for the mempool check of `eth_getTransactionByHash`. Txs below `WEB3INJ_EARLIEST_BLOCK` are then not found by hash either; set it to the EVM activation height (or backfill) if they must be served.
+
 Set `WEB3INJ_COMET_BROADCAST_RPC` when transaction broadcasts should go to a different CometBFT node:
 
 ```bash

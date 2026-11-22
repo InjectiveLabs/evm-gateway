@@ -48,7 +48,13 @@ Ref: https://keepachangelog.com/en/1.1.0/
 * (rpc) \#16 When a later message of a multi-message Cosmos tx failed, the parsed result of message 0 took the failed message's hash.
 * (rpc) \#16 Log `transactionIndex` counts every Ethereum tx of a failed Cosmos tx that the gateway exposes, decoded from the block txs, instead of inferring the count from the error log. Logs after a failed multi-message tx had a `transactionIndex` lower than their receipt's.
 * (indexer) \#16 Block sync stops handling fetched blocks as soon as its context is canceled. A block already fetched could still be indexed and published as a new tip after shutdown began, and a cancellation that closed the block stream was logged as `forward sync stopped` instead of returned.
+* (debug) \#16 Traces of failed multi-message Cosmos txs follow what ran on chain. Baseapp runs the messages in order, stops at the one that fails and reverts all of them. `debug_traceTransaction` and block trace entries now report an error for messages that never executed (`was not executed: message N of its Cosmos tx failed before it`) or that executed and were reverted (`was reverted: …`), instead of a successful frame for a tx whose receipt has status `0x0` (mainnet 185519530, `0x02826641…`). The failed message is replayed after the messages that ran before it, and no trace replays the reverted or skipped messages as predecessors, so they cannot change the state seen by later txs.
+* (rpc) \#16 Live block, tx and receipt paths filter ante-failed txs with the block results they already fetched instead of requesting them again. A failed second request exposed the ante-failed txs and the extra request doubled the `BlockResults` load.
 * (cli) \#16 `--env-file` is now applied: the file is loaded before options take their defaults from the environment. Previously only `.env` in the working directory was read. An explicit file that does not exist is an error.
+
+### Improvements
+
+* (rpc) \#16 Tx lookups by hash or by block and index no longer fall back to the Comet tx index (`TxSearch`) when the indexer is caught up: initial gap sync done with no gap left, forward sync running, and a block synced within the last 10s. The indexer miss is then authoritative, so unknown hashes (pending txs polled by wallets, hidden ante-failed txs) cost no Comet request beyond the mempool check of `eth_getTransactionByHash`, and no longer log `fallback to tendermint tx indexer!`. While the indexer is behind, has unsynced gaps or runs with sync disabled, the fallback works as before.
 
 ### Features
 

@@ -3,6 +3,7 @@ package backend
 import (
 	"fmt"
 	"math/big"
+	"time"
 
 	errorsmod "cosmossdk.io/errors"
 	abci "github.com/cometbft/cometbft/abci/types"
@@ -559,6 +560,9 @@ func (b *Backend) GetTxByEthHash(hash common.Hash) (*chaintypes.TxResult, error)
 		if b.syncStatus != nil {
 			b.syncStatus.RecordTxByHashCacheMiss()
 		}
+		if b.indexerCaughtUp() {
+			return nil, fmt.Errorf("ethereum tx %s not found in the indexer", hash.Hex())
+		}
 		b.logger.Debug("tx cache miss; fallback to live query", "tx", hash.Hex(), "error", err.Error())
 	}
 	if b.syncStatus != nil {
@@ -578,6 +582,20 @@ func (b *Backend) GetTxByEthHash(hash common.Hash) (*chaintypes.TxResult, error)
 		return nil, errorsmod.Wrapf(err, "GetTxByEthHash %s", hash.Hex())
 	}
 	return txResult, nil
+}
+
+// indexerCaughtUpMaxIdle is how long the indexer may go without syncing a
+// block and still count as following the chain tip. Forward sync polls for
+// new blocks every second at most.
+const indexerCaughtUpMaxIdle = 10 * time.Second
+
+// indexerCaughtUp reports whether an indexer miss is authoritative: the
+// indexer has every block from the earliest height and follows the chain tip,
+// so the Comet tx index cannot know a tx the indexer does not. A tx included
+// in a block that is not indexed yet resolves once the block is indexed,
+// within a block time.
+func (b *Backend) indexerCaughtUp() bool {
+	return b.indexer != nil && b.syncStatus.CaughtUp(indexerCaughtUpMaxIdle)
 }
 
 // GetTxByTxIndex uses `/tx_query` to find transaction by tx index of valid ethereum txs
@@ -600,6 +618,9 @@ func (b *Backend) GetTxByTxIndex(height int64, index uint) (*chaintypes.TxResult
 		}
 		if b.syncStatus != nil {
 			b.syncStatus.RecordTxByIndexCacheMiss()
+		}
+		if b.indexerCaughtUp() {
+			return nil, fmt.Errorf("ethereum tx not found in the indexer: block %d, index %d", height, index)
 		}
 		b.logger.Debug("tx-index cache miss; fallback to live query", "height", height, "index", index, "error", err.Error())
 	}

@@ -52,6 +52,12 @@ type Snapshot struct {
 	Cache             CacheStats `json:"cache"`
 }
 
+// Sync phases reported by the indexer syncer.
+const (
+	PhaseForwardSync        = "forward_sync"
+	PhaseParallelGapTipSync = "parallel_gap_tip_sync"
+)
+
 type Tracker struct {
 	threads int
 
@@ -204,6 +210,24 @@ func (t *Tracker) MarkBlock(height int64, indexed bool) {
 	}
 
 	t.updatedAt = now
+}
+
+// CaughtUp reports whether the indexer follows the chain tip: the initial
+// gap sync is done with no gap left unsynced, forward sync runs, and a block
+// was synced within maxIdle. A nil tracker is never caught up.
+func (t *Tracker) CaughtUp(maxIdle time.Duration) bool {
+	if t == nil {
+		return false
+	}
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if t.phase != PhaseForwardSync && t.phase != PhaseParallelGapTipSync {
+		return false
+	}
+	if t.gapsRemaining > 0 || t.lastSyncedAt.IsZero() {
+		return false
+	}
+	return time.Since(t.lastSyncedAt) <= maxIdle
 }
 
 func (t *Tracker) RecordTxByHashCacheHit() {

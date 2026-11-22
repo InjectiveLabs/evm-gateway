@@ -10,6 +10,7 @@ import (
 
 	rpcmocks "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/backend/mocks"
 	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
+	"github.com/InjectiveLabs/evm-gateway/internal/syncstatus"
 	"github.com/InjectiveLabs/evm-gateway/internal/testutil/mainnetfx"
 )
 
@@ -91,26 +92,43 @@ func TestWarmCacheServesReadsWithoutBackendRequests(t *testing.T) {
 				t.Fatalf("warm cache made comet requests: %v", comet.calls)
 			}
 
-			for _, height := range heights {
-				// hidden ante-failed txs resolve to null
-				for _, hidden := range mainnetfx.AnteFailedTxs[height] {
-					if tx, err := b.GetTransactionByHash(hidden.Hash); err != nil || tx != nil {
-						t.Fatalf("ante-failed GetTransactionByHash(%s): %v %v", hidden.Hash.Hex(), tx, err)
-					}
-					if receipt, err := b.GetTransactionReceipt(hidden.Hash); err != nil || receipt != nil {
-						t.Fatalf("ante-failed GetTransactionReceipt(%s): %v %v", hidden.Hash.Hex(), receipt, err)
-					}
-				}
-			}
-			// Hidden txs are not indexed, so their lookups miss the cache and
-			// fall back to the Comet tx index and the mempool like any unknown
-			// hash: two TxSearch requests and one UnconfirmedTxs per hash.
+			// Hidden txs are not indexed, so their lookups miss the cache.
+			// While the indexer is not caught up they fall back to the Comet
+			// tx index and the mempool like any unknown hash: two TxSearch
+			// requests and one UnconfirmedTxs per hash. Once it follows the
+			// chain tip the miss is authoritative and only the mempool is
+			// checked, for tx-by-hash.
 			hidden := 0
 			for _, height := range heights {
 				hidden += len(mainnetfx.AnteFailedTxs[height])
 			}
+			lookupHidden := func() {
+				t.Helper()
+				for _, height := range heights {
+					for _, tx := range mainnetfx.AnteFailedTxs[height] {
+						if got, err := b.GetTransactionByHash(tx.Hash); err != nil || got != nil {
+							t.Fatalf("ante-failed GetTransactionByHash(%s): %v %v", tx.Hash.Hex(), got, err)
+						}
+						if receipt, err := b.GetTransactionReceipt(tx.Hash); err != nil || receipt != nil {
+							t.Fatalf("ante-failed GetTransactionReceipt(%s): %v %v", tx.Hash.Hex(), receipt, err)
+						}
+					}
+				}
+			}
+
+			lookupHidden()
 			if comet.calls["TxSearch"] != 2*hidden || comet.calls["UnconfirmedTxs"] != hidden || len(comet.calls) != 2 {
 				t.Fatalf("hidden tx lookups made comet requests %v for %d hashes", comet.calls, hidden)
+			}
+
+			tracker := syncstatus.NewTracker(1, 1)
+			tracker.SetPhase(syncstatus.PhaseForwardSync)
+			tracker.MarkBlock(heights[len(heights)-1], true)
+			b.syncStatus = tracker
+			comet.calls = make(map[string]int)
+			lookupHidden()
+			if comet.calls["UnconfirmedTxs"] != hidden || len(comet.calls) != 1 {
+				t.Fatalf("caught-up indexer: hidden tx lookups made comet requests %v for %d hashes", comet.calls, hidden)
 			}
 		})
 	}

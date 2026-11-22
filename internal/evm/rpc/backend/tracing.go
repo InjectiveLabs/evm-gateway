@@ -112,19 +112,30 @@ func (b *Backend) traceTransaction(hash common.Hash, config *rpctypes.TraceConfi
 	}
 
 	txResults := b.blockTxResultsForTrace(block.Block.Height)
-	if int(transaction.TxIndex) < len(txResults) && rpctypes.TxAnteFailed(txResults[transaction.TxIndex]) {
+	var txResult *abci.ExecTxResult
+	if int(transaction.TxIndex) < len(txResults) {
+		txResult = txResults[transaction.TxIndex]
+	}
+	if rpctypes.TxAnteFailed(txResult) {
 		return nil, fmt.Errorf("transaction %s failed in the ante handler in block %d and was not executed", hash.Hex(), block.Block.Height)
 	}
-
-	// Predecessors that failed in the ante handler had no effect on chain, so
-	// the replay must not execute them either.
-	predecessors := b.ethMsgsFromBlock(block.Block, txResults, int(transaction.TxIndex))
 
 	tx, err := b.clientCtx.TxConfig.TxDecoder()(block.Block.Txs[transaction.TxIndex])
 	if err != nil {
 		b.logger.Debug("tx not found", "hash", hash)
 		return nil, err
 	}
+	if int(transaction.MsgIndex) >= len(tx.GetMsgs()) {
+		return nil, fmt.Errorf("message index %d out of bounds in block %d", transaction.MsgIndex, block.Block.Height)
+	}
+	if errMsg := msgTraceError(hash, txResult, int(transaction.MsgIndex), len(tx.GetMsgs())); errMsg != "" {
+		return nil, errors.New(errMsg)
+	}
+
+	// Predecessors replay only what changed the chain state: Cosmos txs that
+	// failed in the ante handler and messages of failed Cosmos txs that were
+	// reverted or never executed are left out.
+	predecessors := inBlockReplays(b.tracePlan(block.Block, txResults, int(transaction.TxIndex)))
 
 	// add predecessor messages in current cosmos tx
 	for i := 0; i < int(transaction.MsgIndex); i++ {
@@ -141,27 +152,7 @@ func (b *Backend) traceTransaction(hash common.Hash, config *rpctypes.TraceConfi
 		return nil, fmt.Errorf("invalid transaction type %T", tx)
 	}
 
-	traceTxRequest := evmtypes.QueryTraceTxRequest{
-		Msg:             ethMessage,
-		Predecessors:    predecessors,
-		BlockNumber:     block.Block.Height,
-		BlockTime:       block.Block.Time,
-		BlockHash:       common.Bytes2Hex(block.BlockID.Hash),
-		ProposerAddress: sdk.ConsAddress(block.Block.ProposerAddress),
-		ChainId:         traceChainID(b.ChainID().ToInt(), ethMessage),
-	}
-
-	if config != nil {
-		traceTxRequest.TraceConfig = b.convertConfig(config)
-	}
-
-	// minus one to get the context of block beginning
-	contextHeight := transaction.Height - 1
-	if contextHeight < 1 {
-		// 0 is a special value in `ContextWithHeight`
-		contextHeight = 1
-	}
-	traceResult, err := b.queryClient.TraceTx(b.contextWithHeight(contextHeight), &traceTxRequest)
+	traceResult, err := b.traceTx(block, ethMessage, predecessors, config)
 	if err != nil {
 		return nil, err
 	}
@@ -180,6 +171,37 @@ func (b *Backend) traceTransaction(hash common.Hash, config *rpctypes.TraceConfi
 	}
 
 	return decodedResult, nil
+}
+
+// traceTx traces msg on the state at the beginning of block after replaying
+// predecessors.
+func (b *Backend) traceTx(
+	block *cmrpctypes.ResultBlock,
+	msg *evmtypes.MsgEthereumTx,
+	predecessors []*evmtypes.MsgEthereumTx,
+	config *rpctypes.TraceConfig,
+) (*evmtypes.QueryTraceTxResponse, error) {
+	traceTxRequest := evmtypes.QueryTraceTxRequest{
+		Msg:             msg,
+		Predecessors:    predecessors,
+		BlockNumber:     block.Block.Height,
+		BlockTime:       block.Block.Time,
+		BlockHash:       common.Bytes2Hex(block.BlockID.Hash),
+		ProposerAddress: sdk.ConsAddress(block.Block.ProposerAddress),
+		ChainId:         traceChainID(b.ChainID().ToInt(), msg),
+	}
+
+	if config != nil {
+		traceTxRequest.TraceConfig = b.convertConfig(config)
+	}
+
+	// minus one to get the context of block beginning
+	contextHeight := block.Block.Height - 1
+	if contextHeight < 1 {
+		// 0 is a special value in `ContextWithHeight`
+		contextHeight = 1
+	}
+	return b.queryClient.TraceTx(b.contextWithHeight(contextHeight), &traceTxRequest)
 }
 
 func (b *Backend) convertConfig(config *rpctypes.TraceConfig) *evmtypes.TraceConfig {
@@ -252,8 +274,8 @@ func (b *Backend) traceBlock(height rpctypes.BlockNumber,
 		cacheable = true
 	}
 
-	txsMessages, txHashes := b.traceBlockEthereumTransactions(block, b.blockTxResultsForTrace(block.Block.Height))
-	if len(txsMessages) == 0 {
+	plan := b.tracePlan(block.Block, b.blockTxResultsForTrace(block.Block.Height), len(block.Block.Txs))
+	if len(plan) == 0 {
 		decodedResults := b.alignTraceBlockResultsWithVisibleTransactions([]*rpctypes.TxTraceResult{}, cacheHeight)
 		if b.indexer != nil && cacheable {
 			cacheData, err := sonic.Marshal(decodedResults)
@@ -267,28 +289,8 @@ func (b *Backend) traceBlock(height rpctypes.BlockNumber,
 		return decodedResults, nil
 	}
 
-	ctxWithHeight := b.contextWithHeight(traceBlockContextHeight(height, block))
-
-	traceBlockRequest := &evmtypes.QueryTraceBlockRequest{
-		Txs:             txsMessages,
-		TraceConfig:     b.convertConfig(config),
-		BlockNumber:     block.Block.Height,
-		BlockTime:       block.Block.Time,
-		BlockHash:       common.Bytes2Hex(block.BlockID.Hash),
-		ProposerAddress: sdk.ConsAddress(block.Block.ProposerAddress),
-		ChainId:         traceChainID(b.ChainID().ToInt(), txsMessages...),
-	}
-
-	res, err := b.queryClient.TraceBlock(ctxWithHeight, traceBlockRequest)
+	decodedResults, err := b.traceBlockPlan(height, block, plan, config)
 	if err != nil {
-		return nil, err
-	}
-
-	decodedResults := make([]*rpctypes.TxTraceResult, len(txsMessages))
-	if err := sonic.Unmarshal(res.Data, &decodedResults); err != nil {
-		return nil, err
-	}
-	if err := attachTraceBlockTransactionHashes(decodedResults, txHashes); err != nil {
 		return nil, err
 	}
 	decodedResults = b.alignTraceBlockResultsWithVisibleTransactions(decodedResults, cacheHeight)
@@ -303,6 +305,85 @@ func (b *Backend) traceBlock(height rpctypes.BlockNumber,
 	}
 
 	return decodedResults, nil
+}
+
+// traceBlockPlan traces the entries of plan and returns one result per entry,
+// in order. The in-block entries are replayed in sequence by one block trace;
+// failed messages that ran after other messages of their Cosmos tx are traced
+// on their own; untraceable entries get their error.
+func (b *Backend) traceBlockPlan(
+	height rpctypes.BlockNumber,
+	block *cmrpctypes.ResultBlock,
+	plan []traceEntry,
+	config *rpctypes.TraceConfig,
+) ([]*rpctypes.TxTraceResult, error) {
+	results := make([]*rpctypes.TxTraceResult, len(plan))
+
+	inBlock := inBlockReplays(plan)
+	if len(inBlock) > 0 {
+		traceBlockRequest := &evmtypes.QueryTraceBlockRequest{
+			Txs:             inBlock,
+			TraceConfig:     b.convertConfig(config),
+			BlockNumber:     block.Block.Height,
+			BlockTime:       block.Block.Time,
+			BlockHash:       common.Bytes2Hex(block.BlockID.Hash),
+			ProposerAddress: sdk.ConsAddress(block.Block.ProposerAddress),
+			ChainId:         traceChainID(b.ChainID().ToInt(), inBlock...),
+		}
+		res, err := b.queryClient.TraceBlock(b.contextWithHeight(traceBlockContextHeight(height, block)), traceBlockRequest)
+		if err != nil {
+			return nil, err
+		}
+		blockResults := make([]*rpctypes.TxTraceResult, len(inBlock))
+		if err := sonic.Unmarshal(res.Data, &blockResults); err != nil {
+			return nil, err
+		}
+		if len(blockResults) != len(inBlock) {
+			return nil, fmt.Errorf("trace result count %d does not match Ethereum transaction count %d", len(blockResults), len(inBlock))
+		}
+		next := 0
+		for i, entry := range plan {
+			if entry.replay == traceInBlock {
+				results[i] = blockResults[next]
+				next++
+			}
+		}
+	}
+
+	for i, entry := range plan {
+		switch entry.replay {
+		case traceNone:
+			results[i] = &rpctypes.TxTraceResult{Error: entry.err}
+		case traceAlone:
+			// what changed the chain state before this Cosmos tx, then
+			// the messages that ran before it in the Cosmos tx
+			var predecessors []*evmtypes.MsgEthereumTx
+			for _, prev := range plan[:i] {
+				if prev.replay == traceInBlock && prev.txIndex < entry.txIndex {
+					predecessors = append(predecessors, prev.msg)
+				}
+			}
+			predecessors = append(predecessors, entry.sameTx...)
+			res, err := b.traceTx(block, entry.msg, predecessors, config)
+			if err != nil {
+				return nil, err
+			}
+			var decoded interface{}
+			if err := sonic.Unmarshal(res.Data, &decoded); err != nil {
+				return nil, err
+			}
+			results[i] = &rpctypes.TxTraceResult{Result: decoded}
+		}
+	}
+
+	hashes := make([]common.Hash, len(plan))
+	for i, entry := range plan {
+		hashes[i] = entry.msg.Hash()
+	}
+	if err := attachTraceBlockTransactionHashes(results, hashes); err != nil {
+		return nil, err
+	}
+	return results, nil
 }
 
 // traceBlockEthereumTransactions returns the Ethereum messages of a block to

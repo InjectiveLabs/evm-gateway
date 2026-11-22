@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math/big"
+	"strconv"
 	"strings"
 
 	sdkmath "cosmossdk.io/math"
@@ -303,4 +304,27 @@ func TxAnteFailed(res *abci.ExecTxResult) bool {
 		return false
 	}
 	return !strings.Contains(res.Log, MsgExecutionFailedLog)
+}
+
+// FailedMsgIndex reports the message that failed a Cosmos tx after its ante
+// handler succeeded. ok is false when res is nil, succeeded or failed in the
+// ante handler. index is the message named by the baseapp log, or -1 when the
+// log names none (e.g. a panic recovered during message execution or the
+// block gas limit).
+//
+// Baseapp discards the state of all messages of such a tx: messages before
+// index executed and were reverted, messages after it never executed.
+func FailedMsgIndex(res *abci.ExecTxResult) (index int, ok bool) {
+	if res == nil || res.Code == abci.CodeTypeOK || TxAnteFailed(res) {
+		return 0, false
+	}
+	parts := msgErrJSONRx.FindStringSubmatch(res.Log)
+	if len(parts) != 3 {
+		return -1, true
+	}
+	index, err := strconv.Atoi(parts[1])
+	if err != nil || index < 0 {
+		return -1, true
+	}
+	return index, true
 }
