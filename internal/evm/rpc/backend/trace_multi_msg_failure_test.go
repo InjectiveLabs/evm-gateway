@@ -53,17 +53,40 @@ func traceBlockMatcher(height int64, txs []common.Hash) interface{} {
 	})
 }
 
-func assertTraceError(t *testing.T, label string, got interface{}, err error, want string) {
+// assertFailedFrame checks that got is the synthetic failed callTracer frame
+// of the visible tx hash, built from its tx and receipt as b serves them.
+func assertFailedFrame(t *testing.T, b *Backend, label string, hash common.Hash, got interface{}, err error, wantErr string) {
 	t.Helper()
-	if err == nil || !strings.Contains(err.Error(), want) {
-		t.Fatalf("%s: expected error containing %q, got %v %v", label, want, got, err)
+	if err != nil {
+		t.Fatalf("%s: %v", label, err)
+	}
+	frame := frameMap(t, got)
+	if errMsg, _ := frame["error"].(string); !strings.Contains(errMsg, wantErr) {
+		t.Fatalf("%s: expected frame error containing %q, got %v", label, wantErr, frame)
+	}
+	tx, txErr := b.GetTransactionByHash(hash)
+	receipt, receiptErr := b.GetTransactionReceipt(hash)
+	if txErr != nil || receiptErr != nil || tx == nil || receipt == nil {
+		t.Fatalf("%s: tx %v %v receipt %v %v", label, tx, txErr, receipt, receiptErr)
+	}
+	want := frameMap(t, map[string]interface{}{
+		"from": tx.From, "to": tx.To, "gas": tx.Gas, "gasUsed": receipt["gasUsed"], "input": tx.Input, "value": tx.Value,
+	})
+	for key, value := range want {
+		if frame[key] != value {
+			t.Fatalf("%s: frame %s = %v, want %v (frame %v)", label, key, frame[key], value, frame)
+		}
+	}
+	if frame["type"] != "CALL" || frame["calls"] != nil {
+		t.Fatalf("%s: unexpected frame %v", label, frame)
 	}
 }
 
 // TestTraceTransactionMultiMsgFailure covers the mainnet report: message 0 of
 // the Cosmos tx reverted and message 1 never ran. Message 0 replays and
-// reproduces its failure, message 1 is not traceable (a mock call would panic
-// on any unexpected TraceTx), and later txs do not replay message 1.
+// reproduces its failure, message 1 gets a synthetic failed frame (a mock call
+// would panic on any unexpected TraceTx), and later txs do not replay
+// message 1.
 func TestTraceTransactionMultiMsgFailure(t *testing.T) {
 	height := mainnetfx.HeightMultiMsgFailure
 	before, after := multiMsgFixtureHashes(t)
@@ -88,15 +111,15 @@ func TestTraceTransactionMultiMsgFailure(t *testing.T) {
 	}
 
 	got, err := b.TraceTransaction(mainnetfx.TxMultiMsgUnexecuted, callTracerConfig)
-	assertTraceError(t, "unexecuted message", got, err, "was not executed: message 0 of its Cosmos tx failed")
+	assertFailedFrame(t, b, "unexecuted message", mainnetfx.TxMultiMsgUnexecuted, got, err, "not executed: message 0 of the cosmos transaction failed before it")
 	if cached, err := kv.GetTraceTransaction(mainnetfx.TxMultiMsgUnexecuted, callTracerConfig); err == nil {
-		t.Fatalf("error must not be cached as a trace: %s", cached)
+		t.Fatalf("synthetic frame must not be cached as a tx trace: %s", cached)
 	}
 	query.AssertExpectations(t)
 }
 
 // TestTraceBlockMultiMsgFailure replays the block without the message that
-// never ran and reports an error entry for it, also from the cached block
+// never ran and gives it a synthetic failed frame, also from the cached block
 // trace.
 func TestTraceBlockMultiMsgFailure(t *testing.T) {
 	height := mainnetfx.HeightMultiMsgFailure
@@ -132,9 +155,10 @@ func TestTraceBlockMultiMsgFailure(t *testing.T) {
 				}
 			}
 			skipped := byHash[mainnetfx.TxMultiMsgUnexecuted]
-			if skipped == nil || skipped.Result != nil || !strings.Contains(skipped.Error, "was not executed") {
+			if skipped == nil || skipped.Error != "" {
 				t.Fatalf("unexecuted entry: %#v", skipped)
 			}
+			assertFailedFrame(t, b, "unexecuted entry", mainnetfx.TxMultiMsgUnexecuted, skipped.Result, nil, "not executed: message 0")
 
 			// served from the cached block trace, without the chain
 			cached := newFixtureBackend(t, fixtureBackendOptions{virtual: virtual, indexer: kv, comet: newFixtureComet(t), query: &rpcmocks.EVMQueryClient{}})
@@ -144,7 +168,7 @@ func TestTraceBlockMultiMsgFailure(t *testing.T) {
 			}
 			assertHashList(t, "cached trace hashes", traceHashes(again), visible)
 			trace, err := cached.TraceTransaction(mainnetfx.TxMultiMsgUnexecuted, callTracerConfig)
-			assertTraceError(t, "cached unexecuted message", trace, err, "was not executed")
+			assertFailedFrame(t, cached, "cached unexecuted message", mainnetfx.TxMultiMsgUnexecuted, trace, err, "not executed: message 0")
 			trace, err = cached.TraceTransaction(after, callTracerConfig)
 			if err != nil || traceTag(t, trace) != "c" {
 				t.Fatalf("cached TraceTransaction(after): %v %v", trace, err)
@@ -155,8 +179,9 @@ func TestTraceBlockMultiMsgFailure(t *testing.T) {
 
 // TestTraceMultiMsgFailureOfLaterMessage covers a Cosmos tx whose second
 // message failed: the first one executed and was reverted with it. The first
-// is not traceable, debug_traceTransaction replays the second after the first,
-// and no other trace replays either of them.
+// gets a synthetic failed frame, the second is replayed alone after the first
+// (by debug_traceTransaction and for its block entry), and no other trace
+// replays either of them.
 func TestTraceMultiMsgFailureOfLaterMessage(t *testing.T) {
 	height := mainnetfx.HeightMultiMsgFailure
 	before, after := multiMsgFixtureHashes(t)
@@ -177,7 +202,7 @@ func TestTraceMultiMsgFailureOfLaterMessage(t *testing.T) {
 
 		b := newFixtureBackend(t, fixtureBackendOptions{indexer: kv, comet: comet, query: query})
 		got, err := b.TraceTransaction(first, callTracerConfig)
-		assertTraceError(t, "reverted message", got, err, "was reverted: message 1 of its Cosmos tx failed")
+		assertFailedFrame(t, b, "reverted message", first, got, err, "reverted: message 1 of the cosmos transaction failed")
 		for hash, want := range map[common.Hash]string{second: "second", after: "after"} {
 			got, err := b.TraceTransaction(hash, callTracerConfig)
 			if err != nil || traceTag(t, got) != want {
@@ -196,6 +221,8 @@ func TestTraceMultiMsgFailureOfLaterMessage(t *testing.T) {
 		query := &rpcmocks.EVMQueryClient{}
 		query.On("TraceBlock", mock.Anything, traceBlockMatcher(height, []common.Hash{before, after})).
 			Return(traceBlockResponse(t, 2), nil).Once()
+		query.On("TraceTx", mock.Anything, traceTxMatcher(height, second, []common.Hash{before, first})).
+			Return(traceTxResponse("second"), nil).Once()
 
 		b := newFixtureBackend(t, fixtureBackendOptions{indexer: kv, comet: comet, query: query})
 		got, err := b.TraceBlock(rpctypes.BlockNumber(height), callTracerConfig, nil)
@@ -207,18 +234,20 @@ func TestTraceMultiMsgFailureOfLaterMessage(t *testing.T) {
 		if traceTag(t, got[0].Result) != "a" || traceTag(t, got[3].Result) != "b" {
 			t.Fatalf("unexpected frames: %#v", got)
 		}
-		if got[1].Result != nil || !strings.Contains(got[1].Error, "was reverted") {
+		if got[1].Error != "" {
 			t.Fatalf("reverted entry: %#v", got[1])
 		}
-		// replaying it in sequence would need the reverted message first
-		if got[2].Result != nil || !strings.Contains(got[2].Error, "trace it with debug_traceTransaction") {
+		assertFailedFrame(t, b, "reverted entry", first, got[1].Result, nil, "reverted: message 1")
+		// replayed alone, on top of the reverted message, like debug_traceTransaction
+		if got[2].Error != "" || traceTag(t, got[2].Result) != "second" {
 			t.Fatalf("failed entry: %#v", got[2])
 		}
 	})
 }
 
 // TestTraceMultiMsgFailureWithoutMessageIndex covers a failed Cosmos tx with
-// several messages whose log names no message: none of them is traceable.
+// several messages whose log names no message: none of them is replayed, all
+// get a synthetic failed frame.
 func TestTraceMultiMsgFailureWithoutMessageIndex(t *testing.T) {
 	height := mainnetfx.HeightMultiMsgFailure
 	before, after := multiMsgFixtureHashes(t)
@@ -234,20 +263,25 @@ func TestTraceMultiMsgFailureWithoutMessageIndex(t *testing.T) {
 
 	for _, hash := range []common.Hash{mainnetfx.TxMultiMsgReverted, mainnetfx.TxMultiMsgUnexecuted} {
 		got, err := b.TraceTransaction(hash, callTracerConfig)
-		assertTraceError(t, hash.Hex(), got, err, "does not name the failed message")
+		assertFailedFrame(t, b, hash.Hex(), hash, got, err, "the failed message is unknown")
 	}
 	got, err := b.TraceBlock(rpctypes.BlockNumber(height), callTracerConfig, nil)
 	if err != nil {
 		t.Fatalf("TraceBlock: %v", err)
 	}
 	query.AssertExpectations(t)
-	if len(got) != 4 || got[1].Error == "" || got[2].Error == "" || got[0].Error != "" || got[3].Error != "" {
+	if len(got) != 4 || traceTag(t, got[0].Result) != "a" || traceTag(t, got[3].Result) != "b" {
 		t.Fatalf("unexpected entries: %#v", got)
+	}
+	for _, entry := range got[1:3] {
+		if entry.Error != "" {
+			t.Fatalf("unexpected entry-level error: %#v", entry)
+		}
+		assertFailedFrame(t, b, entry.TxHash.Hex(), entry.TxHash, entry.Result, nil, "the failed message is unknown")
 	}
 }
 
 func TestMsgTraceError(t *testing.T) {
-	hash := common.HexToHash("0x01")
 	failedAt := func(log string) *abci.ExecTxResult {
 		return &abci.ExecTxResult{Code: 3, Codespace: evmtypes.ModuleName, Log: log, Events: []abci.Event{{Type: "fee"}}}
 	}
@@ -265,13 +299,13 @@ func TestMsgTraceError(t *testing.T) {
 		{"no result", nil, 0, 2, ""},
 		{"success", &abci.ExecTxResult{}, 1, 2, ""},
 		{"ante failed", anteFailed, 0, 1, ""},
-		{"before failed", indexed, 0, 3, "was reverted: message 1"},
+		{"before failed", indexed, 0, 3, "reverted: message 1 of the cosmos transaction failed"},
 		{"failed", indexed, 1, 3, ""},
-		{"after failed", indexed, 2, 3, "was not executed: message 1"},
+		{"after failed", indexed, 2, 3, "not executed: message 1 of the cosmos transaction failed before it"},
 		{"single unnamed", unnamed, 0, 1, ""},
-		{"several unnamed", unnamed, 0, 2, "does not name the failed message"},
+		{"several unnamed", unnamed, 0, 2, "the failed message is unknown"},
 	} {
-		got := msgTraceError(hash, tc.res, tc.msgIndex, tc.msgCount)
+		got := msgTraceError(tc.res, tc.msgIndex, tc.msgCount)
 		if (tc.want == "") != (got == "") || !strings.Contains(got, tc.want) {
 			t.Fatalf("%s: got %q want %q", tc.name, got, tc.want)
 		}
