@@ -15,6 +15,15 @@ import (
 
 type BlockIndexStats struct {
 	IndexedEthTxs int64
+	// SkippedAnteFailedEthTxs counts Ethereum txs whose Cosmos tx failed in the
+	// ante handler and are therefore not exposed.
+	SkippedAnteFailedEthTxs int64
+	// SkippedDuplicateEthTxs counts repeated occurrences of a tx hash within
+	// the same block.
+	SkippedDuplicateEthTxs int64
+	// ReassignedTxHashes counts tx hashes whose records were owned by another
+	// height before this block claimed them.
+	ReassignedTxHashes int64
 }
 
 // TxIndexer captures the indexing methods required by the RPC/backend layers.

@@ -10,13 +10,15 @@ import (
 )
 
 func main() {
+	if err := loadEnv(os.Args); err != nil {
+		fail(err)
+	}
 	if err := newGatewayCLI().Run(os.Args); err != nil {
 		log.Fatalln(err)
 	}
 }
 
 func newGatewayCLI() *cli.Cli {
-	readEnv()
 	defaults := config.DefaultConfig()
 
 	app := cli.App(
@@ -49,6 +51,19 @@ func newGatewayCLI() *cli.Cli {
 		cmd.Action = func() {
 			runOrFail(resyncRunner(opts, *targets))
 		}
+	})
+
+	app.Command("migrate", "Run one-off migrations of the local indexer state.", func(cmd *cli.Cmd) {
+		cmd.Command(
+			"ante-failed-txs",
+			"Remove Ethereum txs indexed from Cosmos txs that failed in the ante handler and repair affected heights.",
+			func(sub *cli.Cmd) {
+				migrateOpts := initMigrateAnteFailedOptions(sub)
+				sub.Action = func() {
+					runOrFail(migrateAnteFailedRunner(opts, migrateOpts.toOptions()))
+				}
+			},
+		)
 	})
 
 	return app

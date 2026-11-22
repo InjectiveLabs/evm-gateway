@@ -9,6 +9,7 @@ import (
 	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
 	evmtypes "github.com/InjectiveLabs/sdk-go/chain/evm/types"
 	"github.com/bytedance/sonic"
+	abci "github.com/cometbft/cometbft/abci/types"
 	cmrpctypes "github.com/cometbft/cometbft/rpc/core/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/ethereum/go-ethereum/common"
@@ -48,18 +49,10 @@ func (b *Backend) normalizeTraceTimeout(config *rpctypes.TraceConfig) *rpctypes.
 }
 
 // TraceTransaction returns the structured logs created during the execution of EVM
-// and returns them as a JSON object. A tx that failed in the ante handler was
-// never executed: instead of the replay error, it gets a trace matching its
-// failed receipt.
+// and returns them as a JSON object. Txs that failed in the ante handler are
+// not Ethereum txs (their nonce was not consumed) and are not traceable.
 func (b *Backend) TraceTransaction(hash common.Hash, config *rpctypes.TraceConfig) (interface{}, error) {
-	config = b.normalizeTraceTimeout(config)
-	result, err := b.traceTransaction(hash, config)
-	if err != nil {
-		if trace, ok := b.anteFailedTxTrace(hash, config); ok {
-			return trace, nil
-		}
-	}
-	return result, err
+	return b.traceTransaction(hash, b.normalizeTraceTimeout(config))
 }
 
 func (b *Backend) traceTransaction(hash common.Hash, config *rpctypes.TraceConfig) (interface{}, error) {
@@ -113,26 +106,18 @@ func (b *Backend) traceTransaction(hash common.Hash, config *rpctypes.TraceConfi
 	}
 
 	// check tx index is not out of bound
-	if uint32(len(block.Block.Txs)) < transaction.TxIndex {
+	if uint32(len(block.Block.Txs)) <= transaction.TxIndex {
 		b.logger.Debug("tx index out of bounds", "index", transaction.TxIndex, "hash", hash.String(), "height", block.Block.Height)
 		return nil, fmt.Errorf("transaction not included in block %v", block.Block.Height)
 	}
 
-	var predecessors []*evmtypes.MsgEthereumTx
-	for _, txBz := range block.Block.Txs[:transaction.TxIndex] {
-		tx, err := b.clientCtx.TxConfig.TxDecoder()(txBz)
-		if err != nil {
-			b.logger.Debug("failed to decode transaction in block", "height", block.Block.Height, "error", err.Error())
-			continue
-		}
-		for _, msg := range tx.GetMsgs() {
-			ethMsg, ok := msg.(*evmtypes.MsgEthereumTx)
-			if !ok {
-				continue
-			}
-
-			predecessors = append(predecessors, ethMsg)
-		}
+	txResults := b.blockTxResultsForTrace(block.Block.Height)
+	var txResult *abci.ExecTxResult
+	if int(transaction.TxIndex) < len(txResults) {
+		txResult = txResults[transaction.TxIndex]
+	}
+	if rpctypes.TxAnteFailed(txResult) {
+		return nil, fmt.Errorf("transaction %s failed in the ante handler in block %d and was not executed", hash.Hex(), block.Block.Height)
 	}
 
 	tx, err := b.clientCtx.TxConfig.TxDecoder()(block.Block.Txs[transaction.TxIndex])
@@ -140,6 +125,17 @@ func (b *Backend) traceTransaction(hash common.Hash, config *rpctypes.TraceConfi
 		b.logger.Debug("tx not found", "hash", hash)
 		return nil, err
 	}
+	if int(transaction.MsgIndex) >= len(tx.GetMsgs()) {
+		return nil, fmt.Errorf("message index %d out of bounds in block %d", transaction.MsgIndex, block.Block.Height)
+	}
+	if errMsg := msgTraceError(hash, txResult, int(transaction.MsgIndex), len(tx.GetMsgs())); errMsg != "" {
+		return nil, errors.New(errMsg)
+	}
+
+	// Predecessors replay only what changed the chain state: Cosmos txs that
+	// failed in the ante handler and messages of failed Cosmos txs that were
+	// reverted or never executed are left out.
+	predecessors := replayedMsgs(b.traceMsgs(block.Block, txResults, int(transaction.TxIndex)))
 
 	// add predecessor messages in current cosmos tx
 	for i := 0; i < int(transaction.MsgIndex); i++ {
@@ -210,20 +206,13 @@ func (b *Backend) convertConfig(config *rpctypes.TraceConfig) *evmtypes.TraceCon
 
 // TraceBlock configures a new tracer according to the provided configuration, and
 // executes all the transactions contained within. The return value will be one item
-// per transaction, dependent on the requested tracer. Entries of txs that
-// failed in the ante handler carry a trace matching their failed receipt
-// instead of the replay error.
+// per visible transaction, dependent on the requested tracer. Txs that failed
+// in the ante handler are neither replayed nor listed.
 func (b *Backend) TraceBlock(height rpctypes.BlockNumber,
 	config *rpctypes.TraceConfig,
 	block *cmrpctypes.ResultBlock,
 ) ([]*rpctypes.TxTraceResult, error) {
-	config = b.normalizeTraceTimeout(config)
-	results, err := b.traceBlock(height, config, block)
-	if err != nil {
-		return nil, err
-	}
-	b.fillAnteFailedBlockTraces(results, height, block, config)
-	return results, nil
+	return b.traceBlock(height, b.normalizeTraceTimeout(config), block)
 }
 
 func (b *Backend) traceBlock(height rpctypes.BlockNumber,
@@ -274,8 +263,8 @@ func (b *Backend) traceBlock(height rpctypes.BlockNumber,
 		cacheable = true
 	}
 
-	txsMessages, txHashes := b.traceBlockEthereumTransactions(block)
-	if len(txsMessages) == 0 {
+	msgs := b.traceMsgs(block.Block, b.blockTxResultsForTrace(block.Block.Height), len(block.Block.Txs))
+	if len(msgs) == 0 {
 		decodedResults := b.alignTraceBlockResultsWithVisibleTransactions([]*rpctypes.TxTraceResult{}, cacheHeight)
 		if b.indexer != nil && cacheable {
 			cacheData, err := sonic.Marshal(decodedResults)
@@ -289,28 +278,8 @@ func (b *Backend) traceBlock(height rpctypes.BlockNumber,
 		return decodedResults, nil
 	}
 
-	ctxWithHeight := b.contextWithHeight(traceBlockContextHeight(height, block))
-
-	traceBlockRequest := &evmtypes.QueryTraceBlockRequest{
-		Txs:             txsMessages,
-		TraceConfig:     b.convertConfig(config),
-		BlockNumber:     block.Block.Height,
-		BlockTime:       block.Block.Time,
-		BlockHash:       common.Bytes2Hex(block.BlockID.Hash),
-		ProposerAddress: sdk.ConsAddress(block.Block.ProposerAddress),
-		ChainId:         traceChainID(b.ChainID().ToInt(), txsMessages...),
-	}
-
-	res, err := b.queryClient.TraceBlock(ctxWithHeight, traceBlockRequest)
+	decodedResults, err := b.traceBlockMsgs(height, block, msgs, config)
 	if err != nil {
-		return nil, err
-	}
-
-	decodedResults := make([]*rpctypes.TxTraceResult, len(txsMessages))
-	if err := sonic.Unmarshal(res.Data, &decodedResults); err != nil {
-		return nil, err
-	}
-	if err := attachTraceBlockTransactionHashes(decodedResults, txHashes); err != nil {
 		return nil, err
 	}
 	decodedResults = b.alignTraceBlockResultsWithVisibleTransactions(decodedResults, cacheHeight)
@@ -327,31 +296,81 @@ func (b *Backend) traceBlock(height rpctypes.BlockNumber,
 	return decodedResults, nil
 }
 
-func (b *Backend) traceBlockEthereumTransactions(
+// traceBlockMsgs replays the replayed messages of msgs in one block trace and
+// returns one result per message, in order; the others get their error.
+func (b *Backend) traceBlockMsgs(
+	height rpctypes.BlockNumber,
 	block *cmrpctypes.ResultBlock,
-) ([]*evmtypes.MsgEthereumTx, []common.Hash) {
-	txDecoder := b.clientCtx.TxConfig.TxDecoder()
-	messages := make([]*evmtypes.MsgEthereumTx, 0)
-	hashes := make([]common.Hash, 0)
-
-	for _, tx := range block.Block.Txs {
-		decodedTx, err := txDecoder(tx)
-		if err != nil {
-			b.logger.Warn("failed to decode transaction", "hash", tx.Hash(), "error", err.Error())
-			continue
+	msgs []traceMsg,
+	config *rpctypes.TraceConfig,
+) ([]*rpctypes.TxTraceResult, error) {
+	var replayed []*rpctypes.TxTraceResult
+	if txs := replayedMsgs(msgs); len(txs) > 0 {
+		traceBlockRequest := &evmtypes.QueryTraceBlockRequest{
+			Txs:             txs,
+			TraceConfig:     b.convertConfig(config),
+			BlockNumber:     block.Block.Height,
+			BlockTime:       block.Block.Time,
+			BlockHash:       common.Bytes2Hex(block.BlockID.Hash),
+			ProposerAddress: sdk.ConsAddress(block.Block.ProposerAddress),
+			ChainId:         traceChainID(b.ChainID().ToInt(), txs...),
 		}
-
-		for _, msg := range decodedTx.GetMsgs() {
-			ethMessage, ok := msg.(*evmtypes.MsgEthereumTx)
-			if !ok {
-				continue
-			}
-			messages = append(messages, ethMessage)
-			hashes = append(hashes, ethMessage.Hash())
+		res, err := b.queryClient.TraceBlock(b.contextWithHeight(traceBlockContextHeight(height, block)), traceBlockRequest)
+		if err != nil {
+			return nil, err
+		}
+		if err := sonic.Unmarshal(res.Data, &replayed); err != nil {
+			return nil, err
+		}
+		if len(replayed) != len(txs) {
+			return nil, fmt.Errorf("trace result count %d does not match Ethereum transaction count %d", len(replayed), len(txs))
 		}
 	}
 
+	results := make([]*rpctypes.TxTraceResult, len(msgs))
+	for i, m := range msgs {
+		if m.err != "" {
+			results[i] = &rpctypes.TxTraceResult{Error: m.err}
+		} else {
+			results[i], replayed = replayed[0], replayed[1:]
+			if results[i] == nil {
+				results[i] = &rpctypes.TxTraceResult{}
+			}
+		}
+		results[i].TxHash = m.msg.Hash()
+	}
+	return results, nil
+}
+
+// traceBlockEthereumTransactions returns the Ethereum messages of a block to
+// replay in a block trace, with their hashes. With txResults, txs that failed in
+// the ante handler are skipped: they had no effect on chain and are not visible
+// over JSON-RPC.
+func (b *Backend) traceBlockEthereumTransactions(
+	block *cmrpctypes.ResultBlock,
+	txResults []*abci.ExecTxResult,
+) ([]*evmtypes.MsgEthereumTx, []common.Hash) {
+	messages := b.ethMsgsFromBlock(block.Block, txResults, len(block.Block.Txs))
+	hashes := make([]common.Hash, 0, len(messages))
+	for _, msg := range messages {
+		hashes = append(hashes, msg.Hash())
+	}
 	return messages, hashes
+}
+
+// blockTxResultsForTrace returns the block tx results used to skip ante-failed
+// txs in trace replays, or nil when they are unavailable.
+func (b *Backend) blockTxResultsForTrace(height int64) []*abci.ExecTxResult {
+	blockRes, err := b.TendermintBlockResultByNumber(&height)
+	if err != nil || blockRes == nil {
+		errMsg := "nil block results"
+		if err != nil {
+			errMsg = err.Error()
+		}
+		b.logger.Debug("block results unavailable for trace; ante-failed ethereum txs cannot be skipped", "height", height, "error", errMsg)
+		return nil
+	}
+	return blockRes.TxResults
 }
 
 func (b *Backend) populateTraceBlockTransactionHashes(
@@ -385,7 +404,10 @@ func (b *Backend) populateTraceBlockTransactionHashes(
 		}
 	}
 
-	_, hashes := b.traceBlockEthereumTransactions(block)
+	// Traces cached without hashes were produced by replaying every Ethereum
+	// message of the block, so attach hashes against the unfiltered list.
+	// Entries of txs that are not visible are dropped by the alignment.
+	_, hashes := b.traceBlockEthereumTransactions(block, nil)
 	return attachTraceBlockTransactionHashes(results, hashes)
 }
 
@@ -416,12 +438,43 @@ func (b *Backend) alignTraceBlockResultsWithVisibleTransactions(
 		b.logger.Debug("failed to load visible transaction hashes for block trace", "height", height, "error", err.Error())
 		return results
 	}
-	return alignTraceBlockResults(results, visibleHashes)
+	if len(visibleHashes) == 0 {
+		// An indexed block without visible transactions has an empty trace,
+		// even if every Ethereum message was replayed (e.g. all of them failed
+		// in the ante handler and the block results were unavailable).
+		if meta, err := b.indexer.GetBlockMetaByHeight(height); err == nil && meta != nil {
+			return []*rpctypes.TxTraceResult{}
+		}
+		return results
+	}
+
+	isVirtual := func(common.Hash) bool { return false }
+	if lookup, ok := b.indexer.(virtualRPCTransactionLookup); ok {
+		isVirtual = func(hash common.Hash) bool {
+			virtual, err := lookup.IsVirtualRPCTransaction(hash)
+			if err != nil {
+				b.logger.Debug("failed to check virtual transaction for block trace", "height", height, "hash", hash.Hex(), "error", err.Error())
+				return false
+			}
+			return virtual
+		}
+	}
+	return alignTraceBlockResults(results, visibleHashes, isVirtual)
 }
 
+// traceUnavailableError is reported for a visible Ethereum tx that has no
+// entry in the block trace.
+const traceUnavailableError = "transaction trace unavailable"
+
+// alignTraceBlockResults returns exactly one trace entry per visible block
+// transaction, in visible order. Virtual transactions get an empty `type: 0`
+// trace, visible Ethereum transactions missing from the trace get an error
+// entry, and trace entries of transactions that are not visible (e.g. failed
+// in the ante handler) are dropped.
 func alignTraceBlockResults(
 	results []*rpctypes.TxTraceResult,
 	visibleHashes []common.Hash,
+	isVirtual func(common.Hash) bool,
 ) []*rpctypes.TxTraceResult {
 	if len(visibleHashes) == 0 {
 		return results
@@ -432,25 +485,28 @@ func alignTraceBlockResults(
 		if result == nil || result.TxHash == (common.Hash{}) {
 			return results
 		}
-		resultsByHash[result.TxHash] = result
+		if _, ok := resultsByHash[result.TxHash]; !ok {
+			resultsByHash[result.TxHash] = result
+		}
 	}
 
 	aligned := make([]*rpctypes.TxTraceResult, 0, len(visibleHashes))
-	matched := 0
 	for _, hash := range visibleHashes {
 		if result, ok := resultsByHash[hash]; ok {
 			aligned = append(aligned, result)
-			matched++
+			continue
+		}
+		if isVirtual != nil && isVirtual(hash) {
+			aligned = append(aligned, &rpctypes.TxTraceResult{
+				TxHash: hash,
+				Result: map[string]interface{}{"type": 0},
+			})
 			continue
 		}
 		aligned = append(aligned, &rpctypes.TxTraceResult{
 			TxHash: hash,
-			Result: map[string]interface{}{"type": 0},
+			Error:  traceUnavailableError,
 		})
-	}
-
-	if matched != len(results) {
-		return results
 	}
 	return aligned
 }
@@ -593,28 +649,16 @@ func (b *Backend) traceTransactionFromCachedBlock(hash common.Hash, config *rpct
 	}
 	blockTrace = b.alignTraceBlockResultsWithVisibleTransactions(blockTrace, tx.Height)
 
-	txIndex := int(tx.EthTxIndex)
-	if txIndex < 0 {
-		hashes, err := b.indexer.GetRPCTransactionHashesByBlockHeight(tx.Height)
-		if err != nil {
-			return nil, err
+	// Look the entry up by hash: the aligned trace follows the visible tx order,
+	// which differs from the Ethereum tx index when virtual txs are present.
+	for _, entry := range blockTrace {
+		if entry == nil || entry.TxHash != hash {
+			continue
 		}
-		for i, candidate := range hashes {
-			if candidate == hash {
-				txIndex = i
-				break
-			}
+		if entry.Error != "" {
+			return nil, errors.New(entry.Error)
 		}
+		return entry.Result, nil
 	}
-	if txIndex < 0 || txIndex >= len(blockTrace) {
-		return nil, errors.New("transaction trace not found in cached block trace")
-	}
-
-	if blockTrace[txIndex] == nil {
-		return nil, errors.New("transaction trace entry missing from cached block trace")
-	}
-	if blockTrace[txIndex].Error != "" {
-		return nil, errors.New(blockTrace[txIndex].Error)
-	}
-	return blockTrace[txIndex].Result, nil
+	return nil, errors.New("transaction trace not found in cached block trace")
 }

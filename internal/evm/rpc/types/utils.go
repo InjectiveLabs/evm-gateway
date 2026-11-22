@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math/big"
+	"strconv"
 	"strings"
 
 	sdkmath "cosmossdk.io/math"
@@ -281,9 +282,11 @@ const MsgExecutionFailedLog = "failed to execute message"
 //
 // The EVM ante handler bumps the sender nonce as its last step, and baseapp
 // discards all ante state when the ante handler fails. Such a tx is part of the
-// Comet block, but it was never executed and never consumed its nonce.
-// Failures after a successful ante handler (VM errors, message handler errors,
-// panics recovered during message execution, block gas limit) were executed.
+// Comet block, but it never consumed its nonce, so the same signed Ethereum tx
+// may be included again in a later block. It must not be exposed as an
+// Ethereum transaction. Failures after a successful ante handler (VM errors,
+// message handler errors, panics recovered during message execution, block gas
+// limit) consumed the nonce and stay visible.
 //
 // The decisive signal is the result events: for a failed tx, baseapp returns
 // the events emitted by a successful ante handler (the EVM ante handler always
@@ -301,4 +304,27 @@ func TxAnteFailed(res *abci.ExecTxResult) bool {
 		return false
 	}
 	return !strings.Contains(res.Log, MsgExecutionFailedLog)
+}
+
+// FailedMsgIndex reports the message that failed a Cosmos tx after its ante
+// handler succeeded. ok is false when res is nil, succeeded or failed in the
+// ante handler. index is the message named by the baseapp log, or -1 when the
+// log names none (e.g. a panic recovered during message execution or the
+// block gas limit).
+//
+// Baseapp discards the state of all messages of such a tx: messages before
+// index executed and were reverted, messages after it never executed.
+func FailedMsgIndex(res *abci.ExecTxResult) (index int, ok bool) {
+	if res == nil || res.Code == abci.CodeTypeOK || TxAnteFailed(res) {
+		return 0, false
+	}
+	parts := msgErrJSONRx.FindStringSubmatch(res.Log)
+	if len(parts) != 3 {
+		return -1, true
+	}
+	index, err := strconv.Atoi(parts[1])
+	if err != nil || index < 0 {
+		return -1, true
+	}
+	return index, true
 }

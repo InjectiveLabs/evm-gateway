@@ -21,10 +21,12 @@ import (
 	"github.com/InjectiveLabs/evm-gateway/internal/config"
 	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
 	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtual"
+	"github.com/InjectiveLabs/evm-gateway/internal/syncstatus"
 	chaintypes "github.com/InjectiveLabs/sdk-go/chain/types"
 )
 
 func TestSyncerRunAcceptsRequestedEarliestWhenBlockIsAvailable(t *testing.T) {
+	status := syncstatus.NewTracker(1, 0)
 	syncer := NewSyncer(
 		config.Config{
 			EnableSync: true,
@@ -48,15 +50,20 @@ func TestSyncerRunAcceptsRequestedEarliestWhenBlockIsAvailable(t *testing.T) {
 		},
 		nil,
 		stubTxIndexer{},
-		nil,
+		status,
 	)
 
 	if err := syncer.Run(context.Background()); err != nil {
 		t.Fatalf("expected syncer to accept requested earliest block, got error: %v", err)
 	}
+	// the node may hold blocks below the requested earliest block
+	if status.Snapshot().HistoryCovered {
+		t.Fatal("history must not be covered when the requested earliest block is available")
+	}
 }
 
 func TestSyncerRunUsesParsedLowestHeightWhenConfiguredEarliestIsUnavailable(t *testing.T) {
+	status := syncstatus.NewTracker(1, 0)
 	syncer := NewSyncer(
 		config.Config{
 			EnableSync: true,
@@ -81,11 +88,14 @@ func TestSyncerRunUsesParsedLowestHeightWhenConfiguredEarliestIsUnavailable(t *t
 		},
 		nil,
 		stubTxIndexer{},
-		nil,
+		status,
 	)
 
 	if err := syncer.Run(context.Background()); err != nil {
 		t.Fatalf("expected syncer to adjust to parsed earliest block, got error: %v", err)
+	}
+	if snap := status.Snapshot(); !snap.HistoryCovered || snap.EarliestBlock != 60 {
+		t.Fatalf("clamped earliest block must cover the node history: %+v", snap)
 	}
 }
 

@@ -44,6 +44,8 @@ Set `WEB3INJ_PARALLEL_SYNC_TIP_AND_GAPS=false` to keep the legacy behavior: the 
 
 `WEB3INJ_COMET_RPC` is the primary CometBFT endpoint used for chain reads, block fetching, sync, live fallbacks, and subscriptions.
 
+Tx lookups by hash or by block and index that miss the indexer fall back to the Comet tx index (`TxSearch`) unless the indexer holds every block the node has: `WEB3INJ_EARLIEST_BLOCK` is unset or below the node's earliest block (`history_covered` in `/status/sync`), initial gap sync is done with no gap left unsynced, sync is enabled, and a block was synced in the last 10s. A miss is then final, so polling unknown or pending hashes does not reach Comet, except for the mempool check of `eth_getTransactionByHash`. When `WEB3INJ_EARLIEST_BLOCK` is a height the node still serves (e.g. an archival node), the fallback stays on, so txs below the earliest block are still found by hash.
+
 Set `WEB3INJ_COMET_BROADCAST_RPC` when transaction broadcasts should go to a different CometBFT node:
 
 ```bash
@@ -85,6 +87,18 @@ Use `resync` to rewrite specific blocks or contiguous ranges in the local KV sto
 ```
 
 The command normalizes overlapping targets, deletes the cached data for those heights, re-fetches the blocks from the configured chain endpoints, and exits after the requested ranges are rebuilt.
+
+## Migrations
+
+One-off repairs of the local KV store run as `migrate` subcommands while the service is stopped (the KV store takes an exclusive lock):
+
+```bash
+./evm-gateway migrate ante-failed-txs --scan-only --report scan.json   # offline, read-only
+./evm-gateway migrate ante-failed-txs --dry-run --report plan.json     # verifies candidates, read-only
+./evm-gateway migrate ante-failed-txs --report apply.json              # repairs affected heights
+```
+
+Migrations are optional and never run automatically. Each records a completion marker; rerunning it is a no-op unless `--force` is passed. `--from`/`--to` bound the scanned heights; a bounded run does not write the marker. See [`docs/migrations`](migrations/) for the runbook of each migration, including whether you need it.
 
 ## Sync Status
 
