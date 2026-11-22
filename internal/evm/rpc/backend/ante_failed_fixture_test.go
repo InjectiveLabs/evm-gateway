@@ -33,7 +33,9 @@ type fixtureComet struct {
 	results    map[int64]*cmrpctypes.ResultBlockResults
 	blockErr   error
 	resultsErr error
-	nilBlock   bool
+	// resultsCalls counts BlockResults requests
+	resultsCalls int
+	nilBlock     bool
 }
 
 func newFixtureComet(t *testing.T) *fixtureComet {
@@ -75,6 +77,7 @@ func (c *fixtureComet) BlockByHash(_ context.Context, hash []byte) (*cmrpctypes.
 }
 
 func (c *fixtureComet) BlockResults(_ context.Context, height *int64) (*cmrpctypes.ResultBlockResults, error) {
+	c.resultsCalls++
 	if c.resultsErr != nil {
 		return nil, c.resultsErr
 	}
@@ -84,6 +87,10 @@ func (c *fixtureComet) BlockResults(_ context.Context, height *int64) (*cmrpctyp
 	if results, ok := c.results[*height]; ok {
 		return results, nil
 	}
+	return nil, errFixtureUnavailable
+}
+
+func (c *fixtureComet) ConsensusParams(context.Context, *int64) (*cmrpctypes.ResultConsensusParams, error) {
 	return nil, errFixtureUnavailable
 }
 

@@ -474,6 +474,22 @@ func (b *Backend) EthMsgsFromTendermintBlock(
 	return b.ethMsgsFromBlock(block, txResults, len(block.Txs))
 }
 
+// ethMsgsFromBlockResults is EthMsgsFromTendermintBlock for callers that
+// already hold the block results: it filters with them instead of fetching
+// them again.
+func (b *Backend) ethMsgsFromBlockResults(
+	resBlock *cmrpctypes.ResultBlock,
+	blockRes *cmrpctypes.ResultBlockResults,
+) []*evmtypes.MsgEthereumTx {
+	if resBlock == nil || resBlock.Block == nil {
+		return nil
+	}
+	if blockRes == nil {
+		return b.EthMsgsFromTendermintBlock(resBlock)
+	}
+	return b.ethMsgsFromBlock(resBlock.Block, blockRes.TxResults, len(resBlock.Block.Txs))
+}
+
 // ethMsgsFromBlock returns the MsgEthereumTxs of block.Txs[:txLimit] that are
 // exposed over JSON-RPC. Txs whose result shows they failed in the ante
 // handler are skipped: they never consumed their nonce and had no effect on
@@ -718,7 +734,7 @@ func (b *Backend) RPCBlockFromTendermintBlock(
 			}
 		}
 	} else {
-		msgs := b.EthMsgsFromTendermintBlock(resBlock)
+		msgs := b.ethMsgsFromBlockResults(resBlock, blockRes)
 		for txIndex, ethMsg := range msgs {
 			if !fullTx {
 				ethRPCTxs = append(ethRPCTxs, ethMsg.Hash())
@@ -852,7 +868,7 @@ func (b *Backend) EthBlockFromTendermintBlock(
 	}
 
 	ethHeader := rpctypes.EthHeaderFromTendermint(block.Header, bloom, baseFee)
-	msgs := b.EthMsgsFromTendermintBlock(resBlock)
+	msgs := b.ethMsgsFromBlockResults(resBlock, blockRes)
 
 	txs := make([]*ethtypes.Transaction, len(msgs))
 	for i, ethMsg := range msgs {

@@ -7,7 +7,10 @@ import (
 	tmtypes "github.com/cometbft/cometbft/types"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/stretchr/testify/mock"
 
+	rpcmocks "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/backend/mocks"
+	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
 	"github.com/InjectiveLabs/evm-gateway/internal/testutil/mainnetfx"
 )
 
@@ -179,9 +182,13 @@ func TestGetTransactionByBlockAndIndexLiveSkipsAnteFailedTxs(t *testing.T) {
 	height := mainnetfx.HeightEx2Failed
 
 	for i, want := range mainnetfx.VisibleTxs[height] {
+		comet.resultsCalls = 0
 		tx, err := b.GetTransactionByBlockAndIndex(comet.blocks[height], hexutil.Uint(i))
 		if err != nil {
 			t.Fatalf("GetTransactionByBlockAndIndex(%d): %v", i, err)
+		}
+		if comet.resultsCalls != 1 {
+			t.Fatalf("index %d: block results requested %d times", i, comet.resultsCalls)
 		}
 		if tx == nil || tx.Hash != want {
 			t.Fatalf("index %d: got %v want %s", i, tx, want.Hex())
@@ -190,5 +197,56 @@ func TestGetTransactionByBlockAndIndexLiveSkipsAnteFailedTxs(t *testing.T) {
 	tx, err := b.GetTransactionByBlockAndIndex(comet.blocks[height], hexutil.Uint(len(mainnetfx.VisibleTxs[height])))
 	if err != nil || tx != nil {
 		t.Fatalf("out of range index: %v %v", tx, err)
+	}
+}
+
+// TestLiveBlockBuildersReuseSuppliedResults checks that the non-virtualized
+// block builders filter ante-failed txs with the block results they are given
+// and do not fetch them again: a failed second request would otherwise expose
+// the ante-failed txs.
+func TestLiveBlockBuildersReuseSuppliedResults(t *testing.T) {
+	comet := newFixtureComet(t)
+	query := &rpcmocks.EVMQueryClient{}
+	query.On("ValidatorAccount", mock.Anything, mock.Anything).Return(nil, errFixtureUnavailable)
+	b := newFixtureBackend(t, fixtureBackendOptions{comet: comet, query: query})
+	height := mainnetfx.HeightEx2Failed
+	resBlock, blockRes := comet.blocks[height], comet.results[height]
+	visible := mainnetfx.VisibleTxs[height]
+
+	comet.resultsErr = errFixtureUnavailable
+	comet.resultsCalls = 0
+
+	for _, fullTx := range []bool{false, true} {
+		block, err := b.RPCBlockFromTendermintBlock(resBlock, blockRes, fullTx)
+		if err != nil {
+			t.Fatalf("RPCBlockFromTendermintBlock(fullTx=%v): %v", fullTx, err)
+		}
+		txs, _ := block["transactions"].([]interface{})
+		got := make([]common.Hash, 0, len(txs))
+		for _, tx := range txs {
+			switch v := tx.(type) {
+			case common.Hash:
+				got = append(got, v)
+			case *rpctypes.RPCTransaction:
+				got = append(got, v.Hash)
+			default:
+				t.Fatalf("unexpected transaction type %T", tx)
+			}
+		}
+		assertHashList(t, fmt.Sprintf("rpc block fullTx=%v", fullTx), got, visible)
+	}
+
+	ethBlock, err := b.EthBlockFromTendermintBlock(resBlock, blockRes)
+	if err != nil {
+		t.Fatalf("EthBlockFromTendermintBlock: %v", err)
+	}
+	got := make([]common.Hash, 0, len(ethBlock.Transactions()))
+	for _, tx := range ethBlock.Transactions() {
+		got = append(got, tx.Hash())
+	}
+	assertHashList(t, "eth block", got, visible)
+
+	if comet.resultsCalls != 0 {
+		t.Fatalf("block builders requested block results %d times", comet.resultsCalls)
 	}
 }

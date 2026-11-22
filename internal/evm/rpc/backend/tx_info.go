@@ -135,7 +135,7 @@ func (b *Backend) GetTransactionByHash(txHash common.Hash) (*rpctypes.RPCTransac
 
 	if res.EthTxIndex == -1 {
 		// Fallback to find tx index by iterating all valid eth transactions
-		msgs := b.EthMsgsFromTendermintBlock(block)
+		msgs := b.ethMsgsFromBlockResults(block, blockRes)
 		for i := range msgs {
 			if msgs[i].Hash() == txHash {
 				res.EthTxIndex = int32(i)
@@ -339,7 +339,7 @@ func (b *Backend) GetTransactionReceipt(hash common.Hash) (map[string]interface{
 
 	if res.EthTxIndex == -1 {
 		// Fallback to find tx index by iterating all valid eth transactions
-		msgs := b.EthMsgsFromTendermintBlock(resBlock)
+		msgs := b.ethMsgsFromBlockResults(resBlock, blockRes)
 		for i := range msgs {
 			if msgs[i].Hash() == hash {
 				res.EthTxIndex = int32(i)
@@ -725,7 +725,7 @@ func (b *Backend) GetTransactionByBlockAndIndex(block *cmrpctypes.ResultBlock, i
 		if i < 0 {
 			i = 0
 		}
-		ethMsgs := b.EthMsgsFromTendermintBlock(block)
+		ethMsgs := b.ethMsgsFromBlockResults(block, blockRes)
 		if i >= len(ethMsgs) {
 			b.logger.Warn("block txs index out of bound", "index", i)
 			return nil, nil
