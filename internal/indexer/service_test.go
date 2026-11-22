@@ -21,10 +21,12 @@ import (
 	"github.com/InjectiveLabs/evm-gateway/internal/config"
 	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
 	"github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/virtual"
+	"github.com/InjectiveLabs/evm-gateway/internal/syncstatus"
 	chaintypes "github.com/InjectiveLabs/sdk-go/chain/types"
 )
 
 func TestSyncerRunAcceptsRequestedEarliestWhenBlockIsAvailable(t *testing.T) {
+	status := syncstatus.NewTracker(1, 0)
 	syncer := NewSyncer(
 		config.Config{
 			EnableSync: true,
@@ -48,15 +50,20 @@ func TestSyncerRunAcceptsRequestedEarliestWhenBlockIsAvailable(t *testing.T) {
 		},
 		nil,
 		stubTxIndexer{},
-		nil,
+		status,
 	)
 
 	if err := syncer.Run(context.Background()); err != nil {
 		t.Fatalf("expected syncer to accept requested earliest block, got error: %v", err)
 	}
+	// the node may hold blocks below the requested earliest block
+	if status.Snapshot().HistoryCovered {
+		t.Fatal("history must not be covered when the requested earliest block is available")
+	}
 }
 
 func TestSyncerRunUsesParsedLowestHeightWhenConfiguredEarliestIsUnavailable(t *testing.T) {
+	status := syncstatus.NewTracker(1, 0)
 	syncer := NewSyncer(
 		config.Config{
 			EnableSync: true,
@@ -81,11 +88,14 @@ func TestSyncerRunUsesParsedLowestHeightWhenConfiguredEarliestIsUnavailable(t *t
 		},
 		nil,
 		stubTxIndexer{},
-		nil,
+		status,
 	)
 
 	if err := syncer.Run(context.Background()); err != nil {
 		t.Fatalf("expected syncer to adjust to parsed earliest block, got error: %v", err)
+	}
+	if snap := status.Snapshot(); !snap.HistoryCovered || snap.EarliestBlock != 60 {
+		t.Fatalf("clamped earliest block must cover the node history: %+v", snap)
 	}
 }
 
@@ -1087,36 +1097,3 @@ func (f *faultyTxIndexer) GetTraceBlockByHeight(int64, *rpctypes.TraceConfig) (j
 	return nil, nil
 }
 func (f *faultyTxIndexer) IsBlockIndexed(int64) (bool, error) { return false, nil }
-
-func TestSyncerNodeHasBlocksBelow(t *testing.T) {
-	pruned := errors.New(`{"jsonrpc":"2.0","id":-1,"error":{"code":-32603,"message":"Internal error","data":"height 59 is not available, lowest height is 60"}}`)
-	for _, tc := range []struct {
-		name     string
-		earliest int64
-		block    func(int64) (*coretypes.ResultBlock, error)
-		want     bool
-	}{
-		{"from genesis", 1, nil, false},
-		{"pruned below", 60, func(int64) (*coretypes.ResultBlock, error) { return nil, pruned }, false},
-		{"served below", 60, func(int64) (*coretypes.ResultBlock, error) {
-			return &coretypes.ResultBlock{Block: &tmtypes.Block{}}, nil
-		}, true},
-		{"other error", 60, func(int64) (*coretypes.ResultBlock, error) { return nil, errors.New("connection refused") }, true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			client := &stubSyncClient{}
-			if tc.block != nil {
-				client.blockFn = func(_ context.Context, height *int64) (*coretypes.ResultBlock, error) {
-					if height == nil || *height != tc.earliest-1 {
-						t.Fatalf("expected probe of height %d, got %v", tc.earliest-1, height)
-					}
-					return tc.block(*height)
-				}
-			}
-			syncer := NewSyncer(config.Config{}, testLogger(), client, nil, stubTxIndexer{}, nil)
-			if got := syncer.nodeHasBlocksBelow(context.Background(), tc.earliest); got != tc.want {
-				t.Fatalf("nodeHasBlocksBelow(%d) = %v want %v", tc.earliest, got, tc.want)
-			}
-		})
-	}
-}

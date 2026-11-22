@@ -47,6 +47,7 @@ type Snapshot struct {
 	AvgBlocksPerSec   float64    `json:"avg_blocks_per_second"`
 	GapsTotal         int        `json:"gaps_total"`
 	GapsRemaining     int        `json:"gaps_remaining"`
+	HistoryCovered    bool       `json:"history_covered"`
 	CurrentSegment    *Segment   `json:"current_segment,omitempty"`
 	LastSyncedSegment *Segment   `json:"last_synced_segment,omitempty"`
 	Cache             CacheStats `json:"cache"`
@@ -214,8 +215,8 @@ func (t *Tracker) MarkBlock(height int64, indexed bool) {
 	t.updatedAt = now
 }
 
-// SetHistoryCovered records whether the node has no block below the earliest
-// indexed height, i.e. the indexer starts at the node's history.
+// SetHistoryCovered records whether the indexer starts at the node's earliest
+// block, i.e. the node has no block below the earliest indexed height.
 func (t *Tracker) SetHistoryCovered(covered bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -306,6 +307,7 @@ func (t *Tracker) Snapshot() Snapshot {
 		BlocksIndexed:   t.blocksIndexed,
 		GapsTotal:       t.gapsTotal,
 		GapsRemaining:   t.gapsRemaining,
+		HistoryCovered:  t.historyCovered,
 	}
 
 	if t.currentSegment != nil {

@@ -114,24 +114,29 @@ func (s *Syncer) Run(ctx context.Context) error {
 		return err
 	}
 
+	// historyCovered: the indexer starts at the node's earliest block, so the
+	// node has no block the indexer does not sync.
 	earliest := s.cfg.Earliest
+	historyCovered := true
 	if earliest <= 0 {
 		earliest = status.SyncInfo.EarliestBlockHeight
 		if earliest <= 0 {
 			earliest = 1
 		}
 	} else {
+		requested := earliest
 		earliest, err = s.resolveEarliestBlock(ctx, earliest)
 		if err != nil {
 			return err
 		}
+		historyCovered = requested <= 1 || earliest > requested
 	}
 
 	head := status.SyncInfo.LatestBlockHeight
 	if s.status != nil {
 		s.status.SetChainHead(head)
 		s.status.SetEarliestBlock(earliest)
-		s.status.SetHistoryCovered(!s.nodeHasBlocksBelow(ctx, earliest))
+		s.status.SetHistoryCovered(historyCovered)
 	}
 	if head < earliest {
 		s.logger.Info("chain head below earliest; nothing to sync", "head", head, "earliest", earliest)
@@ -369,20 +374,6 @@ func (s *Syncer) resolveEarliestBlock(ctx context.Context, requested int64) (int
 
 	s.logger.Warn("earliest block before chain history; using chain earliest", "requested", requested, "chain_earliest", chainEarliest)
 	return chainEarliest, nil
-}
-
-// nodeHasBlocksBelow reports whether the node may serve blocks below
-// earliest. It probes block earliest-1 rather than trusting the earliest
-// height in the node status, which a load-balanced endpoint may report for
-// another backend. Only a "not available" error rules older blocks out.
-func (s *Syncer) nodeHasBlocksBelow(ctx context.Context, earliest int64) bool {
-	if earliest <= 1 {
-		return false
-	}
-	below := earliest - 1
-	_, err := s.client.Block(ctx, &below)
-	lowest, pruned := blocksync.LowestAvailableHeight(err)
-	return !pruned || lowest <= below
 }
 
 func toStatusRanges(ranges []BlockRange) []syncstatus.Range {

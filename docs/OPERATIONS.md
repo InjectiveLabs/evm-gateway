@@ -44,7 +44,7 @@ Set `WEB3INJ_PARALLEL_SYNC_TIP_AND_GAPS=false` to keep the legacy behavior: the 
 
 `WEB3INJ_COMET_RPC` is the primary CometBFT endpoint used for chain reads, block fetching, sync, live fallbacks, and subscriptions.
 
-Tx lookups by hash or by block and index that miss the indexer fall back to the Comet tx index (`TxSearch`) unless the indexer holds every block the node has: the node serves no block below `WEB3INJ_EARLIEST_BLOCK` (probed once at startup), initial gap sync is done with no gap left unsynced, sync is enabled, and a block was synced in the last 10s. A miss is then final, so polling unknown or pending hashes does not reach Comet, except for the mempool check of `eth_getTransactionByHash`. On an archival node with `WEB3INJ_EARLIEST_BLOCK` above its history the fallback stays on, so txs below the earliest block are still found by hash.
+Tx lookups by hash or by block and index that miss the indexer fall back to the Comet tx index (`TxSearch`) unless the indexer holds every block the node has: `WEB3INJ_EARLIEST_BLOCK` is unset or below the node's earliest block (`history_covered` in `/status/sync`), initial gap sync is done with no gap left unsynced, sync is enabled, and a block was synced in the last 10s. A miss is then final, so polling unknown or pending hashes does not reach Comet, except for the mempool check of `eth_getTransactionByHash`. When `WEB3INJ_EARLIEST_BLOCK` is a height the node still serves (e.g. an archival node), the fallback stays on, so txs below the earliest block are still found by hash.
 
 Set `WEB3INJ_COMET_BROADCAST_RPC` when transaction broadcasts should go to a different CometBFT node:
 
