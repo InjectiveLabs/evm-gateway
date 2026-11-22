@@ -167,9 +167,10 @@ func syntheticTraceResult(
 	return frame, nil
 }
 
-// isLegacyTracePlaceholder reports whether a cached trace entry is the
-// `{"type": 0}` placeholder written for virtual txs before v1.5.0. No tracer
-// produces it, so the entry is rebuilt.
+// isLegacyTracePlaceholder reports whether a trace entry has the shape of the
+// `{"type": 0}` placeholder that v1.4.3 and v1.4.4 cached for virtual txs. A
+// custom tracer can return the same JSON, so the shape alone does not identify
+// a placeholder; see dropLegacyTracePlaceholders.
 func isLegacyTracePlaceholder(entry *rpctypes.TxTraceResult) bool {
 	if entry == nil || entry.Error != "" {
 		return false
@@ -188,4 +189,26 @@ func isLegacyTracePlaceholder(entry *rpctypes.TxTraceResult) bool {
 	default:
 		return false
 	}
+}
+
+// dropLegacyTracePlaceholders removes from cached block trace entries the
+// placeholders that v1.4.3 and v1.4.4 wrote for virtual txs, so that the
+// alignment rebuilds them as synthetic traces. Virtual txs are never replayed,
+// so a placeholder-shaped entry of a virtual tx cannot be a tracer result;
+// entries of other txs are kept, whatever a custom tracer returned for them.
+func (b *Backend) dropLegacyTracePlaceholders(results []*rpctypes.TxTraceResult) []*rpctypes.TxTraceResult {
+	lookup, ok := b.indexer.(virtualRPCTransactionLookup)
+	if !ok {
+		return results
+	}
+	kept := make([]*rpctypes.TxTraceResult, 0, len(results))
+	for _, entry := range results {
+		if isLegacyTracePlaceholder(entry) {
+			if virtual, err := lookup.IsVirtualRPCTransaction(entry.TxHash); err == nil && virtual {
+				continue
+			}
+		}
+		kept = append(kept, entry)
+	}
+	return kept
 }

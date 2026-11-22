@@ -168,9 +168,10 @@ func (b *Backend) syntheticTraceEntry(view *traceTxView, hash common.Hash, confi
 
 // alignTraceResults returns exactly one trace entry per visible tx of view,
 // in visible order. Visible txs without a trace entry (virtual txs, and
-// entries cached with the legacy placeholder) get a synthetic trace, and
-// entries of txs that are not visible (e.g. failed in the ante handler) are
-// dropped. Without a view the results are returned as they are.
+// virtual txs whose legacy placeholder was dropped by
+// dropLegacyTracePlaceholders) get a synthetic trace, and entries of txs that
+// are not visible (e.g. failed in the ante handler) are dropped. Without a
+// view the results are returned as they are.
 func (b *Backend) alignTraceResults(
 	results []*rpctypes.TxTraceResult,
 	view *traceTxView,
@@ -185,7 +186,7 @@ func (b *Backend) alignTraceResults(
 		if result == nil || result.TxHash == (common.Hash{}) {
 			return results
 		}
-		if _, ok := resultsByHash[result.TxHash]; !ok && !isLegacyTracePlaceholder(result) {
+		if _, ok := resultsByHash[result.TxHash]; !ok {
 			resultsByHash[result.TxHash] = result
 		}
 	}

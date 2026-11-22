@@ -274,6 +274,7 @@ func (b *Backend) traceBlock(height rpctypes.BlockNumber,
 			if err := b.populateTraceBlockTransactionHashes(decoded, cacheHeight, block); err != nil {
 				return nil, err
 			}
+			decoded = b.dropLegacyTracePlaceholders(decoded)
 			return b.alignTraceResults(decoded, b.traceBlockView(cacheHeight, block, nil), config), nil
 		}
 		if !isIndexerCacheMiss(err) {

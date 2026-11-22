@@ -194,6 +194,90 @@ func TestIsLegacyTracePlaceholder(t *testing.T) {
 	}
 }
 
+// TestDropLegacyTracePlaceholders drops placeholder-shaped cached entries of
+// virtual txs only: an Ethereum tx entry is a tracer result whatever it holds.
+func TestDropLegacyTracePlaceholders(t *testing.T) {
+	virtualTx, ethTx := common.HexToHash("0x01"), common.HexToHash("0x02")
+	placeholder := func(hash common.Hash) *rpctypes.TxTraceResult {
+		return &rpctypes.TxTraceResult{TxHash: hash, Result: map[string]interface{}{"type": float64(0)}}
+	}
+	frame := &rpctypes.TxTraceResult{TxHash: virtualTx, Result: map[string]interface{}{"type": "CALL"}}
+	results := []*rpctypes.TxTraceResult{placeholder(virtualTx), placeholder(ethTx), frame}
+
+	b := newFixtureBackend(t, fixtureBackendOptions{offline: true, indexer: &overrideIndexer{virtual: map[common.Hash]bool{virtualTx: true}}})
+	got := b.dropLegacyTracePlaceholders(results)
+	require.Equal(t, []*rpctypes.TxTraceResult{results[1], frame}, got)
+
+	failing := newFixtureBackend(t, fixtureBackendOptions{offline: true, indexer: &overrideIndexer{virtualErr: errFixtureUnavailable}})
+	require.Equal(t, results, failing.dropLegacyTracePlaceholders(results), "virtual lookup error keeps entries")
+	plain := newFixtureBackend(t, fixtureBackendOptions{offline: true, indexer: &plainTraceIndexer{TxIndexer: &overrideIndexer{}}})
+	require.Equal(t, results, plain.dropLegacyTracePlaceholders(results), "indexer without virtual lookup")
+	require.Equal(t, results, newFixtureBackend(t, fixtureBackendOptions{offline: true}).dropLegacyTracePlaceholders(results), "no indexer")
+}
+
+// TestTraceBlockCustomTracerTypeZeroResult keeps a custom JS tracer's
+// `{"type":0}` result of replayed Ethereum txs (PR #26 review), from the chain
+// and from the cache, for block traces and debug_traceTransaction.
+func TestTraceBlockCustomTracerTypeZeroResult(t *testing.T) {
+	height := mainnetfx.HeightEx1Failed
+	for _, virtualMode := range []bool{false, true} {
+		t.Run(fmt.Sprintf("virtual=%v", virtualMode), func(t *testing.T) {
+			kv, _ := newFixtureKV(t, virtualMode)
+			indexFixtureBlocks(t, kv, height)
+			comet := newFixtureComet(t)
+			query := liveQuery()
+			b := newFixtureBackend(t, fixtureBackendOptions{virtual: virtualMode, indexer: kv, comet: comet, query: query})
+
+			replayed := replayedFixtureHashes(t, b, comet, height)
+			require.NotEmpty(t, replayed)
+			results := make([]map[string]interface{}, len(replayed))
+			for i := range results {
+				results[i] = map[string]interface{}{"result": map[string]interface{}{"type": 0}}
+			}
+			bz, err := json.Marshal(results)
+			require.NoError(t, err)
+			query.On("TraceBlock", mock.Anything, traceBlockMatcher(height, replayed)).
+				Return(&evmtypes.QueryTraceBlockResponse{Data: bz}, nil).Once()
+
+			jsTracer := tracerConfig(`{data: [], fault: function(log) {}, step: function(log) {}, result: function(ctx, db) { return {type: 0}; }}`, "")
+			isReplayed := make(map[common.Hash]bool)
+			for _, hash := range replayed {
+				isReplayed[hash] = true
+			}
+			check := func(label string, got []*rpctypes.TxTraceResult) {
+				t.Helper()
+				n := 0
+				for _, entry := range got {
+					require.Empty(t, entry.Error, "%s: %s", label, entry.TxHash.Hex())
+					if isReplayed[entry.TxHash] {
+						n++
+						requireJSON(t, `{"type":0}`, entry.Result)
+					} else {
+						// virtual txs: no derived output for a custom tracer
+						require.Nil(t, entry.Result, "%s: %s", label, entry.TxHash.Hex())
+					}
+				}
+				require.Equal(t, len(replayed), n, label)
+			}
+
+			got, err := b.TraceBlock(rpctypes.BlockNumber(height), jsTracer, nil)
+			require.NoError(t, err)
+			query.AssertExpectations(t)
+			check("live", got)
+
+			cached := newFixtureBackend(t, fixtureBackendOptions{virtual: virtualMode, offline: true, indexer: kv})
+			again, err := cached.TraceBlock(rpctypes.BlockNumber(height), jsTracer, nil)
+			require.NoError(t, err)
+			check("cached", again)
+			for _, hash := range replayed {
+				trace, err := cached.TraceTransaction(hash, jsTracer)
+				require.NoError(t, err)
+				requireJSON(t, `{"type":0}`, trace)
+			}
+		})
+	}
+}
+
 // TestAlignTraceResults covers the alignment with a visible tx view.
 func TestAlignTraceResults(t *testing.T) {
 	virtualTx, ethTx, missingEth, legacyVirtual, broken, anteFailed :=
@@ -232,7 +316,7 @@ func TestAlignTraceResults(t *testing.T) {
 	missing := frameMap(t, aligned[2].Result)
 	require.Equal(t, traceUnavailableError, missing["error"], "missing ethereum trace gets a failed frame")
 	require.Equal(t, "0x00000000000000000000000000000000000000e0", missing["to"])
-	require.Equal(t, frameMap(t, aligned[0].Result), frameMap(t, aligned[3].Result), "legacy placeholder is rebuilt")
+	require.Same(t, legacy, aligned[3], "alignment keeps tracer output, placeholder-shaped included")
 	require.Equal(t, traceUnavailableError, aligned[4].Error, "unbuildable trace gets an entry-level error")
 	require.Nil(t, aligned[4].Result)
 
