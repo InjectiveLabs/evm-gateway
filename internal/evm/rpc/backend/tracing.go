@@ -438,6 +438,15 @@ func (b *Backend) alignTraceBlockResultsWithVisibleTransactions(
 		b.logger.Debug("failed to load visible transaction hashes for block trace", "height", height, "error", err.Error())
 		return results
 	}
+	if len(visibleHashes) == 0 {
+		// An indexed block without visible transactions has an empty trace,
+		// even if every Ethereum message was replayed (e.g. all of them failed
+		// in the ante handler and the block results were unavailable).
+		if meta, err := b.indexer.GetBlockMetaByHeight(height); err == nil && meta != nil {
+			return []*rpctypes.TxTraceResult{}
+		}
+		return results
+	}
 
 	isVirtual := func(common.Hash) bool { return false }
 	if lookup, ok := b.indexer.(virtualRPCTransactionLookup); ok {

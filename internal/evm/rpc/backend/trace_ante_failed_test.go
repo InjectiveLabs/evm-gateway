@@ -538,3 +538,28 @@ type plainTraceIndexer struct {
 }
 
 func (p *plainTraceIndexer) WithContext(context.Context) txindexer.TxIndexer { return p }
+
+// TestAlignTraceBlockResultsIndexedBlockWithoutVisibleTxs covers a block
+// trace replayed without block results (so ante-failed txs were replayed) for
+// a block whose txs are all hidden: the indexed block has no visible tx, so the
+// trace is empty. A block that is not indexed keeps the replayed entries.
+func TestAlignTraceBlockResultsIndexedBlockWithoutVisibleTxs(t *testing.T) {
+	kv, _ := newFixtureKV(t, false)
+	if err := kv.IndexBlock(tmtypes.MakeBlock(42, nil, nil, nil), nil); err != nil {
+		t.Fatalf("IndexBlock: %v", err)
+	}
+	b := newFixtureBackend(t, fixtureBackendOptions{indexer: kv, comet: newFixtureComet(t)})
+	replayed := func() []*rpctypes.TxTraceResult {
+		return []*rpctypes.TxTraceResult{
+			{TxHash: common.HexToHash("0x01"), Result: map[string]interface{}{"type": "CALL"}},
+			{TxHash: common.HexToHash("0x02"), Result: map[string]interface{}{"type": "CALL"}},
+		}
+	}
+
+	if got := b.alignTraceBlockResultsWithVisibleTransactions(replayed(), 42); got == nil || len(got) != 0 {
+		t.Fatalf("indexed block without visible txs: expected empty trace, got %#v", got)
+	}
+	if got := b.alignTraceBlockResultsWithVisibleTransactions(replayed(), 43); len(got) != 2 {
+		t.Fatalf("block not indexed: expected replayed entries, got %#v", got)
+	}
+}
