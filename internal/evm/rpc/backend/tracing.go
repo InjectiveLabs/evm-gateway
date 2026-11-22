@@ -117,7 +117,11 @@ func (b *Backend) traceTransaction(hash common.Hash, config *rpctypes.TraceConfi
 		return nil, fmt.Errorf("transaction not included in block %v", block.Block.Height)
 	}
 
-	txResults := b.blockTxResultsForTrace(block.Block.Height)
+	blockRes := b.blockResultsForTrace(block.Block.Height)
+	var txResults []*abci.ExecTxResult
+	if blockRes != nil {
+		txResults = blockRes.TxResults
+	}
 	var txResult *abci.ExecTxResult
 	if int(transaction.TxIndex) < len(txResults) {
 		txResult = txResults[transaction.TxIndex]
@@ -135,31 +139,58 @@ func (b *Backend) traceTransaction(hash common.Hash, config *rpctypes.TraceConfi
 		return nil, fmt.Errorf("message index %d out of bounds in block %d", transaction.MsgIndex, block.Block.Height)
 	}
 	if errMsg := msgTraceError(txResult, int(transaction.MsgIndex), len(tx.GetMsgs())); errMsg != "" {
-		rpcTx, receipt, err := b.liveTraceTx(hash)
+		// built from the block data at hand, like the tx's block trace entry
+		view := b.traceBlockView(block.Block.Height, block, blockRes)
+		if view == nil {
+			return nil, errors.New(errMsg)
+		}
+		rpcTx, receipt, err := view.lookup(hash)
 		if err != nil {
 			return nil, err
 		}
 		return syntheticTraceResult(rpcTx, receipt, config, errMsg)
 	}
 
+	return b.traceTxInBlock(block, txResults, int(transaction.TxIndex), int(transaction.MsgIndex), hash, config)
+}
+
+// traceTxInBlock replays message msgIndex of Cosmos tx txIndex of block, after
+// the messages that changed the chain state before it (see traceMsgs), and
+// caches the result as the trace of hash.
+func (b *Backend) traceTxInBlock(
+	block *cmrpctypes.ResultBlock,
+	txResults []*abci.ExecTxResult,
+	txIndex, msgIndex int,
+	hash common.Hash,
+	config *rpctypes.TraceConfig,
+) (interface{}, error) {
+	tx, err := b.clientCtx.TxConfig.TxDecoder()(block.Block.Txs[txIndex])
+	if err != nil {
+		return nil, err
+	}
+	msgs := tx.GetMsgs()
+	if msgIndex >= len(msgs) {
+		return nil, fmt.Errorf("message index %d out of bounds in block %d", msgIndex, block.Block.Height)
+	}
+
 	// Predecessors replay only what changed the chain state: Cosmos txs that
 	// failed in the ante handler and messages of failed Cosmos txs that were
 	// reverted or never executed are left out.
-	predecessors := replayedMsgs(b.traceMsgs(block.Block, txResults, int(transaction.TxIndex)))
+	predecessors := replayedMsgs(b.traceMsgs(block.Block, txResults, txIndex))
 
 	// add predecessor messages in current cosmos tx
-	for i := 0; i < int(transaction.MsgIndex); i++ {
-		ethMsg, ok := tx.GetMsgs()[i].(*evmtypes.MsgEthereumTx)
+	for i := 0; i < msgIndex; i++ {
+		ethMsg, ok := msgs[i].(*evmtypes.MsgEthereumTx)
 		if !ok {
 			continue
 		}
 		predecessors = append(predecessors, ethMsg)
 	}
 
-	ethMessage, ok := tx.GetMsgs()[transaction.MsgIndex].(*evmtypes.MsgEthereumTx)
+	ethMessage, ok := msgs[msgIndex].(*evmtypes.MsgEthereumTx)
 	if !ok {
-		b.logger.Debug("invalid transaction type", "type", fmt.Sprintf("%T", tx))
-		return nil, fmt.Errorf("invalid transaction type %T", tx)
+		b.logger.Debug("invalid transaction type", "type", fmt.Sprintf("%T", msgs[msgIndex]))
+		return nil, fmt.Errorf("invalid transaction type %T", msgs[msgIndex])
 	}
 
 	traceTxRequest := evmtypes.QueryTraceTxRequest{
@@ -177,7 +208,7 @@ func (b *Backend) traceTransaction(hash common.Hash, config *rpctypes.TraceConfi
 	}
 
 	// minus one to get the context of block beginning
-	contextHeight := transaction.Height - 1
+	contextHeight := block.Block.Height - 1
 	if contextHeight < 1 {
 		// 0 is a special value in `ContextWithHeight`
 		contextHeight = 1
@@ -321,7 +352,7 @@ func (b *Backend) traceBlock(height rpctypes.BlockNumber,
 		return decodedResults, nil
 	}
 
-	decodedResults, err := b.traceBlockMsgs(height, block, msgs, view, config)
+	decodedResults, err := b.traceBlockMsgs(height, block, txResults, msgs, view, config)
 	if err != nil {
 		return nil, err
 	}
@@ -342,10 +373,11 @@ func (b *Backend) traceBlock(height rpctypes.BlockNumber,
 // traceBlockMsgs replays the replayed messages of msgs in one block trace and
 // returns one result per message, in order. Messages with an error get a
 // synthetic failed frame of their tx in view, and alone messages are traced
-// on their own.
+// on their own, from their known position in block.
 func (b *Backend) traceBlockMsgs(
 	height rpctypes.BlockNumber,
 	block *cmrpctypes.ResultBlock,
+	txResults []*abci.ExecTxResult,
 	msgs []traceMsg,
 	view *traceTxView,
 	config *rpctypes.TraceConfig,
@@ -382,13 +414,7 @@ func (b *Backend) traceBlockMsgs(
 		case m.err != "":
 			results[i] = &rpctypes.TxTraceResult{Error: m.err}
 		case m.alone:
-			results[i] = &rpctypes.TxTraceResult{}
-			result, err := b.traceTransaction(hash, config)
-			if err != nil {
-				results[i].Error = err.Error()
-			} else {
-				results[i].Result = result
-			}
+			results[i] = b.traceAloneMsg(block, txResults, m, config)
 		default:
 			results[i], replayed = replayed[0], replayed[1:]
 			if results[i] == nil {
@@ -398,6 +424,33 @@ func (b *Backend) traceBlockMsgs(
 		results[i].TxHash = hash
 	}
 	return results, nil
+}
+
+// traceAloneMsg traces a failed message that ran after other messages of its
+// Cosmos tx, as debug_traceTransaction does, reusing its cached tx trace.
+func (b *Backend) traceAloneMsg(
+	block *cmrpctypes.ResultBlock,
+	txResults []*abci.ExecTxResult,
+	m traceMsg,
+	config *rpctypes.TraceConfig,
+) *rpctypes.TxTraceResult {
+	entry := &rpctypes.TxTraceResult{}
+	hash := m.msg.Hash()
+	if b.indexer != nil {
+		if cached, err := b.indexer.GetTraceTransaction(hash, config); err == nil {
+			if result, err := decodeCachedTraceTransaction(cached); err == nil {
+				entry.Result = result
+				return entry
+			}
+		}
+	}
+	result, err := b.traceTxInBlock(block, txResults, m.txIndex, m.msgIndex, hash, config)
+	if err != nil {
+		entry.Error = err.Error()
+	} else {
+		entry.Result = result
+	}
+	return entry
 }
 
 // traceBlockEthereumTransactions returns the Ethereum messages of a block to
@@ -416,17 +469,8 @@ func (b *Backend) traceBlockEthereumTransactions(
 	return messages, hashes
 }
 
-// blockTxResultsForTrace returns the block tx results used to skip ante-failed
-// txs in trace replays, or nil when they are unavailable.
-func (b *Backend) blockTxResultsForTrace(height int64) []*abci.ExecTxResult {
-	if blockRes := b.blockResultsForTrace(height); blockRes != nil {
-		return blockRes.TxResults
-	}
-	return nil
-}
-
-// blockResultsForTrace returns the block results of a traced block, or nil
-// when they are unavailable.
+// blockResultsForTrace returns the block results of a traced block, used to
+// skip ante-failed txs in trace replays, or nil when they are unavailable.
 func (b *Backend) blockResultsForTrace(height int64) *cmrpctypes.ResultBlockResults {
 	blockRes, err := b.TendermintBlockResultByNumber(&height)
 	if err != nil || blockRes == nil {

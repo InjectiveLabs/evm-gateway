@@ -3,6 +3,7 @@ package backend
 import (
 	"fmt"
 
+	evmtypes "github.com/InjectiveLabs/sdk-go/chain/evm/types"
 	cmrpctypes "github.com/cometbft/cometbft/rpc/core/types"
 	"github.com/ethereum/go-ethereum/common"
 
@@ -53,7 +54,7 @@ func (b *Backend) traceBlockView(
 		for _, msg := range msgs {
 			hashes = append(hashes, msg.Hash())
 		}
-		return &traceTxView{hashes: hashes, lookup: b.liveTraceTx}
+		return &traceTxView{hashes: hashes, lookup: b.liveTraceTxLookup(resBlock, blockRes, msgs)}
 	}
 
 	view, err := b.liveVirtualBlockView(resBlock, blockRes)
@@ -124,21 +125,59 @@ func (b *Backend) cachedTraceTx(hash common.Hash) (*rpctypes.RPCTransaction, map
 	return tx, receipt, nil
 }
 
-// liveTraceTx returns a tx and its receipt as eth_getTransactionByHash and
-// eth_getTransactionReceipt serve them.
-func (b *Backend) liveTraceTx(hash common.Hash) (*rpctypes.RPCTransaction, map[string]interface{}, error) {
-	tx, err := b.GetTransactionByHash(hash)
-	if err != nil {
-		return nil, nil, err
+// liveTraceTxLookup returns the tx and receipt lookup of a live block without
+// virtualization, built from its fetched data on first use as the live
+// eth_getBlockByNumber and eth_getBlockReceipts paths build them. msgs are the
+// visible Ethereum messages of the block, in order.
+func (b *Backend) liveTraceTxLookup(
+	resBlock *cmrpctypes.ResultBlock,
+	blockRes *cmrpctypes.ResultBlockResults,
+	msgs []*evmtypes.MsgEthereumTx,
+) func(common.Hash) (*rpctypes.RPCTransaction, map[string]interface{}, error) {
+	var (
+		built    bool
+		txs      map[common.Hash]*rpctypes.RPCTransaction
+		receipts map[common.Hash]map[string]interface{}
+		buildErr error
+	)
+	build := func() {
+		blockHash := common.BytesToHash(resBlock.Block.Hash())
+		txs = make(map[common.Hash]*rpctypes.RPCTransaction, len(msgs))
+		for i, msg := range msgs {
+			// fee fields are not part of a synthetic trace: no base fee needed
+			tx, err := rpctypes.NewRPCTransaction(msg, blockHash, uint64(resBlock.Block.Height), uint64(i), nil, b.ChainID().ToInt())
+			if err != nil {
+				buildErr = err
+				return
+			}
+			txs[tx.Hash] = tx
+		}
+		list, err := b.liveBlockReceiptsFromResults(resBlock, blockRes)
+		if err != nil {
+			buildErr = err
+			return
+		}
+		receipts = make(map[common.Hash]map[string]interface{}, len(list))
+		for _, receipt := range list {
+			if hash, ok := receipt["transactionHash"].(common.Hash); ok {
+				receipts[hash] = receipt
+			}
+		}
 	}
-	receipt, err := b.GetTransactionReceipt(hash)
-	if err != nil {
-		return nil, nil, err
+	return func(hash common.Hash) (*rpctypes.RPCTransaction, map[string]interface{}, error) {
+		if !built {
+			built = true
+			build()
+		}
+		if buildErr != nil {
+			return nil, nil, buildErr
+		}
+		tx, receipt := txs[hash], receipts[hash]
+		if tx == nil || receipt == nil {
+			return nil, nil, fmt.Errorf("transaction %s not found in block", hash.Hex())
+		}
+		return tx, receipt, nil
 	}
-	if tx == nil || receipt == nil {
-		return nil, nil, fmt.Errorf("transaction %s not found", hash.Hex())
-	}
-	return tx, receipt, nil
 }
 
 // syntheticTraceEntry returns the block trace entry of a visible tx built by

@@ -6,12 +6,15 @@ import (
 	"testing"
 
 	evmtypes "github.com/InjectiveLabs/sdk-go/chain/evm/types"
+	chaintypes "github.com/InjectiveLabs/sdk-go/chain/types"
 	abci "github.com/cometbft/cometbft/abci/types"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 
 	rpcmocks "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/backend/mocks"
 	rpctypes "github.com/InjectiveLabs/evm-gateway/internal/evm/rpc/types"
+	"github.com/InjectiveLabs/evm-gateway/internal/syncstatus"
 	"github.com/InjectiveLabs/evm-gateway/internal/testutil/mainnetfx"
 )
 
@@ -242,6 +245,33 @@ func TestTraceMultiMsgFailureOfLaterMessage(t *testing.T) {
 		if got[2].Error != "" || traceTag(t, got[2].Result) != "second" {
 			t.Fatalf("failed entry: %#v", got[2])
 		}
+		// cached as its tx trace, like debug_traceTransaction caches it
+		cached, err := kv.GetTraceTransaction(second, callTracerConfig)
+		require.NoError(t, err)
+		require.Contains(t, string(cached), "second")
+	})
+
+	t.Run("block after transaction", func(t *testing.T) {
+		kv, _ := newFixtureKV(t, false)
+		indexFixtureBlocks(t, kv, height)
+		comet := newFixtureComet(t)
+		withMultiMsgLog(t, comet, log)
+
+		// the alone message replays once: the block trace reuses its tx trace
+		query := &rpcmocks.EVMQueryClient{}
+		query.On("TraceTx", mock.Anything, traceTxMatcher(height, second, []common.Hash{before, first})).
+			Return(traceTxResponse("second"), nil).Once()
+		query.On("TraceBlock", mock.Anything, traceBlockMatcher(height, []common.Hash{before, after})).
+			Return(traceBlockResponse(t, 2), nil).Once()
+
+		b := newFixtureBackend(t, fixtureBackendOptions{indexer: kv, comet: comet, query: query})
+		_, err := b.TraceTransaction(second, callTracerConfig)
+		require.NoError(t, err)
+		got, err := b.TraceBlock(rpctypes.BlockNumber(height), callTracerConfig, nil)
+		require.NoError(t, err)
+		query.AssertExpectations(t)
+		require.Empty(t, got[2].Error)
+		require.Equal(t, "second", traceTag(t, got[2].Result))
 	})
 }
 
@@ -310,4 +340,122 @@ func TestMsgTraceError(t *testing.T) {
 			t.Fatalf("%s: got %q want %q", tc.name, got, tc.want)
 		}
 	}
+}
+
+// TestTraceBlockLiveMultiMsgFailureFromFetchedData traces the multi-message
+// failure block before it is indexed, without virtualization: the synthetic
+// frames and the alone message's trace come from the fetched block and block
+// results, with no tx lookup by hash (PR #26 review). The trace makes one Block
+// and one BlockResults request, also when the indexer is caught up and its miss
+// is authoritative.
+func TestTraceBlockLiveMultiMsgFailureFromFetchedData(t *testing.T) {
+	height := mainnetfx.HeightMultiMsgFailure
+	before, after := multiMsgFixtureHashes(t)
+	first, second := mainnetfx.TxMultiMsgReverted, mainnetfx.TxMultiMsgUnexecuted
+	laterLog := `failed to execute message; message index: 1: {"tx_hash":"` + second.Hex() + `","gas_used":21000,"vm_error":"execution reverted"}`
+
+	for _, tc := range []struct {
+		name    string
+		log     string
+		replay  []common.Hash
+		failed  map[common.Hash]string
+		aloneOn common.Hash
+	}{
+		{name: "unexecuted message", replay: []common.Hash{before, first, after},
+			failed: map[common.Hash]string{second: "not executed: message 0"}},
+		{name: "reverted and alone message", log: laterLog, replay: []common.Hash{before, after},
+			failed: map[common.Hash]string{first: "reverted: message 1"}, aloneOn: second},
+	} {
+		for _, indexed := range []string{"no indexer", "caught-up empty indexer"} {
+			t.Run(tc.name+"/"+indexed, func(t *testing.T) {
+				comet := newFixtureComet(t)
+				if tc.log != "" {
+					withMultiMsgLog(t, comet, tc.log)
+				}
+				query := liveQuery()
+				query.On("TraceBlock", mock.Anything, traceBlockMatcher(height, tc.replay)).
+					Return(traceBlockResponse(t, len(tc.replay)), nil).Once()
+				if tc.aloneOn != (common.Hash{}) {
+					query.On("TraceTx", mock.Anything, traceTxMatcher(height, tc.aloneOn, []common.Hash{before, first})).
+						Return(traceTxResponse("alone"), nil).Once()
+				}
+				opts := fixtureBackendOptions{comet: comet, query: query}
+				if indexed != "no indexer" {
+					opts.indexer, _ = newFixtureKV(t, false)
+				}
+				b := newFixtureBackend(t, opts)
+				if indexed != "no indexer" {
+					tracker := syncstatus.NewTracker(1, 1)
+					tracker.SetPhase(syncstatus.PhaseForwardSync)
+					tracker.SetHistoryCovered(true)
+					tracker.MarkBlock(height-1, true)
+					b.syncStatus = tracker
+					require.True(t, b.indexerCaughtUp())
+				}
+
+				got, err := b.TraceBlock(rpctypes.BlockNumber(height), callTracerConfig, nil)
+				require.NoError(t, err)
+				query.AssertExpectations(t)
+				require.Equal(t, map[string]int{"Block": 1, "BlockResults": 1}, comet.calls)
+				assertHashList(t, "trace hashes", traceHashes(got), []common.Hash{before, first, second, after})
+
+				// the frames match the live block txs and receipts
+				block, err := b.GetBlockByNumber(rpctypes.BlockNumber(height), true)
+				require.NoError(t, err)
+				receipts, err := b.GetBlockReceipts(rpctypes.BlockNumberOrHash{BlockNumber: ptrBlockNumber(height)})
+				require.NoError(t, err)
+				for i, entry := range got {
+					require.Empty(t, entry.Error, "entry %s", entry.TxHash.Hex())
+					wantErr, synthetic := tc.failed[entry.TxHash]
+					switch {
+					case synthetic:
+						tx := block["transactions"].([]interface{})[i].(*rpctypes.RPCTransaction)
+						frame := frameMap(t, entry.Result)
+						require.Contains(t, frame["error"], wantErr)
+						require.Equal(t, frameMap(t, map[string]interface{}{"from": tx.From, "to": tx.To, "gas": tx.Gas, "gasUsed": receipts[i]["gasUsed"], "input": tx.Input, "value": tx.Value}),
+							frameMap(t, map[string]interface{}{"from": frame["from"], "to": frame["to"], "gas": frame["gas"], "gasUsed": frame["gasUsed"], "input": frame["input"], "value": frame["value"]}))
+					case entry.TxHash == tc.aloneOn:
+						require.Equal(t, "alone", traceTag(t, entry.Result))
+					default:
+						require.NotEmpty(t, traceTag(t, entry.Result))
+					}
+				}
+			})
+		}
+	}
+}
+
+// TestTraceTransactionUnreplayableFromFetchedData: debug_traceTransaction of a
+// message that never ran builds its frame from the block data it fetched to
+// locate the message, with no further request, when the block is not indexed.
+func TestTraceTransactionUnreplayableFromFetchedData(t *testing.T) {
+	height := mainnetfx.HeightMultiMsgFailure
+	hash := mainnetfx.TxMultiMsgUnexecuted
+	for _, virtual := range []bool{false, true} {
+		t.Run(fmt.Sprintf("virtual=%v", virtual), func(t *testing.T) {
+			indexed, _ := newFixtureKV(t, virtual)
+			indexFixtureBlocks(t, indexed, height)
+			located, err := indexed.GetByTxHash(hash)
+			require.NoError(t, err)
+
+			// the tx is located (as by the Comet tx index) but its block is not indexed
+			empty, _ := newFixtureKV(t, virtual)
+			idx := &overrideIndexer{TxIndexer: empty, txs: map[common.Hash]*chaintypes.TxResult{hash: located}}
+			comet := newFixtureComet(t)
+			b := newFixtureBackend(t, fixtureBackendOptions{virtual: virtual, indexer: idx, comet: comet, query: liveQuery()})
+
+			got, err := b.TraceTransaction(hash, callTracerConfig)
+			require.NoError(t, err)
+			require.Equal(t, map[string]int{"Block": 1, "BlockResults": 1}, comet.calls)
+			frame := frameMap(t, got)
+			require.Contains(t, frame["error"], "not executed: message 0")
+			require.Equal(t, "CALL", frame["type"])
+			require.Equal(t, "0x5208", frame["gasUsed"])
+		})
+	}
+}
+
+func ptrBlockNumber(height int64) *rpctypes.BlockNumber {
+	n := rpctypes.BlockNumber(height)
+	return &n
 }

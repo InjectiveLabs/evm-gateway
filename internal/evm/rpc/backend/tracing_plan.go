@@ -39,9 +39,10 @@ func msgTraceError(res *abci.ExecTxResult, msgIndex, msgCount int) string {
 // not replayed and get a synthetic failed frame with that error; alone
 // messages are traced on their own, like debug_traceTransaction does.
 type traceMsg struct {
-	msg   *evmtypes.MsgEthereumTx
-	err   string
-	alone bool
+	msg               *evmtypes.MsgEthereumTx
+	txIndex, msgIndex int
+	err               string
+	alone             bool
 }
 
 // traceMsgs lists the visible Ethereum messages of block.Txs[:txLimit] in
@@ -85,7 +86,7 @@ func (b *Backend) traceMsgs(block *tmtypes.Block, txResults []*abci.ExecTxResult
 			}
 			errMsg := msgTraceError(res, msgIndex, len(msgs))
 			alone := errMsg == "" && ethSeen && res != nil && res.Code != abci.CodeTypeOK
-			list = append(list, traceMsg{msg: ethMsg, err: errMsg, alone: alone})
+			list = append(list, traceMsg{msg: ethMsg, txIndex: txIndex, msgIndex: msgIndex, err: errMsg, alone: alone})
 			ethSeen = true
 		}
 	}

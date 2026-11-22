@@ -316,8 +316,8 @@ func TestTraceBlockLiveWithoutBlockResultsReplaysAllMessages(t *testing.T) {
 	// nil block results without error
 	comet.resultsErr = nil
 	delete(comet.results, height)
-	if txResults := b.blockTxResultsForTrace(height); txResults != nil {
-		t.Fatalf("expected nil tx results")
+	if blockRes := b.blockResultsForTrace(height); blockRes != nil {
+		t.Fatalf("expected nil block results")
 	}
 }
 
