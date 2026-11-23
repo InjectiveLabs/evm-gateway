@@ -3,6 +3,7 @@ package backend
 import (
 	"context"
 	"encoding/json"
+	abci "github.com/cometbft/cometbft/abci/types"
 	"math/big"
 	"reflect"
 	"testing"
@@ -152,6 +153,10 @@ func testTraceBlockTimeoutCap(t *testing.T, cap time.Duration) {
 			decoder: func([]byte) (sdk.Tx, error) {
 				return backendTraceTestTx{msgs: []sdk.Msg{ethMsg}}, nil
 			},
+		}).WithClient(&fixtureComet{
+			// a trace is cached only when the block results were available
+			results: map[int64]*cmrpctypes.ResultBlockResults{height: {Height: height, TxResults: []*abci.ExecTxResult{{}}}},
+			calls:   map[string]int{},
 		}),
 		queryClient: &rpctypes.QueryClient{QueryClient: query}, chainID: big.NewInt(1776),
 	}

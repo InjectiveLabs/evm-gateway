@@ -50,4 +50,13 @@ An entry-level `error` (`{"txHash": "0x…", "error": "…"}`) means that tracin
 
 ## Caching
 
-Block traces are cached per height and tracer configuration. Each read aligns the cached entries with the visible transactions of the block. This also rebuilds the `{"type": 0}` placeholders that v1.4.3 and v1.4.4 wrote for virtual txs, so caches written by those versions need no resync.
+Block traces are cached per height and tracer configuration, and only when the result is final:
+
+- **Block results available.** Without them, txs that failed in the ante handler and messages that never took effect cannot be left out of the replay. Such a trace is returned as a best effort but not cached, for blocks and for `debug_traceTransaction`.
+- **Every entry-level error is an outcome of the traced tx.** That means an error the chain's `TraceBlock` per-tx loop reported with gRPC status `Internal`, other than its own trace deadline (`execution timeout`) or a cancellation. Not cached:
+  - transport and node errors (`Unavailable`, `DeadlineExceeded`, `Canceled`, `Unknown`);
+  - request validation (`InvalidArgument`);
+  - the gateway's own failed lookups;
+  - any error returned by a gRPC call itself, such as the `TraceTx` of a message traced alone. The transport and the server's panic recovery also report `Internal`, so the code does not tell them apart.
+
+A trace that is not cached is traced again on the next request. A trace cached with such an error by an earlier version is traced again when the gateway is online, and still served if that fails. Successful `debug_traceTransaction` results are cached; errors never are. Each read aligns the cached entries with the visible transactions of the block. This also rebuilds the `{"type": 0}` placeholders that v1.4.3 and v1.4.4 wrote for virtual txs, so caches written by those versions need no resync.
