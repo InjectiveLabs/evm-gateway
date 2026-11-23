@@ -38,8 +38,6 @@ jobs:
     env:
       GOCACHE: ${{ github.workspace }}/.gocache
       GOMODCACHE: ${{ github.workspace }}/.gomodcache
-      GOPRIVATE: github.com/InjectiveLabs
-      GONOSUMDB: github.com/InjectiveLabs
     outputs:
       final_message_b64: ${{ steps.run_codex.outputs.final_message_b64 }}
       head_sha: ${{ steps.pr.outputs.head_sha }}
@@ -152,9 +150,8 @@ jobs:
           cache: false
 
       - name: Pre-fetch Go module cache
-        run: ./scripts/with-private-git.sh go mod download
+        run: go mod download
         env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
           GOCACHE: ${{ env.GOCACHE }}
           GOMODCACHE: ${{ env.GOMODCACHE }}
 

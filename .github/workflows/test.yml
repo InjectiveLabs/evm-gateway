@@ -16,16 +16,8 @@ permissions:
 
 jobs:
   go-test:
-    # Private InjectiveLabs modules need the GH_TOKEN secret, which is not
-    # available to pull requests from forks.
-    if: >-
-      github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: blacksmith-4vcpu-ubuntu-2204
     timeout-minutes: 30
-    env:
-      GOPRIVATE: github.com/InjectiveLabs
-      GONOSUMDB: github.com/InjectiveLabs
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -38,12 +30,8 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
 
-      # Only this step gets access to private modules. Build, vet and test then
-      # run without credentials and must not need to download anything else.
       - name: Download Go modules
-        run: ./scripts/with-private-git.sh go mod download
-        env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: go mod download
 
       - name: Build
         run: go build ./...
