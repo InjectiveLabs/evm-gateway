@@ -277,6 +277,38 @@ type overrideIndexer struct {
 	visibleErr    error
 	virtual       map[common.Hash]bool
 	virtualErr    error
+	// without a wrapped indexer every height is indexed in virtualMode, with
+	// the txs and receipts below
+	virtualMode bool
+	rpcTxs      map[common.Hash]*rpctypes.RPCTransaction
+	receipts    map[common.Hash]map[string]interface{}
+}
+
+func (o *overrideIndexer) GetBlockMetaByHeight(height int64) (*txindexer.CachedBlockMeta, error) {
+	if o.TxIndexer != nil {
+		return o.TxIndexer.GetBlockMetaByHeight(height)
+	}
+	return &txindexer.CachedBlockMeta{Height: height, EthTxCount: int32(len(o.visible)), VirtualizedCosmosEvents: o.virtualMode}, nil
+}
+
+func (o *overrideIndexer) GetRPCTransactionByHash(hash common.Hash) (*rpctypes.RPCTransaction, error) {
+	if tx, ok := o.rpcTxs[hash]; ok {
+		return tx, nil
+	}
+	if o.TxIndexer != nil {
+		return o.TxIndexer.GetRPCTransactionByHash(hash)
+	}
+	return nil, txindexer.ErrCacheMiss
+}
+
+func (o *overrideIndexer) GetReceiptByTxHash(hash common.Hash) (map[string]interface{}, error) {
+	if receipt, ok := o.receipts[hash]; ok {
+		return receipt, nil
+	}
+	if o.TxIndexer != nil {
+		return o.TxIndexer.GetReceiptByTxHash(hash)
+	}
+	return nil, txindexer.ErrCacheMiss
 }
 
 func (o *overrideIndexer) WithContext(context.Context) txindexer.TxIndexer { return o }

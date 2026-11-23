@@ -171,7 +171,15 @@ func (b *Backend) liveBlockReceipts(resBlock *cmrpctypes.ResultBlock) ([]map[str
 	if blockRes == nil {
 		return nil, nil
 	}
+	return b.liveBlockReceiptsFromResults(resBlock, blockRes)
+}
 
+// liveBlockReceiptsFromResults builds the receipts of a live block from its
+// already fetched block results.
+func (b *Backend) liveBlockReceiptsFromResults(
+	resBlock *cmrpctypes.ResultBlock,
+	blockRes *cmrpctypes.ResultBlockResults,
+) ([]map[string]interface{}, error) {
 	if b.virtualizationEnabled() {
 		view, err := b.liveVirtualBlockView(resBlock, blockRes)
 		if err != nil {
