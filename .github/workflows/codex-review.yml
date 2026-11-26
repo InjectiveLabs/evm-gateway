@@ -179,6 +179,11 @@ jobs:
           set -euo pipefail
           output_file="${RUNNER_TEMP}/codex-review.json"
 
+          # Codex echoes the reviewed diff, and repository content can contain
+          # workflow-command lines (e.g. ##[add-matcher]); don't let the runner
+          # interpret them while it runs.
+          stop_token="$(openssl rand -hex 16)"
+          echo "::stop-commands::${stop_token}"
           codex exec review \
             --base "$BASE_REMOTE_REF" \
             --model gpt-6.2-sol \
@@ -187,6 +192,7 @@ jobs:
             --ephemeral \
             --dangerously-bypass-approvals-and-sandbox \
             --output-last-message "$output_file"
+          echo "::${stop_token}::"
 
           if [ ! -s "$output_file" ]; then
             echo "Codex produced no final review message." >&2
