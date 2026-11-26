@@ -159,11 +159,11 @@ jobs:
       # command is run separately because the action's prompt input maps to
       # `codex exec`, while /review maps to `codex exec review --base`.
       - name: Set up Codex
-        uses: openai/codex-action@bdf19a4a223ec2549a3e2274a0cf61556bc07675 # v1.13
+        uses: openai/codex-action@306c6a196a99dcc6582530c396a19d2672d5e9ec # v1.14
         with:
-          openai-api-key: ${{ secrets.CODEX_API_KEY }}
-          responses-api-endpoint: ${{ secrets.CODEX_RESPONSES_API_ENDPOINT }}
-          codex-version: 0.162.0
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          responses-api-endpoint: ${{ secrets.OPENAI_RESPONSES_API_ENDPOINT }}
+          codex-version: 0.172.0
           codex-home: ${{ runner.temp }}/codex-review-home
           safety-strategy: unsafe
 
@@ -179,14 +179,20 @@ jobs:
           set -euo pipefail
           output_file="${RUNNER_TEMP}/codex-review.json"
 
+          # Codex echoes the reviewed diff, and repository content can contain
+          # workflow-command lines (e.g. ##[add-matcher]); don't let the runner
+          # interpret them while it runs.
+          stop_token="$(openssl rand -hex 16)"
+          echo "::stop-commands::${stop_token}"
           codex exec review \
             --base "$BASE_REMOTE_REF" \
-            --model gpt-5.6-sol \
-            --config 'review_model="gpt-5.6-sol"' \
-            --config 'model_reasoning_effort="max"' \
+            --model gpt-6.2-sol \
+            --config 'review_model="gpt-6.2-sol"' \
+            --config 'model_reasoning_effort="xhigh"' \
             --ephemeral \
             --dangerously-bypass-approvals-and-sandbox \
             --output-last-message "$output_file"
+          echo "::${stop_token}::"
 
           if [ ! -s "$output_file" ]; then
             echo "Codex produced no final review message." >&2
